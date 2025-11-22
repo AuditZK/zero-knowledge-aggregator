@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package enclave;
+
+// The Enclave service provides secure operations for trade synchronization
+// and data aggregation. All operations return only aggregated, safe data.
+service EnclaveService {
+  // Process a synchronization job for a user's exchanges
+  rpc ProcessSyncJob(SyncJobRequest) returns (SyncJobResponse);
+
+  // Calculate historical returns for a specific period
+  rpc CalculateHistoricalReturns(HistoricalReturnsRequest) returns (HistoricalReturnsResponse);
+
+  // Get aggregated metrics for a user
+  rpc GetAggregatedMetrics(AggregatedMetricsRequest) returns (AggregatedMetricsResponse);
+
+  // Health check for the enclave
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// Request to process a synchronization job
+message SyncJobRequest {
+  string user_uid = 1;
+  string exchange = 2; // Optional, if not provided syncs all exchanges
+  enum SyncType {
+    INCREMENTAL = 0;
+    HISTORICAL = 1;
+    FULL = 2;
+  }
+  SyncType type = 3;
+  int64 start_date = 4; // Unix timestamp, optional for historical sync
+  int64 end_date = 5;   // Unix timestamp, optional for historical sync
+}
+
+// Response from processing a synchronization job
+message SyncJobResponse {
+  bool success = 1;
+  string user_uid = 2;
+  string exchange = 3;
+  int32 synced = 4;
+  int32 hourly_returns_generated = 5;
+
+  message Snapshot {
+    double balance = 1;
+    double equity = 2;
+    int64 timestamp = 3;
+  }
+  Snapshot latest_snapshot = 6;
+  string error = 7;
+}
+
+// Request for historical returns calculation
+message HistoricalReturnsRequest {
+  string user_uid = 1;
+  int64 start_date = 2; // Unix timestamp
+  int64 end_date = 3;   // Unix timestamp
+  string exchange = 4;  // Optional
+}
+
+// Response with aggregated historical returns
+message HistoricalReturnsResponse {
+  bool success = 1;
+
+  message Return {
+    string period = 1;
+    double net_return = 2;
+    double percentage_return = 3;
+    double balance = 4;
+  }
+  repeated Return returns = 2;
+  string error = 3;
+}
+
+// Request for aggregated metrics
+message AggregatedMetricsRequest {
+  string user_uid = 1;
+  string exchange = 2; // Optional
+}
+
+// Response with aggregated metrics
+message AggregatedMetricsResponse {
+  double total_balance = 1;
+  double total_equity = 2;
+  double total_realized_pnl = 3;
+  double total_unrealized_pnl = 4;
+  double total_fees = 5;
+  int32 total_trades = 6;
+  int64 last_sync = 7; // Unix timestamp, nullable
+}
+
+// Health check request
+message HealthCheckRequest {}
+
+// Health check response
+message HealthCheckResponse {
+  enum Status {
+    HEALTHY = 0;
+    UNHEALTHY = 1;
+  }
+  Status status = 1;
+  bool enclave = 2;
+  string version = 3;
+  double uptime = 4;
+}

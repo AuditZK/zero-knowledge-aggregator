@@ -1,0 +1,150 @@
+// Aggregator Service Database Schema
+// Autonomous microservice for trading data aggregation
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Users table for aggregator service
+model User {
+  id                  String   @id @default(cuid())
+  uid                 String   @unique // Microservice UID (anonyme, pas d'email/nom)
+  syncIntervalMinutes Int      @default(60) // Snapshot interval (5, 10, 15, 60 minutes, etc.)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  // Relations
+  trades            Trade[]
+  snapshots         SnapshotData[]
+  exchangeConnections ExchangeConnection[]
+  syncStatuses      SyncStatus[]
+
+  @@map("users")
+}
+
+// Trades table
+model Trade {
+  id              String      @id @default(cuid())
+  userUid         String
+  symbol          String
+  type            TradeType
+  side            String? // Legacy field for compatibility
+  quantity        Float
+  price           Float
+  fees            Float
+  timestamp       DateTime
+  exchange        String?
+  exchangeTradeId String?
+  status          TradeStatus @default(pending)
+  matchedQuantity Float?      @default(0)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  user User @relation(fields: [userUid], references: [uid], onDelete: Cascade)
+
+  @@index([userUid, symbol, timestamp])
+  @@index([exchange, timestamp])
+  @@index([status])
+  @@map("trades")
+}
+
+// Snapshot data aggregation - Account state snapshots at configurable intervals
+// All data is stored in breakdown_by_market JSON field
+model SnapshotData {
+  id         String   @id @default(cuid())
+  userUid    String
+  timestamp  DateTime // Snapshot timestamp (rounded to configured interval)
+  exchange   String
+
+  // Market breakdown structure (JSON)
+  // Structure: {
+  //   global: { equity, available_margin, volume, orders, trading_fees, funding_fees },
+  //   spot: { equity, volume, orders, trading_fees },  // NO funding_fees on spot
+  //   swap: { equity, volume, orders, trading_fees, funding_fees },
+  //   ...
+  // }
+  breakdown_by_market Json? // Market-specific metrics breakdown
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userUid], references: [uid], onDelete: Cascade)
+
+  @@unique([userUid, timestamp, exchange])
+  @@index([userUid, timestamp])
+  @@index([exchange, timestamp])
+  @@map("snapshot_data")
+}
+
+// Exchange connections
+model ExchangeConnection {
+  id                   String   @id @default(cuid())
+  userUid              String
+  exchange             String
+  label                String
+  encryptedApiKey      String
+  encryptedApiSecret   String
+  encryptedPassphrase  String?
+  credentialsHash      String?
+  isActive             Boolean  @default(true)
+  syncIntervalMinutes  Int      @default(60)  // Sync interval in minutes (60=hourly, 1440=daily)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  user User @relation(fields: [userUid], references: [uid], onDelete: Cascade)
+
+  @@unique([userUid, exchange])
+  @@index([userUid, exchange])
+  @@map("exchange_connections")
+}
+
+// Sync status tracking
+model SyncStatus {
+  id                    String           @id @default(cuid())
+  userUid               String
+  exchange              String
+  lastSyncTime          DateTime?
+  status                SyncStatusEnum   @default(pending)
+  totalTrades           Int              @default(0)
+  errorMessage          String?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  user User @relation(fields: [userUid], references: [uid], onDelete: Cascade)
+
+  @@unique([userUid, exchange])
+  @@map("sync_statuses")
+}
+
+// Migrations tracking
+model Migration {
+  id         Int      @id @default(autoincrement())
+  name       String   @unique
+  appliedAt  DateTime @default(now())
+
+  @@map("migrations")
+}
+
+// Enums
+enum TradeType {
+  buy
+  sell
+}
+
+enum TradeStatus {
+  pending
+  matched
+  partially_matched
+}
+
+enum SyncStatusEnum {
+  pending
+  syncing
+  completed
+  error
+}

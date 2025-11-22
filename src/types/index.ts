@@ -1,0 +1,414 @@
+export enum TradeType {
+  BUY = 'buy',
+  SELL = 'sell'
+}
+
+export enum TradeStatus {
+  PENDING = 'pending',
+  MATCHED = 'matched',
+  PARTIALLY_MATCHED = 'partially_matched'
+}
+
+export interface User {
+  id?: string; // Add optional id for compatibility
+  uid: string;
+  syncIntervalMinutes: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Trade {
+  id: string;
+  userUid: string;
+  symbol: string;
+  type: TradeType;
+  quantity: number;
+  price: number;
+  fees: number;
+  timestamp: Date;
+  exchange?: string;
+  status: TradeStatus;
+  matchedQuantity?: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Position {
+  id?: string;
+  symbol: string;
+  side: 'long' | 'short';
+  quantity: number;
+  entryPrice: number;
+  currentPrice: number;
+  unrealizedPnl: number;
+  leverage?: number;
+  timestamp?: Date;
+}
+
+export interface ReturnMetrics {
+  volume: number;
+  trades: number;
+  returnPct: number;
+  returnUsd: number;
+  totalFees: number;
+  realizedPnl: number; // PnL réalisé via matching
+  unrealizedPnl?: number; // PnL non-réalisé (positions ouvertes)
+  totalPnl?: number; // Total = realizedPnl + unrealizedPnl
+  matches?: number; // Nombre de matches de la période
+  openPositions?: number; // Nombre de positions ouvertes
+  periodStart: string;
+  periodEnd: string;
+}
+
+// Market-specific balance breakdown
+export interface MarketBalanceBreakdown {
+  totalEquityUsd: number;
+  unrealizedPnl: number;
+  realizedPnl?: number;
+  availableBalance?: number;
+  usedMargin?: number;
+  positions?: number;
+}
+
+export interface BreakdownByMarket {
+  spot?: MarketBalanceBreakdown;
+  swap?: MarketBalanceBreakdown;
+  future?: MarketBalanceBreakdown;
+  margin?: MarketBalanceBreakdown;
+  option?: MarketBalanceBreakdown;
+  global?: MarketBalanceBreakdown;
+}
+
+export interface SnapshotData {
+  id: string;
+  userUid: string;
+  timestamp: string; // Format: '2024-01-15T14:00:00.000Z' (snapshot timestamp at configured interval)
+  exchange: string; // Exchange source (binance, bitget, etc.)
+  breakdown_by_market?: BreakdownByMarket; // Market-specific breakdown (spot, swap, etc.)
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateUserRequest {
+  uid: string;
+}
+
+export interface CreateTradeRequest {
+  userUid: string;
+  symbol: string;
+  type: TradeType;
+  quantity: number;
+  price: number;
+  fees: number;
+  timestamp?: Date;
+  exchange?: string;
+  exchangeTradeId?: string;
+}
+
+export interface GetReturnsQuery {
+  startHour?: string; // Format: '2024-01-15T14:00:00.000Z'
+  endHour?: string;   // Format: '2024-01-15T15:00:00.000Z'
+  symbol?: string;
+  aggregation?: 'snapshot' | 'daily' | 'weekly' | 'monthly';
+}
+
+export interface ApiResponse<T = unknown> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
+}
+
+export interface PaginationQuery {
+  page?: number;
+  limit?: number;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+}
+
+export interface DatabaseConfig {
+  url: string;
+  ssl: boolean;
+  maxConnections?: number;
+  idleTimeoutMillis?: number;
+}
+
+export interface ServerConfig {
+  port: number;
+  nodeEnv: string;
+  apiPrefix: string;
+  corsOrigin: string | string[];
+  jwtSecret: string;
+  bcryptRounds: number;
+  logLevel: string;
+  rateLimitWindowMs: number;
+  rateLimitMaxRequests: number;
+  dataRetentionDays: number;
+}
+
+export interface TradeData {
+  userUid: string;
+  exchangeTradeId: string;
+  exchange: string;
+  symbol: string;
+  type: 'buy' | 'sell';
+  quantity: number;
+  price: number;
+  fees: number;
+  timestamp: Date;
+  orderId?: string;
+}
+
+export interface ExchangeConnection {
+  id: string;
+  userUid: string;
+  exchange: string;
+  label: string;
+  encryptedApiKey: string;
+  encryptedApiSecret: string;
+  encryptedPassphrase?: string;
+  credentialsHash?: string;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ExchangeCredentials {
+  userUid: string;
+  exchange: string;
+  label: string;
+  apiKey: string;
+  apiSecret: string;
+  passphrase?: string;
+  isActive?: boolean;
+  // IBKR specific fields
+  host?: string;
+  port?: number;
+  clientId?: number;
+}
+
+export interface SyncStatus {
+  id: string;
+  userUid: string;
+  exchange: string;
+  lastSyncTime?: Date;
+  status: 'pending' | 'syncing' | 'completed' | 'error';
+  totalTrades: number;
+  errorMessage?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// Logger metadata type (flexible for Express query params, etc.)
+export type LogMetadata = {
+  [key: string]: unknown;
+};
+
+// Database raw query result types
+export interface DatabaseTableInfo {
+  column_name: string;
+  data_type: string;
+  is_nullable: string;
+  column_default: string | null;
+}
+
+export interface DatabaseMigrationInfo {
+  table_name: string;
+  column_count: number;
+}
+
+// Alpaca SDK types
+export interface AlpacaPosition {
+  symbol: string;
+  qty: string;
+  side: 'long' | 'short';
+  market_value: string;
+  cost_basis: string;
+  unrealized_pl: string;
+  unrealized_plpc: string;
+  current_price: string;
+  lastday_price: string;
+  change_today: string;
+}
+
+export interface AlpacaOrder {
+  id: string;
+  client_order_id: string;
+  created_at: string;
+  updated_at: string;
+  submitted_at: string;
+  filled_at: string | null;
+  expired_at: string | null;
+  canceled_at: string | null;
+  failed_at: string | null;
+  replaced_at: string | null;
+  replaced_by: string | null;
+  replaces: string | null;
+  asset_id: string;
+  symbol: string;
+  asset_class: string;
+  qty: string;
+  filled_qty: string;
+  type: string;
+  side: 'buy' | 'sell';
+  time_in_force: string;
+  limit_price: string | null;
+  stop_price: string | null;
+  filled_avg_price: string | null;
+  status: string;
+  extended_hours: boolean;
+  legs: AlpacaOrder[] | null;
+}
+
+export interface AlpacaActivity {
+  id: string;
+  activity_type: string;
+  transaction_time: string;
+  type: string;
+  price: string;
+  qty: string;
+  side: 'buy' | 'sell';
+  symbol: string;
+  leaves_qty: string;
+  order_id: string;
+  cum_qty: string;
+  order_status: string;
+}
+
+export interface AlpacaAccount {
+  id: string;
+  account_number: string;
+  status: string;
+  currency: string;
+  buying_power: string;
+  regt_buying_power: string;
+  daytrading_buying_power: string;
+  cash: string;
+  portfolio_value: string;
+  pattern_day_trader: boolean;
+  trading_blocked: boolean;
+  transfers_blocked: boolean;
+  account_blocked: boolean;
+  created_at: string;
+  trade_suspended_by_user: boolean;
+  multiplier: string;
+  shorting_enabled: boolean;
+  equity: string;
+  last_equity: string;
+  long_market_value: string;
+  short_market_value: string;
+  initial_margin: string;
+  maintenance_margin: string;
+  last_maintenance_margin: string;
+  sma: string;
+  daytrade_count: number;
+}
+
+export interface AlpacaPortfolioHistory {
+  timestamp: number[];
+  equity: number[];
+  profit_loss: number[];
+  profit_loss_pct: number[];
+  base_value: number;
+  timeframe: string;
+}
+
+export interface AlpacaMarketData {
+  symbol: string;
+  latest_trade: {
+    t: string;
+    x: string;
+    p: number;
+    s: number;
+    c: string[];
+    i: number;
+    z: string;
+  };
+  latest_quote: {
+    t: string;
+    ax: string;
+    ap: number;
+    as: number;
+    bx: string;
+    bp: number;
+    bs: number;
+    c: string[];
+  };
+  minute_bar: {
+    t: string;
+    o: number;
+    h: number;
+    l: number;
+    c: number;
+    v: number;
+    n: number;
+    vw: number;
+  };
+  daily_bar: {
+    t: string;
+    o: number;
+    h: number;
+    l: number;
+    c: number;
+    v: number;
+    n: number;
+    vw: number;
+  };
+  prev_daily_bar: {
+    t: string;
+    o: number;
+    h: number;
+    l: number;
+    c: number;
+    v: number;
+    n: number;
+    vw: number;
+  };
+}
+
+// CCXT position type
+export interface CCXTPosition {
+  info: Record<string, unknown>;
+  symbol: string;
+  timestamp: number;
+  datetime: string;
+  initialMargin: number;
+  initialMarginPercentage: number;
+  maintenanceMargin: number;
+  maintenanceMarginPercentage: number;
+  entryPrice: number;
+  notional: number;
+  leverage: number;
+  unrealizedPnl: number;
+  contracts: number;
+  contractSize: number;
+  marginRatio: number;
+  liquidationPrice: number;
+  markPrice: number;
+  collateral: number;
+  marginMode: string;
+  side: 'long' | 'short';
+  percentage: number;
+  realizedPnl?: number;
+}
+
+// Extended connector interfaces with specific methods
+export interface IConnectorWithMarketTypes {
+  detectMarketTypes(): Promise<string[]>;
+  getBalanceByMarket(marketType: string): Promise<unknown>;
+}
+
+export interface IConnectorWithBalanceBreakdown {
+  getBalanceBreakdown(): Promise<{
+    global?: MarketBalanceBreakdown;
+    [marketType: string]: MarketBalanceBreakdown | undefined;
+  }>;
+}
+
+export interface IConnectorWithBalance {
+  getBalance(): Promise<{
+    totalEquityUsd: number;
+    unrealizedPnl: number;
+    [key: string]: unknown;
+  }>;
+}
