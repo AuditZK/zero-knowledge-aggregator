@@ -77,7 +77,6 @@ This repository contains the **Trusted Computing Base (TCB)** of the Track Recor
 ║  ┌───────────────────────────────────────────────────────┐ ║
 ║  │  gRPC Server (Port 50051)                             │ ║
 ║  │  - ProcessSyncJob                                     │ ║
-║  │  - CalculateHistoricalReturns                        │ ║
 ║  │  - GetAggregatedMetrics                              │ ║
 ║  └───────────────────────────────────────────────────────┘ ║
 ║                                                             ║
@@ -398,13 +397,8 @@ In production deployments on AMD SEV-SNP:
 ```protobuf
 service EnclaveService {
   // Process sync job for a user's exchanges
-  // Returns: Aggregated hourly returns count (NOT individual trades)
+  // Returns: Aggregated snapshot data (NOT individual trades)
   rpc ProcessSyncJob(SyncJobRequest) returns (SyncJobResponse);
-
-  // Calculate historical returns for a period
-  // Returns: Hourly aggregated returns (NOT trade details)
-  rpc CalculateHistoricalReturns(HistoricalReturnsRequest)
-      returns (HistoricalReturnsResponse);
 
   // Get aggregated metrics
   // Returns: Summary statistics (balance, P&L totals)
