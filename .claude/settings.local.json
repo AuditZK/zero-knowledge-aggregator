@@ -5,7 +5,11 @@
       "Bash(chmod:*)",
       "Bash(npm install:*)",
       "Bash(find:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(git checkout:*)",
+      "Bash(npx tsc:*)",
+      "Bash(git add:*)",
+
     ],
     "deny": [],
     "ask": []

@@ -47,6 +47,7 @@ export class ExchangeConnectorFactory {
     'okx': 'okx',
     'bybit': 'bybit',
     'kucoin': 'kucoin', // Normalized to support spot + futures
+    'coinbase': 'coinbase',
     'gate': 'gate',
     'huobi': 'huobi',
     'kraken': 'kraken',

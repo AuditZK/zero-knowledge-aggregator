@@ -20,7 +20,6 @@ import { EquitySnapshotAggregator } from '../services/equity-snapshot-aggregator
 import { SevSnpAttestationService } from '../services/sev-snp-attestation.service';
 
 // External Services (handle credentials)
-import { CCXTService } from '../external/ccxt-service';
 import { IbkrFlexService } from '../external/ibkr-flex-service';
 import { AlpacaApiService } from '../external/alpaca-api-service';
 
@@ -64,7 +63,6 @@ export function setupEnclaveContainer(): void {
   container.registerSingleton(SyncStatusRepository);
 
   // Register External Services (these handle credentials)
-  container.registerSingleton(CCXTService);
   container.registerSingleton(IbkrFlexService);
   container.registerSingleton(AlpacaApiService);
 
