@@ -17,6 +17,7 @@ import { PrismaClient } from '@prisma/client';
 import { EncryptionService } from '../services/encryption-service';
 import { TradeSyncService } from '../services/trade-sync-service';
 import { EquitySnapshotAggregator } from '../services/equity-snapshot-aggregator';
+import { SevSnpAttestationService } from '../services/sev-snp-attestation.service';
 
 // External Services (handle credentials)
 import { CCXTService } from '../external/ccxt-service';
@@ -25,16 +26,16 @@ import { AlpacaApiService } from '../external/alpaca-api-service';
 
 // Repositories
 import { EnclaveRepository } from '../repositories/enclave-repository';
-import { TradeRepository } from '../../core/repositories/trade-repository';
-import { SnapshotDataRepository } from '../../core/repositories/snapshot-data-repository';
-import { ExchangeConnectionRepository } from '../../core/repositories/exchange-connection-repository';
-import { SyncStatusRepository } from '../../core/repositories/sync-status-repository';
+import { TradeRepository } from '../core/repositories/trade-repository';
+import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repository';
+import { ExchangeConnectionRepository } from '../core/repositories/exchange-connection-repository';
+import { SyncStatusRepository } from '../core/repositories/sync-status-repository';
 
 // Enclave Worker
 import { EnclaveWorker } from '../enclave-worker';
 
 // Utils
-import { getPrismaClient } from '../../config/prisma';
+import { getPrismaClient } from './prisma';
 
 /**
  * Configure the Enclave DI container
@@ -71,6 +72,7 @@ export function setupEnclaveContainer(): void {
   container.registerSingleton(EncryptionService);
   container.registerSingleton(EquitySnapshotAggregator);
   container.registerSingleton(TradeSyncService);
+  container.registerSingleton(SevSnpAttestationService);
 
   // Register Enclave Worker
   container.registerSingleton(EnclaveWorker);
@@ -95,29 +97,51 @@ export function clearEnclaveContainer(): void {
 }
 
 /**
- * Verify enclave isolation
- * This function checks that we're running in a secure environment
+ * Verify enclave isolation using AMD SEV-SNP attestation
+ * Returns attestation result with cryptographic proof
  */
-export function verifyEnclaveIsolation(): boolean {
-  const isEnclave = process.env.ENCLAVE_MODE === 'true';
-  const hasSevSnp = process.env.AMD_SEV_SNP === 'true';
+export async function verifyEnclaveIsolation(): Promise<{
+  verified: boolean;
+  sevSnpEnabled: boolean;
+  measurement: string | null;
+  errorMessage?: string;
+}> {
+  const attestationService = container.resolve(SevSnpAttestationService);
 
-  if (!isEnclave) {
-    console.warn('[ENCLAVE] WARNING: Not running in enclave mode');
-    console.warn('[ENCLAVE] Set ENCLAVE_MODE=true for production');
+  console.log('[ENCLAVE] Performing AMD SEV-SNP attestation...');
+
+  // Get attestation report with cryptographic proof
+  const attestationResult = await attestationService.getAttestationReport();
+
+  if (attestationResult.verified) {
+    console.log('[ENCLAVE] ✓ AMD SEV-SNP attestation SUCCESSFUL');
+    console.log('[ENCLAVE] ✓ Hardware-level isolation VERIFIED');
+    console.log(`[ENCLAVE] ✓ TCB Measurement: ${attestationResult.measurement}`);
+    console.log(`[ENCLAVE] ✓ Platform Version: ${attestationResult.platformVersion}`);
+  } else {
+    console.error('[ENCLAVE] ✗ AMD SEV-SNP attestation FAILED');
+    console.error(`[ENCLAVE] ✗ Error: ${attestationResult.errorMessage}`);
+
+    if (process.env.ENCLAVE_MODE === 'true') {
+      console.error('[ENCLAVE] ✗ ENCLAVE_MODE=true but attestation failed');
+      console.error('[ENCLAVE] ✗ This indicates a security compromise or misconfiguration');
+
+      // In production, this should ABORT startup
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('CRITICAL: Enclave attestation failed in production mode');
+      }
+    } else {
+      console.warn('[ENCLAVE] ⚠ Running in DEVELOPMENT mode (no attestation required)');
+      console.warn('[ENCLAVE] ⚠ For production, deploy to AMD SEV-SNP capable hardware');
+    }
   }
 
-  if (!hasSevSnp && isEnclave) {
-    console.warn('[ENCLAVE] WARNING: SEV-SNP not detected');
-    console.warn('[ENCLAVE] Hardware isolation not available');
-  }
-
-  if (isEnclave && hasSevSnp) {
-    console.log('[ENCLAVE] ✓ Running in AMD SEV-SNP enclave');
-    console.log('[ENCLAVE] ✓ Hardware-level isolation active');
-  }
-
-  return isEnclave && hasSevSnp;
+  return {
+    verified: attestationResult.verified,
+    sevSnpEnabled: attestationResult.sevSnpEnabled,
+    measurement: attestationResult.measurement,
+    errorMessage: attestationResult.errorMessage
+  };
 }
 
 export default setupEnclaveContainer;

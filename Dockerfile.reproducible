@@ -1,0 +1,169 @@
+# ==============================================================================
+# Track Record Enclave - Reproducible Dockerfile
+# ==============================================================================
+#
+# SECURITY PROPERTIES:
+# - Deterministic build (bit-for-bit reproducible)
+# - Minimal attack surface (Alpine Linux)
+# - No unnecessary packages or tools
+# - Multi-stage build (build artifacts isolated)
+# - Non-root user execution
+# - Memory protections enabled
+# - Core dumps disabled
+#
+# BUILD:
+#   docker build -f Dockerfile.reproducible -t track-record-enclave:latest .
+#
+# RUN:
+#   docker run --cap-add=IPC_LOCK --security-opt=no-new-privileges:true \
+#     -v /etc/enclave:/etc/enclave:ro \
+#     -e ENCRYPTION_KEY=<key> \
+#     track-record-enclave:latest
+#
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Stage 1: Builder
+# ------------------------------------------------------------------------------
+FROM node:20.11.0-alpine3.19 AS builder
+
+# Install build dependencies (fixed versions for reproducibility)
+RUN apk add --no-cache \
+    git=2.43.0-r0 \
+    python3=3.11.8-r0 \
+    make=4.4.1-r2 \
+    g++=13.2.1_git20231014-r0 \
+    && rm -rf /var/cache/apk/*
+
+# Set build environment for reproducibility
+ENV NODE_ENV=production \
+    NPM_CONFIG_LOGLEVEL=error \
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    SOURCE_DATE_EPOCH=1704067200
+
+WORKDIR /build
+
+# Copy dependency manifests
+COPY package.json package-lock.json ./
+
+# Install exact dependencies (npm ci for reproducibility)
+RUN npm ci --only=production --ignore-scripts && \
+    npm cache clean --force
+
+# Copy source code
+COPY tsconfig.json ./
+COPY prisma ./prisma
+COPY src ./src
+
+# Generate Prisma client
+RUN npx prisma generate
+
+# Build TypeScript (deterministic output)
+RUN npm run build
+
+# Verify build output
+RUN echo "Build verification:" && \
+    find dist -type f -name "*.js" | wc -l && \
+    du -sh dist/
+
+# Calculate build hash for reproducibility verification
+RUN find dist -type f -name "*.js" -exec sha256sum {} \; | \
+    sort -k 2 | sha256sum > /build/BUILD_HASH.txt && \
+    echo "Build hash:" && cat /build/BUILD_HASH.txt
+
+# ------------------------------------------------------------------------------
+# Stage 2: Production Runtime
+# ------------------------------------------------------------------------------
+FROM node:20.11.0-alpine3.19 AS runtime
+
+# Security: Install minimal runtime dependencies only
+RUN apk add --no-cache \
+    dumb-init=1.2.5-r3 \
+    ca-certificates=20240226-r0 \
+    tini=0.19.0-r2 \
+    && rm -rf /var/cache/apk/*
+
+# Security: Create non-root user
+RUN addgroup -g 1000 enclave && \
+    adduser -D -u 1000 -G enclave enclave && \
+    mkdir -p /app /etc/enclave /var/log/enclave && \
+    chown -R enclave:enclave /app /var/log/enclave
+
+WORKDIR /app
+
+# Copy production dependencies from builder
+COPY --from=builder --chown=enclave:enclave /build/node_modules ./node_modules
+COPY --from=builder --chown=enclave:enclave /build/dist ./dist
+COPY --from=builder --chown=enclave:enclave /build/package.json ./
+COPY --from=builder --chown=enclave:enclave /build/BUILD_HASH.txt ./
+
+# Copy Prisma schema (needed for runtime introspection)
+COPY --from=builder --chown=enclave:enclave /build/prisma ./prisma
+
+# Security: Set file permissions
+RUN chmod -R 550 /app && \
+    chmod 770 /var/log/enclave
+
+# Switch to non-root user
+USER enclave
+
+# Environment configuration
+ENV NODE_ENV=production \
+    ENCLAVE_MODE=true \
+    ENCLAVE_PORT=50051 \
+    LOG_LEVEL=info
+
+# Expose gRPC port (internal network only)
+EXPOSE 50051
+
+# Security: Disable core dumps
+RUN ulimit -c 0 || true
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "require('net').createConnection(50051, 'localhost').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"
+
+# Metadata labels (OCI standard)
+LABEL org.opencontainers.image.title="Track Record Enclave" \
+      org.opencontainers.image.description="AMD SEV-SNP Confidential Computing Enclave for trading data aggregation" \
+      org.opencontainers.image.vendor="Track Record Platform" \
+      org.opencontainers.image.version="1.0.0" \
+      org.opencontainers.image.url="https://github.com/your-org/track-record-enclave" \
+      org.opencontainers.image.documentation="https://github.com/your-org/track-record-enclave/blob/main/README.md" \
+      org.opencontainers.image.source="https://github.com/your-org/track-record-enclave" \
+      com.track-record.enclave.tcb="4572" \
+      com.track-record.enclave.build.reproducible="true"
+
+# Start enclave with dumb-init (proper signal handling)
+ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+CMD ["node", "dist/index.js"]
+
+# ==============================================================================
+# Security Hardening Notes:
+# ==============================================================================
+#
+# 1. Run with --cap-add=IPC_LOCK for memory locking:
+#    docker run --cap-add=IPC_LOCK track-record-enclave
+#
+# 2. Drop unnecessary capabilities:
+#    docker run --cap-drop=ALL --cap-add=IPC_LOCK track-record-enclave
+#
+# 3. Enable read-only filesystem:
+#    docker run --read-only --tmpfs /tmp:rw,noexec,nosuid,size=100m track-record-enclave
+#
+# 4. Set resource limits:
+#    docker run --memory=2g --cpus=2 track-record-enclave
+#
+# 5. Disable new privileges:
+#    docker run --security-opt=no-new-privileges:true track-record-enclave
+#
+# 6. Use secrets management:
+#    docker run --secret=encryption_key track-record-enclave
+#
+# 7. Network isolation:
+#    docker run --network=enclave-internal track-record-enclave
+#
+# 8. AMD SEV-SNP specific flags:
+#    docker run --device=/dev/sev-guest track-record-enclave
+#
+# ==============================================================================

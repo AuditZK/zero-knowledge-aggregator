@@ -2,7 +2,7 @@ import { injectable, inject } from 'tsyringe';
 import { TradeSyncService } from './services/trade-sync-service';
 import { EquitySnapshotAggregator } from './services/equity-snapshot-aggregator';
 import { EnclaveRepository } from './repositories/enclave-repository';
-import { logger } from '../utils/logger';
+import { logger } from './utils/logger';
 
 export interface SyncJobRequest {
   userUid: string;

@@ -1,12 +1,12 @@
 import * as ccxt from 'ccxt';
-import { CryptoExchangeConnector } from '../base/CryptoExchangeConnector';
+import { CryptoExchangeConnector } from '../external/base/CryptoExchangeConnector';
 import {
   BalanceData,
   PositionData,
   TradeData,
   CapitalFlowData,
-} from '../interfaces/IExchangeConnector';
-import { ExchangeCredentials } from '../../types';
+} from '../external/interfaces/IExchangeConnector';
+import { ExchangeCredentials } from '../types';
 import {
   MarketBalanceData,
   ExecutedOrderData,
@@ -14,7 +14,7 @@ import {
   MarketType,
   isUnifiedAccountExchange,
   getFilteredMarketTypes,
-} from '../../types/snapshot-breakdown';
+} from '../types/snapshot-breakdown';
 
 /**
  * CCXT-based Cryptocurrency Exchange Connector

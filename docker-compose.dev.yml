@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database for Enclave Development
+  postgres:
+    image: postgres:15-alpine
+    container_name: enclave_postgres_dev
+    environment:
+      POSTGRES_DB: aggregator_db
+      POSTGRES_USER: enclave_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-enclavepass123}
+    ports:
+      - "5434:5432"  # Different port to avoid conflict with aggregator-basic
+    volumes:
+      - enclave_postgres_data:/var/lib/postgresql/data
+    networks:
+      - enclave_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U enclave_user -d aggregator_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  enclave_postgres_data:
+    driver: local
+
+networks:
+  enclave_network:
+    driver: bridge

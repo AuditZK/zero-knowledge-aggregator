@@ -1,13 +1,13 @@
-import { BaseExchangeConnector } from '../base/BaseExchangeConnector';
+import { BaseExchangeConnector } from '../external/base/BaseExchangeConnector';
 import {
   BalanceData,
   PositionData,
   TradeData,
   CapitalFlowData,
   ExchangeFeature,
-} from '../interfaces/IExchangeConnector';
-import { IbkrFlexService } from '../ibkr-flex-service';
-import { ExchangeCredentials } from '../../types';
+} from '../external/interfaces/IExchangeConnector';
+import { IbkrFlexService } from '../external/ibkr-flex-service';
+import { ExchangeCredentials } from '../types';
 
 /**
  * IBKR Flex Web Service Connector

@@ -11,7 +11,13 @@
 
 This repository contains the **Trusted Computing Base (TCB)** of the Track Record platform's data aggregation service. It implements a zero-knowledge architecture for processing sensitive trading data within an AMD SEV-SNP hardware-isolated enclave.
 
-**Purpose of this repository**: Enable independent security audits of the code that handles user credentials and individual trades. The code is published for transparency and verification, not for third-party deployment.
+**This repository serves two purposes:**
+
+1. **Primary Development Repository**: This is where the Enclave Worker code is actively developed. All enclave features are built and tested here.
+
+2. **Public Audit & Verification**: The code is published for independent security audits and reproducible build verification. This enables auditors to verify that the production binary matches the audited source code.
+
+**For development instructions**, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Table of Contents
 

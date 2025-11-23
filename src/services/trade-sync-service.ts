@@ -1,15 +1,15 @@
 import { injectable, inject, container } from 'tsyringe';
-import { ExchangeConnectionRepository } from '../repositories/exchange-connection-repository';
-import { SyncStatusRepository } from '../repositories/sync-status-repository';
-import { TradeRepository } from '../repositories/trade-repository';
-import { UserRepository } from '../repositories/user-repository';
-import { CCXTService } from '../../external/ccxt-service';
-import { ExchangeConnectorFactory } from '../../external/factories/ExchangeConnectorFactory';
+import { ExchangeConnectionRepository } from '../core/repositories/exchange-connection-repository';
+import { SyncStatusRepository } from '../core/repositories/sync-status-repository';
+import { TradeRepository } from '../core/repositories/trade-repository';
+import { UserRepository } from '../core/repositories/user-repository';
+import { CCXTService } from '../external/ccxt-service';
+import { ExchangeConnectorFactory } from '../external/factories/ExchangeConnectorFactory';
 import { EquitySnapshotAggregator } from './equity-snapshot-aggregator';
-import { UniversalConnectorCacheService } from './universal-connector-cache.service';
+import { UniversalConnectorCacheService } from '../core/services/universal-connector-cache.service';
 import { EncryptionService } from './encryption-service';
-import { TradeData, SyncStatus, ExchangeCredentials } from '../../types';
-import { getLogger } from '../../utils/logger.service';
+import { TradeData, SyncStatus, ExchangeCredentials } from '../types';
+import { getLogger } from '../utils/logger.service';
 
 const logger = getLogger('TradeSyncService');
 

@@ -13,7 +13,13 @@
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "test": "jest",
     "lint": "eslint src --ext .ts",
-    "prisma:generate": "prisma generate"
+    "prisma:generate": "prisma generate",
+    "docker:up": "docker-compose -f docker-compose.dev.yml up -d",
+    "docker:down": "docker-compose -f docker-compose.dev.yml down",
+    "docker:logs": "docker-compose -f docker-compose.dev.yml logs -f",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio"
   },
   "keywords": [
     "trading",
@@ -31,19 +37,24 @@
     "@grpc/proto-loader": "^0.8.0",
     "@prisma/client": "^6.15.0",
     "@stoqey/ib": "^1.5.1",
+    "@types/xml2js": "^0.4.14",
     "axios": "^1.11.0",
+    "bull": "^4.16.5",
     "ccxt": "^4.5.2",
     "reflect-metadata": "^0.2.2",
     "tsyringe": "^4.10.0",
-    "winston": "^3.17.0"
+    "winston": "^3.17.0",
+    "winston-daily-rotate-file": "^5.0.0",
+    "xml2js": "^0.6.2",
+    "zod": "^4.1.12"
   },
   "devDependencies": {
     "@types/node": "^20.11.5",
-    "typescript": "^5.6.3",
-    "ts-node-dev": "^2.0.0",
     "eslint": "^8.57.1",
     "jest": "^29.7.0",
-    "prisma": "^6.15.0"
+    "prisma": "^6.15.0",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.6.3"
   },
   "engines": {
     "node": ">=20.0.0",
