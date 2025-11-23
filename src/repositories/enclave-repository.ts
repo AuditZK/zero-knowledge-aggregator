@@ -1,7 +1,7 @@
 import { injectable, inject } from 'tsyringe';
 import { PrismaClient } from '@prisma/client';
-import { Trade, HourlyReturn, BalanceSnapshot, ExchangeConnection } from '../../types';
-import { logger } from '../../utils/logger';
+import { Trade, HourlyReturn, BalanceSnapshot, ExchangeConnection } from '../types';
+import { logger } from '../utils/logger';
 
 /**
  * Enclave Repository

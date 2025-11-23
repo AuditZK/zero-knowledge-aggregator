@@ -3,7 +3,14 @@ import * as protoLoader from '@grpc/proto-loader';
 import path from 'path';
 import { container } from 'tsyringe';
 import { EnclaveWorker } from './enclave-worker';
-import { logger } from '../utils/logger';
+import { logger } from './utils/logger';
+import {
+  SyncJobRequestSchema,
+  HistoricalReturnsRequestSchema,
+  AggregatedMetricsRequestSchema,
+  HealthCheckRequestSchema,
+  validateRequest
+} from './validation/grpc-schemas';
 
 // Load proto file
 const PROTO_PATH = path.join(__dirname, '../proto/enclave.proto');
@@ -64,19 +71,40 @@ export class EnclaveServer {
     try {
       const request = call.request;
 
+      // SECURITY: Validate input before processing
+      const validation = validateRequest(SyncJobRequestSchema, request);
+      if (!validation.success) {
+        logger.warn('Invalid ProcessSyncJob request', {
+          error: validation.error,
+          request: {
+            user_uid: request.user_uid,
+            exchange: request.exchange,
+            type: request.type
+          }
+        });
+
+        callback({
+          code: grpc.status.INVALID_ARGUMENT,
+          message: validation.error
+        }, null);
+        return;
+      }
+
+      const validated = validation.data;
+
       logger.info('Processing sync job request', {
-        user_uid: request.user_uid,
-        exchange: request.exchange,
-        type: request.type
+        user_uid: validated.user_uid,
+        exchange: validated.exchange,
+        type: validated.type
       });
 
-      // Convert gRPC request to internal format
+      // Convert validated gRPC request to internal format
       const syncRequest = {
-        userUid: request.user_uid,
-        exchange: request.exchange || undefined,
-        type: request.type.toLowerCase() as 'incremental' | 'historical' | 'full',
-        startDate: request.start_date ? new Date(parseInt(request.start_date)) : undefined,
-        endDate: request.end_date ? new Date(parseInt(request.end_date)) : undefined
+        userUid: validated.user_uid,
+        exchange: validated.exchange || undefined,
+        type: validated.type.toLowerCase() as 'incremental' | 'historical' | 'full',
+        startDate: validated.start_date ? new Date(validated.start_date) : undefined,
+        endDate: validated.end_date ? new Date(validated.end_date) : undefined
       };
 
       // Process the sync job
@@ -121,19 +149,41 @@ export class EnclaveServer {
     try {
       const request = call.request;
 
+      // SECURITY: Validate input before processing
+      const validation = validateRequest(HistoricalReturnsRequestSchema, request);
+      if (!validation.success) {
+        logger.warn('Invalid CalculateHistoricalReturns request', {
+          error: validation.error,
+          request: {
+            user_uid: request.user_uid,
+            start_date: request.start_date,
+            end_date: request.end_date,
+            exchange: request.exchange
+          }
+        });
+
+        callback({
+          code: grpc.status.INVALID_ARGUMENT,
+          message: validation.error
+        }, null);
+        return;
+      }
+
+      const validated = validation.data;
+
       logger.info('Calculating historical returns', {
-        user_uid: request.user_uid,
-        start_date: request.start_date,
-        end_date: request.end_date,
-        exchange: request.exchange
+        user_uid: validated.user_uid,
+        start_date: validated.start_date,
+        end_date: validated.end_date,
+        exchange: validated.exchange
       });
 
-      // Calculate returns
+      // Calculate returns with validated data
       const result = await this.enclaveWorker.calculateHistoricalReturns(
-        request.user_uid,
-        new Date(parseInt(request.start_date)),
-        new Date(parseInt(request.end_date)),
-        request.exchange || undefined
+        validated.user_uid,
+        new Date(validated.start_date),
+        new Date(validated.end_date),
+        validated.exchange || undefined
       );
 
       // Convert to gRPC format
@@ -172,15 +222,35 @@ export class EnclaveServer {
     try {
       const request = call.request;
 
+      // SECURITY: Validate input before processing
+      const validation = validateRequest(AggregatedMetricsRequestSchema, request);
+      if (!validation.success) {
+        logger.warn('Invalid GetAggregatedMetrics request', {
+          error: validation.error,
+          request: {
+            user_uid: request.user_uid,
+            exchange: request.exchange
+          }
+        });
+
+        callback({
+          code: grpc.status.INVALID_ARGUMENT,
+          message: validation.error
+        }, null);
+        return;
+      }
+
+      const validated = validation.data;
+
       logger.info('Getting aggregated metrics', {
-        user_uid: request.user_uid,
-        exchange: request.exchange
+        user_uid: validated.user_uid,
+        exchange: validated.exchange
       });
 
-      // Get metrics
+      // Get metrics with validated data
       const metrics = await this.enclaveWorker.getAggregatedMetrics(
-        request.user_uid,
-        request.exchange || undefined
+        validated.user_uid,
+        validated.exchange || undefined
       );
 
       // Convert to gRPC format
@@ -245,10 +315,9 @@ export class EnclaveServer {
    */
   async start(): Promise<void> {
     return new Promise((resolve, reject) => {
-      // Bind with TLS for production, insecure for development
-      const credentials = process.env.NODE_ENV === 'production'
-        ? this.createServerCredentials()
-        : grpc.ServerCredentials.createInsecure();
+      // SECURITY: TLS is MANDATORY for enclave security
+      // No fallback to insecure mode allowed
+      const credentials = this.createServerCredentials();
 
       this.server.bindAsync(
         `0.0.0.0:${this.port}`,
@@ -264,7 +333,7 @@ export class EnclaveServer {
           }
 
           this.server.start();
-          logger.info(`Enclave gRPC server started on port ${port}`);
+          logger.info(`Enclave gRPC server started on port ${port} with TLS`);
 
           // Log enclave attestation info if available
           this.logAttestationInfo();
@@ -294,17 +363,33 @@ export class EnclaveServer {
   }
 
   /**
-   * Create server credentials for production (mutual TLS)
+   * Create server credentials for mutual TLS
+   *
+   * SECURITY: This method enforces TLS with NO fallback to insecure mode.
+   * If certificates are missing, the server WILL NOT start.
+   *
+   * Certificate paths (override via environment variables):
+   * - TLS_CA_CERT: Root CA certificate (default: /etc/enclave/ca.crt)
+   * - TLS_SERVER_CERT: Server certificate (default: /etc/enclave/server.crt)
+   * - TLS_SERVER_KEY: Server private key (default: /etc/enclave/server.key)
    */
   private createServerCredentials(): grpc.ServerCredentials {
-    // In production, load certificates for mutual TLS
-    // These would be provisioned securely to the enclave
     const fs = require('fs');
 
+    const caCertPath = process.env.TLS_CA_CERT || '/etc/enclave/ca.crt';
+    const serverCertPath = process.env.TLS_SERVER_CERT || '/etc/enclave/server.crt';
+    const serverKeyPath = process.env.TLS_SERVER_KEY || '/etc/enclave/server.key';
+
     try {
-      const rootCert = fs.readFileSync(process.env.TLS_CA_CERT || '/etc/enclave/ca.crt');
-      const serverCert = fs.readFileSync(process.env.TLS_SERVER_CERT || '/etc/enclave/server.crt');
-      const serverKey = fs.readFileSync(process.env.TLS_SERVER_KEY || '/etc/enclave/server.key');
+      const rootCert = fs.readFileSync(caCertPath);
+      const serverCert = fs.readFileSync(serverCertPath);
+      const serverKey = fs.readFileSync(serverKeyPath);
+
+      logger.info('TLS certificates loaded successfully', {
+        ca: caCertPath,
+        cert: serverCertPath,
+        key: serverKeyPath
+      });
 
       return grpc.ServerCredentials.createSsl(
         rootCert,
@@ -312,13 +397,26 @@ export class EnclaveServer {
           cert_chain: serverCert,
           private_key: serverKey
         }],
-        true // Request client certificate
+        true // Mutual TLS: require client certificate
       );
     } catch (error) {
-      logger.warn('TLS certificates not found, falling back to insecure connection', {
-        error: (error as Error).message
-      });
-      return grpc.ServerCredentials.createInsecure();
+      // SECURITY: NO FALLBACK - server refuses to start without TLS
+      const errorMsg = `TLS certificates not found or invalid. Enclave CANNOT start without TLS.
+Required certificates:
+  - CA cert: ${caCertPath}
+  - Server cert: ${serverCertPath}
+  - Server key: ${serverKeyPath}
+
+Error: ${(error as Error).message}
+
+For development, generate self-signed certificates:
+  mkdir -p /etc/enclave
+  openssl req -x509 -newkey rsa:4096 -keyout ${serverKeyPath} -out ${serverCertPath} -days 365 -nodes -subj "/CN=enclave"
+  cp ${serverCertPath} ${caCertPath}
+`;
+
+      logger.error(errorMsg);
+      throw new Error(errorMsg);
     }
   }
 

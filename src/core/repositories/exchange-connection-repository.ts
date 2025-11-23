@@ -1,7 +1,7 @@
 import { injectable, inject } from 'tsyringe';
 import { PrismaClient, ExchangeConnection as PrismaExchangeConnection } from '@prisma/client';
 import { ExchangeConnection, ExchangeCredentials } from '../../types';
-import { EncryptionService } from '../services/encryption-service';
+import { EncryptionService } from '../../services/encryption-service';
 import { getLogger } from '../../utils/logger.service';
 
 const logger = getLogger('ExchangeConnectionRepository');

@@ -1,11 +1,11 @@
-import { RestBrokerConnector } from '../base/RestBrokerConnector';
+import { RestBrokerConnector } from '../external/base/RestBrokerConnector';
 import {
   BalanceData,
   PositionData,
   TradeData,
-} from '../interfaces/IExchangeConnector';
-import { AlpacaApiService } from '../alpaca-api-service';
-import { ExchangeCredentials } from '../../types';
+} from '../external/interfaces/IExchangeConnector';
+import { AlpacaApiService } from '../external/alpaca-api-service';
+import { ExchangeCredentials } from '../types';
 
 /**
  * Alpaca Markets Exchange Connector

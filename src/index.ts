@@ -1,8 +1,9 @@
 import 'reflect-metadata';
-import { setupEnclaveContainer, verifyEnclaveIsolation } from './enclave/config/enclave-container';
-import { startEnclaveServer } from './enclave/enclave-server';
+import { setupEnclaveContainer, verifyEnclaveIsolation } from './config/enclave-container';
+import { startEnclaveServer } from './enclave-server';
 import { getPrismaClient } from './config/prisma';
 import { logger } from './utils/logger';
+import { MemoryProtectionService } from './services/memory-protection.service';
 
 const startEnclave = async () => {
   try {
@@ -13,17 +14,37 @@ const startEnclave = async () => {
       isolation: 'AMD SEV-SNP',
     });
 
-    // Verify enclave isolation
-    const isIsolated = verifyEnclaveIsolation();
-    if (!isIsolated) {
-      logger.warn('[ENCLAVE] WARNING: Not running in hardware-isolated environment');
-      logger.warn('[ENCLAVE] Deploy to AMD SEV-SNP VM for production');
+    // SECURITY: Initialize memory protection FIRST (before loading secrets)
+    await MemoryProtectionService.initialize();
+    const memStatus = MemoryProtectionService.getStatus();
+    logger.info('[ENCLAVE] Memory protection status:', memStatus);
+
+    // Log production recommendations if any protections are missing
+    const recommendations = MemoryProtectionService.getProductionRecommendations();
+    if (recommendations.length > 0 && process.env.NODE_ENV === 'production') {
+      logger.warn('[ENCLAVE] ⚠ PRODUCTION SECURITY RECOMMENDATIONS:');
+      recommendations.forEach(rec => logger.warn(`  - ${rec}`));
     }
 
-    // Initialize Enclave DI Container (full access to sensitive data)
+    // Initialize Enclave DI Container SECOND (attestation service needs it)
     logger.info('[ENCLAVE] Initializing DI container...');
     setupEnclaveContainer();
     logger.info('[ENCLAVE] DI container initialized');
+
+    // Verify enclave isolation with AMD SEV-SNP attestation
+    logger.info('[ENCLAVE] Performing hardware attestation...');
+    const attestationResult = await verifyEnclaveIsolation();
+
+    if (!attestationResult.verified) {
+      logger.warn('[ENCLAVE] WARNING: Attestation not verified');
+      logger.warn(`[ENCLAVE] ${attestationResult.errorMessage}`);
+
+      if (process.env.NODE_ENV === 'production') {
+        // Attestation failure in production is fatal
+        logger.error('[ENCLAVE] ABORTING: Cannot run in production without attestation');
+        process.exit(1);
+      }
+    }
 
     // Initialize Prisma with ENCLAVE user (full permissions)
     logger.info('[ENCLAVE] Connecting to database with full permissions...');
@@ -59,7 +80,9 @@ const startEnclave = async () => {
     logger.info('[ENCLAVE] Enclave Worker ready to process sync jobs', {
       protocol: 'gRPC',
       port: process.env.ENCLAVE_PORT || 50051,
-      tls: process.env.NODE_ENV === 'production' ? 'enabled' : 'disabled',
+      tls: 'MANDATORY (mutual TLS)',
+      attestation: attestationResult.verified ? 'VERIFIED' : 'DEV MODE',
+      measurement: attestationResult.measurement || 'N/A'
     });
 
     // Graceful shutdown

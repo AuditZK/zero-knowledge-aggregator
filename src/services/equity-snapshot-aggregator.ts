@@ -1,10 +1,10 @@
 import { injectable, inject } from 'tsyringe';
-import { TradeRepository } from '../repositories/trade-repository';
-import { SnapshotDataRepository } from '../repositories/snapshot-data-repository';
-import { CCXTService } from '../../external/ccxt-service';
-import { ExchangeConnectionRepository } from '../repositories/exchange-connection-repository';
-import { UserRepository } from '../repositories/user-repository';
-import { UniversalConnectorCacheService } from './universal-connector-cache.service';
+import { TradeRepository } from '../core/repositories/trade-repository';
+import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repository';
+import { CCXTService } from '../external/ccxt-service';
+import { ExchangeConnectionRepository } from '../core/repositories/exchange-connection-repository';
+import { UserRepository } from '../core/repositories/user-repository';
+import { UniversalConnectorCacheService } from '../core/services/universal-connector-cache.service';
 import type {
   SnapshotData,
   IConnectorWithMarketTypes,
@@ -12,9 +12,9 @@ import type {
   IConnectorWithBalance,
   MarketBalanceBreakdown,
   BreakdownByMarket,
-} from '../../types';
-import type { MarketType } from '../../types/snapshot-breakdown';
-import { getLogger } from '../../utils/logger.service';
+} from '../types';
+import type { MarketType } from '../types/snapshot-breakdown';
+import { getLogger } from '../utils/logger.service';
 
 const logger = getLogger('EquitySnapshotAggregator');
 
