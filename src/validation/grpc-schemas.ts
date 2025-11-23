@@ -15,14 +15,6 @@ export const SyncJobRequestSchema = z.object({
   .refine(data => data.type !== 'HISTORICAL' || (data.start_date && data.end_date), 'HISTORICAL requires dates')
   .refine(data => !data.start_date || !data.end_date || (data.end_date - data.start_date) <= 5 * 365 * 24 * 60 * 60 * 1000, 'Max 5 years');
 
-export const HistoricalReturnsRequestSchema = z.object({
-  user_uid: uuidSchema,
-  start_date: timestampSchema.refine(val => val < Date.now(), 'Future date not allowed'),
-  end_date: timestampSchema.refine(val => val <= Date.now(), 'Future date not allowed'),
-  exchange: exchangeSchema.optional()
-}).refine(data => data.start_date < data.end_date, 'Invalid date range')
-  .refine(data => (data.end_date - data.start_date) <= 10 * 365 * 24 * 60 * 60 * 1000, 'Max 10 years');
-
 export const AggregatedMetricsRequestSchema = z.object({
   user_uid: uuidSchema,
   exchange: exchangeSchema.optional()
@@ -31,7 +23,6 @@ export const AggregatedMetricsRequestSchema = z.object({
 export const HealthCheckRequestSchema = z.object({}).strict();
 
 export type ValidatedSyncJobRequest = z.infer<typeof SyncJobRequestSchema>;
-export type ValidatedHistoricalReturnsRequest = z.infer<typeof HistoricalReturnsRequestSchema>;
 export type ValidatedAggregatedMetricsRequest = z.infer<typeof AggregatedMetricsRequestSchema>;
 export type ValidatedHealthCheckRequest = z.infer<typeof HealthCheckRequestSchema>;
 

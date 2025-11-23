@@ -2,16 +2,7 @@ import winston from 'winston';
 import DailyRotateFile from 'winston-daily-rotate-file';
 import path from 'path';
 import crypto from 'crypto';
-import type { LogMetadata, Trade } from '../types';
-
-interface Position {
-  symbol: string;
-  quantity: number;
-  side: 'long' | 'short';
-  entryPrice: number;
-  currentPrice: number;
-  unrealizedPnl: number;
-}
+import type { LogMetadata, Trade, Position } from '../types';
 
 // Define log levels
 const logLevels = {

@@ -6,7 +6,6 @@ import { EnclaveWorker } from './enclave-worker';
 import { logger } from './utils/logger';
 import {
   SyncJobRequestSchema,
-  HistoricalReturnsRequestSchema,
   AggregatedMetricsRequestSchema,
   HealthCheckRequestSchema,
   validateRequest
@@ -53,7 +52,6 @@ export class EnclaveServer {
     // Add service implementation
     this.server.addService(enclaveProto.enclave.EnclaveService.service, {
       ProcessSyncJob: this.processSyncJob.bind(this),
-      CalculateHistoricalReturns: this.calculateHistoricalReturns.bind(this),
       GetAggregatedMetrics: this.getAggregatedMetrics.bind(this),
       HealthCheck: this.healthCheck.bind(this)
     });
@@ -128,79 +126,6 @@ export class EnclaveServer {
       callback(null, response);
     } catch (error: any) {
       logger.error('ProcessSyncJob failed', {
-        error: error.message,
-        stack: error.stack
-      });
-
-      callback({
-        code: grpc.status.INTERNAL,
-        message: error.message
-      }, null);
-    }
-  }
-
-  /**
-   * Handle CalculateHistoricalReturns RPC
-   */
-  private async calculateHistoricalReturns(
-    call: grpc.ServerUnaryCall<any, any>,
-    callback: grpc.sendUnaryData<any>
-  ): Promise<void> {
-    try {
-      const request = call.request;
-
-      // SECURITY: Validate input before processing
-      const validation = validateRequest(HistoricalReturnsRequestSchema, request);
-      if (!validation.success) {
-        logger.warn('Invalid CalculateHistoricalReturns request', {
-          error: validation.error,
-          request: {
-            user_uid: request.user_uid,
-            start_date: request.start_date,
-            end_date: request.end_date,
-            exchange: request.exchange
-          }
-        });
-
-        callback({
-          code: grpc.status.INVALID_ARGUMENT,
-          message: validation.error
-        }, null);
-        return;
-      }
-
-      const validated = validation.data;
-
-      logger.info('Calculating historical returns', {
-        user_uid: validated.user_uid,
-        start_date: validated.start_date,
-        end_date: validated.end_date,
-        exchange: validated.exchange
-      });
-
-      // Calculate returns with validated data
-      const result = await this.enclaveWorker.calculateHistoricalReturns(
-        validated.user_uid,
-        new Date(validated.start_date),
-        new Date(validated.end_date),
-        validated.exchange || undefined
-      );
-
-      // Convert to gRPC format
-      const response = {
-        success: result.success,
-        returns: result.returns.map(r => ({
-          period: r.period,
-          net_return: r.netReturn,
-          percentage_return: r.percentageReturn,
-          balance: r.balance
-        })),
-        error: result.error || ''
-      };
-
-      callback(null, response);
-    } catch (error: any) {
-      logger.error('CalculateHistoricalReturns failed', {
         error: error.message,
         stack: error.stack
       });
