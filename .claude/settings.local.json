@@ -5,7 +5,11 @@
       "Bash(chmod:*)",
       "Bash(npm install:*)",
       "Bash(find:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(git checkout:*)",
+      "Bash(npx tsc:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nrefactor: remove redundant CCXTService and optimize architecture\n\nArchitectural improvements:\n- Remove CCXTService (527 lines) - redundant with CcxtExchangeConnector\n- Add ''coinbase'' support to ExchangeConnectorFactory\n- Remove illogical fallback in TradeSyncService\n- Refactor EquitySnapshotAggregator to use connectorCache pattern\n- Remove CCXTService from DI container\n- Delete obsolete CONNECTOR_ARCHITECTURE.md\n\nCode reduction: -3,820 lines\nNew total: ~8,315 lines (target <9,000 achieved)\n\nPattern consolidation:\nServices → UniversalConnectorCacheService → ExchangeConnectorFactory → Connectors\n- CcxtExchangeConnector (CCXT crypto exchanges)\n- IbkrFlexConnector → IbkrFlexService\n- AlpacaConnector → AlpacaApiService\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")"
     ],
     "deny": [],
     "ask": []
