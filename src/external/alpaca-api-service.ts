@@ -3,36 +3,18 @@ import Alpaca from '@alpacahq/alpaca-trade-api';
 import type {
   ExchangeCredentials,
   AlpacaPosition as AlpacaPosType,
-  AlpacaOrder as AlpacaOrderType,
   AlpacaActivity as AlpacaActivityType,
   AlpacaAccount,
-  AlpacaPortfolioHistory,
-  AlpacaMarketData,
 } from '../types';
-import { getLogger } from '../utils/logger.service';
+import { getLogger } from '../utils/secure-enclave-logger';
 
 const logger = getLogger('AlpacaApiService');
 
 /**
- * Alpaca Markets API Service
- * Supports Stocks, Crypto, and Options trading
+ * Alpaca Markets API Service (Read-only for enclave)
  */
-
-// Re-export types for backward compatibility
 export type AlpacaPosition = AlpacaPosType;
-export type AlpacaOrder = AlpacaOrderType;
 export type AlpacaActivity = AlpacaActivityType;
-
-export interface AlpacaTrade {
-  symbol: string;
-  order_id: string;
-  id: string; // Trade ID
-  side: 'buy' | 'sell';
-  qty: string;
-  price: string;
-  transaction_time: string;
-  type?: string;
-}
 
 // Type for raw Alpaca SDK responses
 interface AlpacaSDKPosition {
@@ -48,19 +30,6 @@ interface AlpacaSDKPosition {
   lastday_price?: string;
   change_today?: string;
   asset_class?: string;
-  asset_id?: string;
-}
-
-interface AlpacaSDKOrder {
-  id: string;
-  status: string;
-  filled_at?: string | null;
-  symbol?: string;
-  qty?: string;
-  filled_qty?: string;
-  side?: 'buy' | 'sell';
-  filled_avg_price?: string | null;
-  created_at?: string;
 }
 
 interface AlpacaSDKActivity {
@@ -136,28 +105,6 @@ export class AlpacaApiService {
   }
 
   /**
-   * Get closed positions (from orders history)
-   */
-  async getClosedPositions(days: number = 90): Promise<AlpacaSDKOrder[]> {
-    try {
-      const after = new Date();
-      after.setDate(after.getDate() - days);
-
-      const orders = await this.alpaca.getOrders({
-        status: 'closed', // Only get filled orders
-        after: after.toISOString(),
-        direction: 'desc',
-        limit: 500,
-      });
-
-      return (orders as AlpacaSDKOrder[]).filter((order) => order.status === 'filled');
-    } catch (error) {
-      logger.error('Failed to fetch Alpaca closed positions:', error);
-      return [];
-    }
-  }
-
-  /**
    * Get trade history (account activities)
    */
   async getTradeHistory(days: number = 90): Promise<AlpacaActivity[]> {
@@ -194,79 +141,6 @@ export class AlpacaApiService {
   }
 
   /**
-   * Get all orders (including partial fills)
-   */
-  async getAllOrders(days: number = 90): Promise<AlpacaOrder[]> {
-    try {
-      const after = new Date();
-      after.setDate(after.getDate() - days);
-
-      const orders = await this.alpaca.getOrders({
-        status: 'all',
-        after: after.toISOString(),
-        direction: 'desc',
-        limit: 500,
-      });
-
-      return (orders as AlpacaSDKOrder[]).map((order) => ({
-        id: order.id,
-        client_order_id: order.id,
-        created_at: order.created_at || '',
-        updated_at: order.created_at || '',
-        submitted_at: order.created_at || '',
-        filled_at: order.filled_at || null,
-        expired_at: null,
-        canceled_at: null,
-        failed_at: null,
-        replaced_at: null,
-        replaced_by: null,
-        replaces: null,
-        asset_id: '',
-        symbol: order.symbol || '',
-        asset_class: '',
-        qty: order.qty || '0',
-        filled_qty: order.filled_qty || '0',
-        type: '',
-        side: order.side || 'buy',
-        time_in_force: '',
-        limit_price: null,
-        stop_price: null,
-        filled_avg_price: order.filled_avg_price || null,
-        status: order.status,
-        extended_hours: false,
-        legs: null,
-      }));
-    } catch (error) {
-      logger.error('Failed to fetch Alpaca orders:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Get portfolio history
-   */
-  async getPortfolioHistory(period: string = '1M', timeframe: string = '1D'): Promise<AlpacaPortfolioHistory | null> {
-    try {
-      const history = await this.alpaca.getPortfolioHistory({
-        period, // 1D, 1W, 1M, 3M, 6M, 1Y, all
-        timeframe, // 1Min, 5Min, 15Min, 1H, 1D
-      });
-
-      return {
-        timestamp: history.timestamps,
-        equity: history.equity,
-        profit_loss: history.profit_loss,
-        profit_loss_pct: history.profit_loss_pct,
-        base_value: history.base_value,
-        timeframe: history.timeframe,
-      };
-    } catch (error) {
-      logger.error('Failed to fetch Alpaca portfolio history:', error);
-      return null;
-    }
-  }
-
-  /**
    * Get account information
    */
   async getAccountInfo(): Promise<AlpacaAccount | null> {
@@ -291,133 +165,4 @@ export class AlpacaApiService {
       return null;
     }
   }
-
-  /**
-   * Place an order
-   */
-  async placeOrder(
-    symbol: string,
-    qty: number,
-    side: 'buy' | 'sell',
-    type: 'market' | 'limit',
-    limitPrice?: number,
-  ): Promise<string | null> {
-    try {
-      const order = await this.alpaca.createOrder({
-        symbol,
-        qty,
-        side,
-        type,
-        time_in_force: 'day',
-        limit_price: limitPrice,
-      });
-
-      return order.id;
-    } catch (error) {
-      logger.error('Failed to place Alpaca order:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Cancel an order
-   */
-  async cancelOrder(orderId: string): Promise<boolean> {
-    try {
-      await this.alpaca.cancelOrder(orderId);
-      return true;
-    } catch (error) {
-      logger.error('Failed to cancel Alpaca order:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Get market data for a symbol
-   */
-  async getMarketData(symbol: string): Promise<Partial<AlpacaMarketData> | null> {
-    try {
-      // Get latest trade
-      const latestTrade = await this.alpaca.getLatestTrade(symbol);
-
-      // Get latest quote
-      const latestQuote = await this.alpaca.getLatestQuote(symbol);
-
-      return {
-        symbol,
-        latest_trade: {
-          t: latestTrade.Timestamp,
-          x: '',
-          p: latestTrade.Price,
-          s: latestTrade.Size,
-          c: [],
-          i: 0,
-          z: '',
-        },
-        latest_quote: {
-          t: latestQuote.Timestamp,
-          ax: '',
-          ap: latestQuote.AskPrice,
-          as: latestQuote.AskSize,
-          bx: '',
-          bp: latestQuote.BidPrice,
-          bs: latestQuote.BidSize,
-          c: [],
-        },
-      };
-    } catch (error) {
-      logger.error('Failed to fetch Alpaca market data:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Get historical bars
-   */
-  async getHistoricalBars(
-    symbol: string,
-    start: Date,
-    end: Date,
-    timeframe: string = '1Day',
-  ): Promise<Array<{ timestamp: string; open: number; high: number; low: number; close: number; volume: number }>> {
-    try {
-      const bars = await this.alpaca.getBarsV2(
-        symbol,
-        {
-          start: start.toISOString(),
-          end: end.toISOString(),
-          timeframe, // 1Min, 5Min, 15Min, 1Hour, 1Day
-          limit: 1000,
-        },
-      );
-
-      const result = [];
-      for await (const bar of bars) {
-        result.push({
-          timestamp: bar.Timestamp,
-          open: bar.OpenPrice,
-          high: bar.HighPrice,
-          low: bar.LowPrice,
-          close: bar.ClosePrice,
-          volume: bar.Volume,
-        });
-      }
-
-      return result;
-    } catch (error) {
-      logger.error('Failed to fetch Alpaca historical bars:', error);
-      return [];
-    }
-  }
 }
-
-/**
- * Configuration notes for Alpaca:
- *
- * 1. Get API keys from: https://app.alpaca.markets
- * 2. Paper trading keys start with 'PK', live keys start with 'AK'
- * 3. Supports: US Stocks, ETFs, Crypto
- * 4. Market hours: 9:30 AM - 4:00 PM ET (stocks), 24/7 (crypto)
- * 5. No minimum balance for paper trading
- * 6. $0 minimum for live trading (but need to fund account)
- */

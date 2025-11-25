@@ -68,6 +68,9 @@ export interface MarketBalanceBreakdown {
   availableBalance?: number;
   usedMargin?: number;
   positions?: number;
+  // IBKR format aliases (IbkrFlexConnector uses these)
+  equity?: number;
+  available_margin?: number;
 }
 
 export interface BreakdownByMarket {
@@ -82,9 +85,22 @@ export interface BreakdownByMarket {
 export interface SnapshotData {
   id: string;
   userUid: string;
-  timestamp: string; // Format: '2024-01-15T14:00:00.000Z' (snapshot timestamp at configured interval)
-  exchange: string; // Exchange source (binance, bitget, etc.)
-  breakdown_by_market?: BreakdownByMarket; // Market-specific breakdown (spot, swap, etc.)
+  timestamp: string; // Format: '2024-01-15T00:00:00.000Z' (DAILY snapshot timestamp at 00:00 UTC)
+  exchange: string; // Exchange source (binance, bitget, ibkr, etc.)
+
+  // Core equity tracking (CRITICAL for PnL calculation)
+  totalEquity: number;        // Total account value (realized + unrealized positions)
+  realizedBalance: number;    // Available cash/balance (no open positions)
+  unrealizedPnL: number;      // Unrealized profit/loss from open positions
+
+  // Cash flow tracking (REQUIRED for accurate PnL)
+  // Daily PnL = (Equity_end - Equity_start) - Deposits + Withdrawals
+  deposits: number;           // Cash deposited on this day
+  withdrawals: number;        // Cash withdrawn on this day
+
+  // Market breakdown (optional, for detailed analysis)
+  breakdown_by_market?: BreakdownByMarket; // Market-specific breakdown (spot, swap, options)
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -229,35 +245,8 @@ export interface AlpacaPosition {
   current_price: string;
   lastday_price: string;
   change_today: string;
-}
-
-export interface AlpacaOrder {
-  id: string;
-  client_order_id: string;
-  created_at: string;
-  updated_at: string;
-  submitted_at: string;
-  filled_at: string | null;
-  expired_at: string | null;
-  canceled_at: string | null;
-  failed_at: string | null;
-  replaced_at: string | null;
-  replaced_by: string | null;
-  replaces: string | null;
-  asset_id: string;
-  symbol: string;
-  asset_class: string;
-  qty: string;
-  filled_qty: string;
-  type: string;
-  side: 'buy' | 'sell';
-  time_in_force: string;
-  limit_price: string | null;
-  stop_price: string | null;
-  filled_avg_price: string | null;
-  status: string;
-  extended_hours: boolean;
-  legs: AlpacaOrder[] | null;
+  avg_entry_price?: string;
+  asset_class?: string;
 }
 
 export interface AlpacaActivity {
@@ -273,6 +262,7 @@ export interface AlpacaActivity {
   order_id: string;
   cum_qty: string;
   order_status: string;
+  net_amount?: string;
 }
 
 export interface AlpacaAccount {
@@ -302,68 +292,6 @@ export interface AlpacaAccount {
   last_maintenance_margin: string;
   sma: string;
   daytrade_count: number;
-}
-
-export interface AlpacaPortfolioHistory {
-  timestamp: number[];
-  equity: number[];
-  profit_loss: number[];
-  profit_loss_pct: number[];
-  base_value: number;
-  timeframe: string;
-}
-
-export interface AlpacaMarketData {
-  symbol: string;
-  latest_trade: {
-    t: string;
-    x: string;
-    p: number;
-    s: number;
-    c: string[];
-    i: number;
-    z: string;
-  };
-  latest_quote: {
-    t: string;
-    ax: string;
-    ap: number;
-    as: number;
-    bx: string;
-    bp: number;
-    bs: number;
-    c: string[];
-  };
-  minute_bar: {
-    t: string;
-    o: number;
-    h: number;
-    l: number;
-    c: number;
-    v: number;
-    n: number;
-    vw: number;
-  };
-  daily_bar: {
-    t: string;
-    o: number;
-    h: number;
-    l: number;
-    c: number;
-    v: number;
-    n: number;
-    vw: number;
-  };
-  prev_daily_bar: {
-    t: string;
-    o: number;
-    h: number;
-    l: number;
-    c: number;
-    v: number;
-    n: number;
-    vw: number;
-  };
 }
 
 // CCXT position type

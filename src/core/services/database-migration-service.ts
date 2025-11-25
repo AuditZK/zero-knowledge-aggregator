@@ -1,6 +1,6 @@
 import { injectable, inject } from 'tsyringe';
 import { PrismaClient } from '@prisma/client';
-import { getLogger } from '../../utils/logger.service';
+import { getLogger } from '../../utils/secure-enclave-logger';
 
 const logger = getLogger('DatabaseMigrationService');
 

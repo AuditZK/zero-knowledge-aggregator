@@ -1,9 +1,11 @@
+import { container } from 'tsyringe';
 import { IExchangeConnector } from '../../external/interfaces/IExchangeConnector';
 import { ExchangeCredentials } from '../../types';
 import { CcxtExchangeConnector } from '../../connectors/CcxtExchangeConnector';
 import { IbkrFlexConnector } from '../../connectors/IbkrFlexConnector';
 import { AlpacaConnector } from '../../connectors/AlpacaConnector';
-import { getLogger } from '../../utils/logger.service';
+import { IbkrFlexService } from '../ibkr-flex-service';
+import { getLogger } from '../../utils/secure-enclave-logger';
 
 const logger = getLogger('ExchangeConnectorFactory');
 
@@ -91,14 +93,20 @@ export class ExchangeConnectorFactory {
 
   /**
    * Create custom broker connector (non-crypto)
+   * Injects shared service singletons from DI container
    */
   private static createCustomBrokerConnector(
     exchange: string,
     credentials: ExchangeCredentials
   ): IExchangeConnector {
     switch (exchange) {
-      case 'ibkr':
-        return new IbkrFlexConnector(credentials);
+      case 'ibkr': {
+        // Inject singleton IbkrFlexService to share cache across all IBKR connectors
+        // This prevents rate limiting from multiple API calls per sync
+        const flexService = container.resolve(IbkrFlexService);
+        logger.info('Injecting shared IbkrFlexService singleton into connector');
+        return new IbkrFlexConnector(credentials, flexService);
+      }
 
       case 'alpaca':
         return new AlpacaConnector(credentials);
@@ -120,20 +128,6 @@ export class ExchangeConnectorFactory {
   }
 
   /**
-   * Get list of crypto exchanges (CCXT-based)
-   */
-  static getCryptoExchanges(): string[] {
-    return Object.keys(this.CCXT_EXCHANGES);
-  }
-
-  /**
-   * Get list of stock brokers (custom connectors)
-   */
-  static getBrokers(): string[] {
-    return [...this.CUSTOM_BROKERS];
-  }
-
-  /**
    * Check if exchange is supported
    * @param exchange Exchange identifier
    * @returns true if supported
@@ -151,12 +145,5 @@ export class ExchangeConnectorFactory {
    */
   static isCryptoExchange(exchange: string): boolean {
     return this.CCXT_EXCHANGES.hasOwnProperty(exchange.toLowerCase());
-  }
-
-  /**
-   * Check if exchange is a stock broker (custom connector)
-   */
-  static isBroker(exchange: string): boolean {
-    return this.CUSTOM_BROKERS.includes(exchange.toLowerCase());
   }
 }

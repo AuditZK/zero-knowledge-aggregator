@@ -175,6 +175,29 @@ where.exchange = exchange;
   }
 
   /**
+   * Compte les trades dans une période donnée
+   */
+  async countTradesByDateRange(
+    userUid: string,
+    startDate: Date,
+    endDate: Date,
+    exchange?: string
+  ): Promise<number> {
+    const where: Prisma.TradeWhereInput = {
+      userUid,
+      timestamp: {
+        gte: startDate,
+        lte: endDate,
+      }
+    };
+    if (exchange) {
+      where.exchange = exchange;
+    }
+
+    return this.prisma.trade.count({ where });
+  }
+
+  /**
    * Récupère les trades dans une période donnée
    */
   async getTradesByDateRange(

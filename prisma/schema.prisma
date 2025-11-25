@@ -53,22 +53,33 @@ model Trade {
   @@map("trades")
 }
 
-// Snapshot data aggregation - Account state snapshots at configurable intervals
-// All data is stored in breakdown_by_market JSON field
+// Snapshot data aggregation - DAILY account state snapshots
+// Captures daily equity snapshots with deposits/withdrawals for accurate PnL calculation
 model SnapshotData {
   id         String   @id @default(cuid())
   userUid    String
-  timestamp  DateTime // Snapshot timestamp (rounded to configured interval)
+  timestamp  DateTime // Daily snapshot timestamp (00:00 UTC of each day)
   exchange   String
+
+  // Core equity tracking (CRITICAL for PnL calculation)
+  totalEquity        Float    // Total account value (realized + unrealized positions)
+  realizedBalance    Float    // Available cash/balance (no open positions)
+  unrealizedPnL      Float    // Unrealized profit/loss from open positions
+
+  // Cash flow tracking (REQUIRED for accurate PnL)
+  // Daily PnL = (Equity_end - Equity_start) - Deposits + Withdrawals
+  deposits           Float    @default(0) // Cash deposited on this day
+  withdrawals        Float    @default(0) // Cash withdrawn on this day
 
   // Market breakdown structure (JSON)
   // Structure: {
   //   global: { equity, available_margin, volume, orders, trading_fees, funding_fees },
   //   spot: { equity, volume, orders, trading_fees },  // NO funding_fees on spot
   //   swap: { equity, volume, orders, trading_fees, funding_fees },
+  //   options: { equity, volume, orders, trading_fees },
   //   ...
   // }
-  breakdown_by_market Json? // Market-specific metrics breakdown
+  breakdown_by_market Json? // Market-specific metrics breakdown (spot/swap/options)
 
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -119,6 +130,22 @@ model SyncStatus {
 
   @@unique([userUid, exchange])
   @@map("sync_statuses")
+}
+
+// Sync Rate Limit Log - SECURITY: Prevents manipulation by enforcing 1 sync per day
+// Audit trail to prove snapshots are taken systematically at 00:00 UTC, not cherry-picked
+model SyncRateLimitLog {
+  id            String   @id @default(cuid())
+  userUid       String
+  exchange      String
+  lastSyncTime  DateTime // Timestamp of last successful sync
+  syncCount     Int      @default(1) // Total number of syncs performed
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userUid, exchange])
+  @@index([lastSyncTime]) // For cleanup queries
+  @@map("sync_rate_limit_logs")
 }
 
 // Migrations tracking

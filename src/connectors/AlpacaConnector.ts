@@ -138,15 +138,4 @@ export class AlpacaConnector extends RestBrokerConnector {
       return false;
     }
   }
-
-  /**
-   * Get portfolio history for performance tracking
-   */
-  async getPortfolioHistory(period: string = '1M', timeframe: string = '1D'): Promise<any> {
-    try {
-      return await this.api.getPortfolioHistory(period, timeframe);
-    } catch (error) {
-      this.handleError(error, 'getPortfolioHistory');
-    }
-  }
 }

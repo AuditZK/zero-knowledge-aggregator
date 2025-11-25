@@ -1,7 +1,7 @@
 import { injectable } from 'tsyringe';
 import axios from 'axios';
 import { parseStringPromise } from 'xml2js';
-import { getLogger } from '../utils/logger.service';
+import { getLogger } from '../utils/secure-enclave-logger';
 
 const logger = getLogger('IbkrFlexService');
 
@@ -65,7 +65,9 @@ interface FlexCache {
 export class IbkrFlexService {
   private readonly baseUrl = 'https://ndcdyn.interactivebrokers.com/Universal/servlet';
   private readonly flexCache = new Map<string, FlexCache>();
-  private readonly CACHE_TTL_MS = 60 * 1000;
+  // IBKR Flex data is daily snapshots, not real-time - cache for 30 minutes
+  // This prevents rate limiting (Error 1018) during sync operations
+  private readonly CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
   async requestFlexReport(token: string, queryId: string): Promise<string> {
     const startTime = Date.now();
@@ -238,6 +240,13 @@ export class IbkrFlexService {
       const flexStatement = parsed.FlexQueryResponse?.FlexStatements?.[0]?.FlexStatement?.[0];
       if (!flexStatement) return [];
 
+      // DEBUG: Log all top-level keys in flexStatement
+      logger.info('IBKR FlexStatement structure:', {
+        keys: Object.keys(flexStatement),
+        hasEquitySummaryByReportDateInBase: !!flexStatement.EquitySummaryByReportDateInBase,
+        hasEquitySummaryInBase: !!flexStatement.EquitySummaryInBase
+      });
+
       let dataList = flexStatement.EquitySummaryByReportDateInBase
         || flexStatement.AccountInformation?.[0]?.AccountInformation;
 
@@ -250,8 +259,20 @@ export class IbkrFlexService {
         return [];
       }
 
+      // DEBUG: Log first and last entries to understand date range
+      const firstEntry = dataList[0]?.$;
+      const lastEntry = dataList[dataList.length - 1]?.$;
+      logger.info('IBKR Data Range:', {
+        totalEntries: dataList.length,
+        firstDate: firstEntry?.reportDate,
+        lastDate: lastEntry?.reportDate,
+        lastTotal: lastEntry?.total,
+        lastCash: lastEntry?.cash
+      });
+
       return dataList.map((info: any) => {
         const attrs = info.$;
+
         const netLiquidation = parseFloat(
           attrs.total || attrs.netLiquidation || attrs.netLiquidationValue || attrs.equityWithLoanValue || attrs.equity || '0'
         );
@@ -303,8 +324,9 @@ export class IbkrFlexService {
 
     this.flexCache.set(cacheKey, { xmlData, timestamp: now });
 
+    // Cleanup entries older than 1 hour (well past the 30min TTL)
     for (const [key, value] of this.flexCache.entries()) {
-      if (now - value.timestamp > 5 * 60 * 1000) {
+      if (now - value.timestamp > 60 * 60 * 1000) {
         this.flexCache.delete(key);
       }
     }

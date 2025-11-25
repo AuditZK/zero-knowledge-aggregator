@@ -10,7 +10,7 @@ services:
       POSTGRES_USER: enclave_user
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-enclavepass123}
     ports:
-      - "5434:5432"  # Different port to avoid conflict with aggregator-basic
+      - "5436:5432"  # Different port to avoid conflict with other services
     volumes:
       - enclave_postgres_data:/var/lib/postgresql/data
     networks:

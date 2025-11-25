@@ -1,4 +1,6 @@
-import { logger } from '../utils/logger';
+import { getLogger } from '../utils/secure-enclave-logger';
+
+const logger = getLogger('MemoryProtection');
 import * as fs from 'fs';
 
 export class MemoryProtectionService {

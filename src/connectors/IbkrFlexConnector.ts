@@ -3,7 +3,6 @@ import {
   BalanceData,
   PositionData,
   TradeData,
-  CapitalFlowData,
   ExchangeFeature,
 } from '../external/interfaces/IExchangeConnector';
 import { IbkrFlexService } from '../external/ibkr-flex-service';
@@ -15,7 +14,11 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
   private queryId: string;
   private accountId?: string;
 
-  constructor(credentials: ExchangeCredentials) {
+  /**
+   * @param credentials Exchange credentials (apiKey=token, apiSecret=queryId)
+   * @param flexService Shared IbkrFlexService singleton (injected via factory)
+   */
+  constructor(credentials: ExchangeCredentials, flexService?: IbkrFlexService) {
     super(credentials);
     if (!credentials.apiKey || !credentials.apiSecret) {
       throw new Error('IBKR Flex requires apiKey (token) and apiSecret (queryId)');
@@ -24,7 +27,8 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
     this.flexToken = credentials.apiKey;
     this.queryId = credentials.apiSecret;
     this.accountId = credentials.passphrase;
-    this.flexService = new IbkrFlexService();
+    // Use injected singleton or create new instance (for backwards compatibility/testing)
+    this.flexService = flexService || new IbkrFlexService();
   }
 
   getExchangeName(): string {
@@ -32,7 +36,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
   }
 
   supportsFeature(feature: ExchangeFeature): boolean {
-    const supported: ExchangeFeature[] = ['positions', 'trades', 'capital_flows', 'historical_data'];
+    const supported: ExchangeFeature[] = ['positions', 'trades', 'historical_data'];
     return supported.includes(feature);
   }
 
@@ -150,40 +154,6 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
           fee: Math.abs(trade.ibCommission), feeCurrency: trade.ibCommissionCurrency,
           timestamp: this.parseFlexDateTime(trade.tradeDate, trade.tradeTime),
           orderId: trade.ibOrderID, realizedPnl: trade.fifoPnlRealized,
-        }));
-    });
-  }
-
-  protected async fetchDeposits(startDate: Date, endDate: Date): Promise<CapitalFlowData[]> {
-    return this.withErrorHandling('fetchDeposits', async () => {
-      const cashTransactions = await this.fetchFlexData(xml => this.flexService.parseCashTransactions(xml));
-      return cashTransactions
-        .filter(tx => {
-          const txDate = new Date(tx.date);
-          const isDeposit = tx.type === 'Deposits' || tx.type === 'Deposits & Withdrawals' && tx.amount > 0;
-          return isDeposit && this.isInDateRange(txDate, startDate, endDate);
-        })
-        .map(tx => ({
-          type: 'deposit' as const, amount: Math.abs(tx.amount), currency: tx.currency,
-          timestamp: new Date(tx.date), txId: `${tx.date}_${tx.type}`, status: 'completed' as const,
-          metadata: { description: tx.description, source: 'ibkr_flex' },
-        }));
-    });
-  }
-
-  protected async fetchWithdrawals(startDate: Date, endDate: Date): Promise<CapitalFlowData[]> {
-    return this.withErrorHandling('fetchWithdrawals', async () => {
-      const cashTransactions = await this.fetchFlexData(xml => this.flexService.parseCashTransactions(xml));
-      return cashTransactions
-        .filter(tx => {
-          const txDate = new Date(tx.date);
-          const isWithdrawal = tx.type === 'Withdrawals' || tx.type === 'Deposits & Withdrawals' && tx.amount < 0;
-          return isWithdrawal && this.isInDateRange(txDate, startDate, endDate);
-        })
-        .map(tx => ({
-          type: 'withdrawal' as const, amount: Math.abs(tx.amount), currency: tx.currency,
-          timestamp: new Date(tx.date), txId: `${tx.date}_${tx.type}`, status: 'completed' as const,
-          metadata: { description: tx.description, source: 'ibkr_flex' },
         }));
     });
   }

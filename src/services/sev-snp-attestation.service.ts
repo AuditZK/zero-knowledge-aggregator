@@ -1,6 +1,8 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
-import { logger } from '../utils/logger';
+import { getLogger } from '../utils/secure-enclave-logger';
+
+const logger = getLogger('SevSnpAttestation');
 
 export interface AttestationResult {
   verified: boolean;

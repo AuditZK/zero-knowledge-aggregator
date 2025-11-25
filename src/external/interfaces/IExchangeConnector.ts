@@ -16,21 +16,6 @@ export interface BalanceData {
 }
 
 /**
- * Capital flow (deposit/withdrawal) data
- */
-export interface CapitalFlowData {
-  type: 'deposit' | 'withdrawal';
-  amount: number;
-  currency: string;
-  timestamp: Date;
-  txId: string;
-  status: 'pending' | 'completed' | 'failed';
-  fee?: number;
-  network?: string;
-  address?: string;
-}
-
-/**
  * Trade execution data
  */
 export interface TradeData {
@@ -65,7 +50,6 @@ export interface PositionData {
  * Supported features by exchange
  */
 export type ExchangeFeature =
-  | 'capital_flows'     // Deposits/withdrawals via API
   | 'positions'         // Position tracking
   | 'trades'            // Trade history
   | 'real_time'         // Real-time data
@@ -106,24 +90,6 @@ export interface IExchangeConnector {
    * @returns Array of trades
    */
   getTrades(startDate: Date, endDate: Date): Promise<TradeData[]>;
-
-  /**
-   * Get deposit history in date range
-   * @param startDate Start date (inclusive)
-   * @param endDate End date (inclusive)
-   * @returns Array of deposits
-   * @throws Error if capital_flows feature not supported
-   */
-  getDeposits(startDate: Date, endDate: Date): Promise<CapitalFlowData[]>;
-
-  /**
-   * Get withdrawal history in date range
-   * @param startDate Start date (inclusive)
-   * @param endDate End date (inclusive)
-   * @returns Array of withdrawals
-   * @throws Error if capital_flows feature not supported
-   */
-  getWithdrawals(startDate: Date, endDate: Date): Promise<CapitalFlowData[]>;
 
   /**
    * Get exchange name (lowercase)

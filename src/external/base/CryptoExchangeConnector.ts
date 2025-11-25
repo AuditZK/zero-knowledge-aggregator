@@ -7,7 +7,7 @@ import { ExchangeFeature } from '../interfaces/IExchangeConnector';
  * Provides crypto-specific defaults:
  * - USDT as default currency
  * - Timestamp handling (milliseconds)
- * - Common crypto features (positions, trades, capital_flows)
+ * - Common crypto features (positions, trades, historical_data)
  *
  * Designed for exchanges like Binance, Bitget, MEXC, OKX, Bybit, etc.
  */
@@ -26,7 +26,6 @@ export abstract class CryptoExchangeConnector extends BaseExchangeConnector {
       'positions',
       'trades',
       'historical_data',
-      'capital_flows', // Most crypto exchanges support deposits/withdrawals
     ];
     return cryptoSupported.includes(feature);
   }

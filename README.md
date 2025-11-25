@@ -3,7 +3,7 @@
 **Trusted Computing Base for Confidential Trading Data Aggregation**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![TCB](https://img.shields.io/badge/TCB-4,572%20LOC-green.svg)]()
+[![TCB](https://img.shields.io/badge/TCB-5,454%20LOC-green.svg)]()
 [![Node.js](https://img.shields.io/badge/Node.js-20.x-339933.svg)]()
 [![AMD SEV-SNP](https://img.shields.io/badge/AMD-SEV--SNP-red.svg)]()
 
@@ -63,7 +63,7 @@ This repository contains the **Trusted Computing Base (TCB)** of the Track Recor
 │  - HTTP REST API (public-facing)                            │
 │  - Authentication, rate limiting                            │
 │  - Access: aggregated data only                             │
-│  - Database: hourly_returns, balance_snapshots (READ)       │
+│  - Database: snapshot_data (READ)                           │
 │  - Code: NOT in this repository (proprietary)               │
 └────────────────────────┬────────────────────────────────────┘
                          │ gRPC over mTLS
@@ -75,9 +75,18 @@ This repository contains the **Trusted Computing Base (TCB)** of the Track Recor
 ║  AMD SEV-SNP VM (Hardware Isolation)                        ║
 ║                                                             ║
 ║  ┌───────────────────────────────────────────────────────┐ ║
+║  │  Autonomous Daily Sync Scheduler (00:00 UTC)         │ ║
+║  │  - DailySyncSchedulerService (node-cron)             │ ║
+║  │  - Triggers daily snapshots for ALL active users     │ ║
+║  │  - Rate-limited (23h cooldown per user/exchange)     │ ║
+║  │  - Audit trail: SyncRateLimitLog table               │ ║
+║  └───────────────────────────────────────────────────────┘ ║
+║                                                             ║
+║  ┌───────────────────────────────────────────────────────┐ ║
 ║  │  gRPC Server (Port 50051)                             │ ║
-║  │  - ProcessSyncJob                                     │ ║
+║  │  - ProcessSyncJob (manual sync)                      │ ║
 ║  │  - GetAggregatedMetrics                              │ ║
+║  │  - HealthCheck                                       │ ║
 ║  └───────────────────────────────────────────────────────┘ ║
 ║                                                             ║
 ║  ┌───────────────────────────────────────────────────────┐ ║
@@ -95,9 +104,15 @@ This repository contains the **Trusted Computing Base (TCB)** of the Track Recor
 ║  │  └─────────────────────────────────────────────────┘ │ ║
 ║  │  ┌─────────────────────────────────────────────────┐ │ ║
 ║  │  │  EquitySnapshotAggregator (src/services/)       │ │ ║
-║  │  │  - Position reconstruction from trades          │ │ ║
+║  │  │  - Equity snapshot creation (daily at 00:00)    │ │ ║
 ║  │  │  - P&L calculation (realized + unrealized)      │ │ ║
-║  │  │  - Hourly aggregation (destroys trade detail)   │ │ ║
+║  │  │  - Deposit/withdrawal tracking                  │ │ ║
+║  │  └─────────────────────────────────────────────────┘ │ ║
+║  │  ┌─────────────────────────────────────────────────┐ │ ║
+║  │  │  SyncRateLimiterService (src/services/)         │ │ ║
+║  │  │  - 23-hour cooldown enforcement                 │ │ ║
+║  │  │  - Prevents cherry-picking via manual API calls │ │ ║
+║  │  │  - Audit trail for systematic snapshot proof    │ │ ║
 ║  │  └─────────────────────────────────────────────────┘ │ ║
 ║  └───────────────────────────────────────────────────────┘ ║
 ║                                                             ║
@@ -111,17 +126,32 @@ This repository contains the **Trusted Computing Base (TCB)** of the Track Recor
 ║  ┌───────────────────────────────────────────────────────┐ ║
 ║  │  Database Layer (src/repositories/)                   │ ║
 ║  │  - User: enclave_user (full privileges)              │ ║
-║  │  - Tables: trades (R/W), hourly_returns (W)          │ ║
+║  │  - Tables: trades (R/W), snapshot_data (W)           │ ║
+║  │  - Audit: sync_rate_limit_logs (R/W)                 │ ║
 ║  │  - All queries parameterized (Prisma ORM)            │ ║
 ║  └───────────────────────────────────────────────────────┘ ║
 ╚═════════════════════════════════════════════════════════════╝
 
-Output: Aggregated hourly_returns only (no individual trades)
+Output: Aggregated daily snapshots only (no individual trades)
+Autonomous: Daily sync at 00:00 UTC for all active users
 ```
 
 ### Data Flow
 
 ```
+┌─────────────────────────────────────────────────────────┐
+│  AUTONOMOUS SCHEDULER (00:00 UTC daily)                 │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │  DailySyncSchedulerService (node-cron)           │   │
+│  │  1. Get all active users from database           │   │
+│  │  2. For each user, get active exchange conns     │   │
+│  │  3. Check rate limit (23h cooldown)              │   │
+│  │  4. Trigger snapshot creation                    │   │
+│  │  5. Record sync in audit log                     │   │
+│  └──────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+         │
+         ▼
 External Exchange APIs (Binance, IBKR, Alpaca)
          │
          ▼
@@ -132,36 +162,41 @@ External Exchange APIs (Binance, IBKR, Alpaca)
          │
          ▼
   ┌──────────────┐
-  │ Raw Trades   │ ◄── Fetched via HTTPS (TLS 1.3)
-  │              │     Individual fills, prices, timestamps
+  │ Current      │ ◄── Fetched via HTTPS (TLS 1.3)
+  │ Account      │     Total equity, realized balance, unrealized P&L
+  │ State        │     Deposits/withdrawals detection
   └──────────────┘
          │
          ▼
   ┌──────────────┐
-  │ Store in DB  │ ◄── PostgreSQL trades table
-  │ trades       │     Only enclave_user has SELECT access
-  └──────────────┘
+  │ Create Daily │ ◄── EquitySnapshotAggregator
+  │ Snapshot     │     Timestamp: 00:00 UTC
+  └──────────────┘     Fields: totalEquity, realizedBalance, unrealizedPnL,
+         │               deposits, withdrawals, breakdown_by_market
+         ▼
+  ┌──────────────┐
+  │ Store        │ ◄── PostgreSQL snapshot_data table
+  │ snapshot_    │     Gateway has SELECT access
+  │ data         │     No individual trades visible
+  └──────────────┘     One snapshot per day per user/exchange
          │
          ▼
   ┌──────────────┐
-  │ Aggregate    │ ◄── Position-based P&L calculation
-  │ P&L Hourly   │     Realized + Unrealized per hour
-  └──────────────┘     Individual trade detail DESTROYED
-         │
-         ▼
-  ┌──────────────┐
-  │ Store        │ ◄── PostgreSQL hourly_returns table
-  │ hourly_      │     Gateway has SELECT access
-  │ returns      │     No individual trades visible
-  └──────────────┘
+  │ Rate Limiter │ ◄── SyncRateLimiterService
+  │ Audit Log    │     Records sync timestamp
+  └──────────────┘     Prevents manual cherry-picking
          │
          ▼
   API Gateway (untrusted) → Frontend (public)
 ```
 
-### Critical Security Property
+### Critical Security Properties
 
-**Zero-Knowledge Architecture**: Individual trades are processed within the enclave and aggregated into hourly returns. Only aggregated data crosses the enclave boundary via gRPC. The API Gateway (and thus any attacker who compromises it) sees ONLY hourly summaries, never individual trades or prices.
+1. **Zero-Knowledge Architecture**: Individual trades are NEVER transmitted outside the enclave. Only aggregated daily snapshots (total equity, P&L) cross the enclave boundary via gRPC. The API Gateway (and thus any attacker who compromises it) sees ONLY daily summaries, never individual trades or prices.
+
+2. **Autonomous Systematic Snapshots**: The scheduler runs inside the hardware-attested enclave at 00:00 UTC daily, ensuring snapshots are taken systematically and cannot be cherry-picked at favorable market conditions. The rate limiter enforces a 23-hour cooldown, preventing manual API abuse.
+
+3. **Audit Trail**: All sync operations are logged in `sync_rate_limit_logs` table with timestamps, proving that snapshots were created systematically by the enclave scheduler, not manually triggered to hide losses.
 
 ## Trusted Computing Base
 
@@ -171,14 +206,16 @@ External Exchange APIs (Binance, IBKR, Alpaca)
 |-----------|-------|-----|---------|
 | **EncryptionService** | 1 | 200 | AES-256-GCM credential decryption |
 | **Exchange Connectors** | 3 | 1,400 | CCXT, IBKR, Alpaca integrations |
-| **External API Services** | 3 | 1,441 | Trade fetching from exchanges |
-| **EquitySnapshotAggregator** | 1 | 731 | Position-based returns calculation |
+| **External API Services** | 3 | 1,441 | Account state fetching from exchanges |
+| **EquitySnapshotAggregator** | 1 | 731 | Daily snapshot creation with P&L |
 | **TradeSyncService** | 1 | 400 | Synchronization orchestration |
-| **EnclaveRepository** | 1 | 300 | Database access layer |
+| **DailySyncSchedulerService** | 1 | 220 | Autonomous cron scheduler (00:00 UTC) |
+| **SyncRateLimiterService** | 1 | 202 | Rate limiting & audit trail |
+| **Repositories** | 6 | 760 | Database access layer |
 | **EnclaveWorker + Server** | 2 | 100 | gRPC server and entry point |
-| **Total** | **12** | **4,572** | Minimized attack surface |
+| **Total** | **19** | **5,454** | Minimized attack surface |
 
-**Rationale for TCB size**: By isolating only the code that MUST handle credentials and individual trades, we reduce the attack surface from ~12,000 LOC (full platform) to 4,572 LOC (enclave only). This makes security audits tractable and reduces the probability of vulnerabilities.
+**Rationale for TCB size**: By isolating only the code that MUST handle credentials and create snapshots, we reduce the attack surface from ~12,000 LOC (full platform) to 5,454 LOC (enclave only). This makes security audits tractable and reduces the probability of vulnerabilities. The autonomous scheduler and rate limiter are included in the TCB to prove snapshot integrity via hardware attestation.
 
 ### Dependencies
 
@@ -191,10 +228,11 @@ Critical dependencies (included in TCB audit scope):
 | `ccxt` | 4.5.2 | Cryptocurrency exchange integration | None |
 | `@stoqey/ib` | 1.5.1 | Interactive Brokers API | None |
 | `@alpacahq/alpaca-trade-api` | 3.1.3 | Alpaca Markets API | None |
+| `node-cron` | 3.0.3 | Autonomous scheduler (00:00 UTC daily) | None |
 | `tsyringe` | 4.10.0 | Dependency injection | None |
 | `winston` | 3.17.0 | Logging (sensitive data redacted) | None |
 
-Total transitive dependencies: 47 packages (audited with `npm audit`)
+Total transitive dependencies: 49 packages (audited with `npm audit`)
 
 ## Threat Model
 
@@ -208,9 +246,10 @@ Total transitive dependencies: 47 packages (audited with `npm audit`)
 **Mitigation**:
 - Gateway runs outside enclave with restricted database access
 - PostgreSQL permissions prevent gateway_user from reading `trades` table
-- Gateway only receives aggregated hourly_returns via gRPC
+- Gateway only receives aggregated daily snapshots via gRPC
+- Rate limiter audit logs prove snapshots are systematic, not cherry-picked
 
-**Verification**: Auditors should verify that Gateway code (not in this repo) cannot access sensitive tables.
+**Verification**: Auditors should verify that Gateway code (not in this repo) cannot access sensitive tables or bypass rate limiting.
 
 #### 2. Compromised Hypervisor
 **Threat**: Malicious cloud provider or attacker compromises the VM hypervisor.
@@ -285,11 +324,14 @@ This repository is designed for independent security audits. Auditors should foc
 - [ ] Check credentials are not persisted decrypted (grep for `writeFile`, `console.log`)
 - [ ] Confirm decrypted credentials stored only in enclave RAM (no global variables)
 
-**Trade Privacy:**
-- [ ] Review `src/services/equity-snapshot-aggregator.ts` aggregation logic
+**Snapshot Privacy:**
+- [ ] Review `src/services/equity-snapshot-aggregator.ts` snapshot creation logic
 - [ ] Verify gRPC responses (see `src/enclave-server.ts`) contain only aggregated data
-- [ ] Check no individual trades in hourly_returns calculation
+- [ ] Check no individual trades in snapshot_data table
 - [ ] Confirm no trade detail in logs (search for `logger.debug` with trade data)
+- [ ] Review `src/services/sync-rate-limiter.service.ts` for rate limit enforcement
+- [ ] Verify `sync_rate_limit_logs` audit trail prevents cherry-picking
+- [ ] Check `src/services/daily-sync-scheduler.service.ts` runs at 00:00 UTC systematically
 
 **Input Validation:**
 - [ ] Review gRPC message validation in `src/enclave-server.ts`
@@ -416,19 +458,43 @@ Full specification: [src/proto/enclave.proto](src/proto/enclave.proto)
 
 **Critical**: All gRPC responses contain ONLY aggregated data. Individual trade prices, timestamps, or sizes are NEVER transmitted outside the enclave.
 
-Example response structure:
+#### ProcessSyncJob Response Structure
+
 ```javascript
 {
   success: true,
-  hourlyReturnsGenerated: 24,  // Count only
+  userUid: "user123",
+  exchange: "binance",
+  synced: true,
   latestSnapshot: {
-    balance: 10250.42,           // Total balance
-    equity: 10500.00,            // Total equity
-    timestamp: "2025-01-15T12:00:00Z"
+    // Aggregated daily snapshot (00:00 UTC)
+    totalEquity: 10500.00,          // Total account value (realized + unrealized)
+    realizedBalance: 10250.42,      // Available cash/balance
+    unrealizedPnL: 249.58,          // Unrealized P&L from open positions
+    deposits: 0,                    // Cash deposited today
+    withdrawals: 0,                 // Cash withdrawn today
+    timestamp: "2025-01-15T00:00:00Z"  // Daily snapshot timestamp
   }
   // NO individual trades array
   // NO trade prices
   // NO trade timestamps
+  // NO position sizes
+}
+```
+
+#### GetAggregatedMetrics Response Structure
+
+```javascript
+{
+  totalBalance: 10250.42,         // Total realized balance across all exchanges
+  totalEquity: 10500.00,          // Total equity (realized + unrealized)
+  totalRealizedPnl: 500.00,       // Cumulative realized P&L
+  totalUnrealizedPnl: 249.58,     // Current unrealized P&L
+  totalFees: 25.50,               // Cumulative fees paid
+  totalTrades: 150,               // Count only (no trade details)
+  lastSync: "2025-01-15T00:00:00Z"  // Timestamp of last snapshot
+  // NO individual trades
+  // NO exchange-specific breakdown with identifying details
 }
 ```
 
