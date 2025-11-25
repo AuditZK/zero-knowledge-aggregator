@@ -1,6 +1,6 @@
 import { injectable, inject } from 'tsyringe';
-import { PrismaClient, SnapshotData as PrismaSnapshotData } from '@prisma/client';
-import { SnapshotData } from '../../types';
+import { PrismaClient, SnapshotData as PrismaSnapshotData, Prisma } from '@prisma/client';
+import { SnapshotData, BreakdownByMarket } from '../../types';
 import { getLogger } from '../../utils/secure-enclave-logger';
 
 const logger = getLogger('SnapshotDataRepository');
@@ -26,7 +26,7 @@ export class SnapshotDataRepository {
         unrealizedPnL: snapshot.unrealizedPnL,
         deposits: snapshot.deposits,
         withdrawals: snapshot.withdrawals,
-        breakdown_by_market: snapshot.breakdown_by_market as any,
+        breakdown_by_market: snapshot.breakdown_by_market as Prisma.JsonValue,
         updatedAt: new Date(),
       },
       create: {
@@ -38,7 +38,7 @@ export class SnapshotDataRepository {
         unrealizedPnL: snapshot.unrealizedPnL,
         deposits: snapshot.deposits || 0,
         withdrawals: snapshot.withdrawals || 0,
-        breakdown_by_market: snapshot.breakdown_by_market as any,
+        breakdown_by_market: snapshot.breakdown_by_market as Prisma.JsonValue,
       },
     });
 
@@ -51,7 +51,7 @@ export class SnapshotDataRepository {
     endDate?: Date,
     exchange?: string,
   ): Promise<SnapshotData[]> {
-    const where: any = { userUid };
+    const where: Prisma.SnapshotDataWhereInput = { userUid };
 
     if (startDate || endDate) {
       where.timestamp = {};
@@ -89,7 +89,7 @@ export class SnapshotDataRepository {
     endTime: string,
     exchange?: string,
   ): Promise<SnapshotData[]> {
-    const where: any = {
+    const where: Prisma.SnapshotDataWhereInput = {
       userUid,
       timestamp: {
         gte: new Date(startTime),
@@ -110,7 +110,7 @@ export class SnapshotDataRepository {
   }
 
   async getLatestSnapshotData(userUid: string, exchange?: string): Promise<SnapshotData | null> {
-    const where: any = { userUid };
+    const where: Prisma.SnapshotDataWhereInput = { userUid };
     if (exchange) {
       where.exchange = exchange;
     }
@@ -146,7 +146,7 @@ export class SnapshotDataRepository {
   }
 
   async deleteAllForUser(userUid: string, exchange?: string): Promise<number> {
-    const where: any = { userUid };
+    const where: Prisma.SnapshotDataWhereInput = { userUid };
     if (exchange) {
       where.exchange = exchange;
     }
@@ -159,7 +159,7 @@ export class SnapshotDataRepository {
   }
 
   async countSnapshotDataByUser(userUid: string, exchange?: string): Promise<number> {
-    const where: any = { userUid };
+    const where: Prisma.SnapshotDataWhereInput = { userUid };
     if (exchange) {
       where.exchange = exchange;
     }
@@ -178,7 +178,7 @@ export class SnapshotDataRepository {
       unrealizedPnL: prismaSnapshotData.unrealizedPnL,
       deposits: prismaSnapshotData.deposits,
       withdrawals: prismaSnapshotData.withdrawals,
-      breakdown_by_market: prismaSnapshotData.breakdown_by_market as any,
+      breakdown_by_market: prismaSnapshotData.breakdown_by_market as BreakdownByMarket | undefined,
       createdAt: prismaSnapshotData.createdAt,
       updatedAt: prismaSnapshotData.updatedAt,
     };

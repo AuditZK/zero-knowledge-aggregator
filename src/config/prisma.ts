@@ -56,9 +56,8 @@ export const createPrismaClient = (): PrismaClient => {
     ],
   });
 
-  // Set up Prisma logging with typed events
-  // @ts-ignore - Prisma event typing has issues with strictNullChecks
-  prisma.$on('query', (e: PrismaQueryEvent) => {
+  // Set up Prisma logging with typed events using type assertion
+  (prisma.$on as (event: 'query', callback: (e: PrismaQueryEvent) => void) => void)('query', (e) => {
     dbLogger.debug('Query executed', {
       query: e.query,
       params: e.params,
@@ -66,18 +65,15 @@ export const createPrismaClient = (): PrismaClient => {
     });
   });
 
-  // @ts-ignore - Prisma event typing has issues with strictNullChecks
-  prisma.$on('info', (e: PrismaLogEvent) => {
+  (prisma.$on as (event: 'info', callback: (e: PrismaLogEvent) => void) => void)('info', (e) => {
     dbLogger.info(e.message);
   });
 
-  // @ts-ignore - Prisma event typing has issues with strictNullChecks
-  prisma.$on('warn', (e: PrismaLogEvent) => {
+  (prisma.$on as (event: 'warn', callback: (e: PrismaLogEvent) => void) => void)('warn', (e) => {
     dbLogger.warn(e.message);
   });
 
-  // @ts-ignore - Prisma event typing has issues with strictNullChecks
-  prisma.$on('error', (e: PrismaErrorEvent) => {
+  (prisma.$on as (event: 'error', callback: (e: PrismaErrorEvent) => void) => void)('error', (e) => {
     dbLogger.error('Database error', undefined, { message: e.message, target: e.target });
   });
 
@@ -109,10 +105,11 @@ export const testPrismaConnection = async (): Promise<boolean> => {
     await client.$queryRaw`SELECT NOW() as now`;
     dbLogger.info('Database connected successfully with Prisma');
     return true;
-  } catch (error: any) {
-    dbLogger.error('Database connection failed', error, {
-      errorName: error.name,
-      errorMessage: error.message,
+  } catch (error) {
+    const err = error as Error;
+    dbLogger.error('Database connection failed', err, {
+      errorName: err.name,
+      errorMessage: err.message,
     });
     return false;
   }

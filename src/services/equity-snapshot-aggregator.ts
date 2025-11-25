@@ -4,11 +4,37 @@ import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repos
 import { ExchangeConnectionRepository } from '../core/repositories/exchange-connection-repository';
 import { UserRepository } from '../core/repositories/user-repository';
 import { UniversalConnectorCacheService } from '../core/services/universal-connector-cache.service';
-import type { SnapshotData, IConnectorWithMarketTypes, IConnectorWithBalanceBreakdown, IConnectorWithBalance, MarketBalanceBreakdown } from '../types';
+import type { SnapshotData, IConnectorWithMarketTypes, IConnectorWithBalanceBreakdown, IConnectorWithBalance, MarketBalanceBreakdown, BreakdownByMarket } from '../types';
 import { MarketType, getFilteredMarketTypes } from '../types/snapshot-breakdown';
 import { getLogger } from '../utils/secure-enclave-logger';
+import { IExchangeConnector, PositionData } from '../external/interfaces/IExchangeConnector';
 
 const logger = getLogger('EquitySnapshotAggregator');
+
+// Types for market trade data
+interface MarketTrade {
+  id: string;
+  timestamp: number;
+  symbol: string;
+  side: string;
+  price: number;
+  amount: number;
+  cost: number;
+  fee?: { cost: number; currency: string };
+}
+
+// Type for funding fee data
+interface FundingFeeData {
+  amount: number;
+  symbol?: string;
+}
+
+// Extended connector with optional methods
+interface ExtendedConnector extends IExchangeConnector {
+  getExecutedOrders?(marketType: string, since: Date): Promise<MarketTrade[]>;
+  getFundingFees?(symbols: string[], since: Date): Promise<FundingFeeData[]>;
+  getHistoricalSummaries?(since: Date): Promise<Array<{ date: string; breakdown: BreakdownByMarket }>>;
+}
 
 const hasMarketTypes = (connector: unknown): connector is IConnectorWithMarketTypes => typeof (connector as IConnectorWithMarketTypes).detectMarketTypes === 'function';
 const hasBalanceBreakdown = (connector: unknown): connector is IConnectorWithBalanceBreakdown => typeof (connector as IConnectorWithBalanceBreakdown).getBalanceBreakdown === 'function';
@@ -137,7 +163,7 @@ export class EquitySnapshotAggregator {
   /**
    * Fetch balances for all market types
    */
-  private async fetchBalancesByMarket(connector: any, exchange: string) {
+  private async fetchBalancesByMarket(connector: ExtendedConnector, exchange: string) {
     let balancesByMarket: Record<string, MarketBalanceBreakdown> = {};
     let globalEquity = 0;
     let globalMargin = 0;
@@ -212,19 +238,8 @@ export class EquitySnapshotAggregator {
     since: Date,
     currentSnapshot: Date,
     filteredTypes: MarketType[],
-    connector: any
+    connector: ExtendedConnector
   ) {
-    interface MarketTrade {
-      id: string;
-      timestamp: number;
-      symbol: string;
-      side: string;
-      price: number;
-      amount: number;
-      cost: number;
-      fee?: { cost: number; currency: string };
-    }
-
     const tradesByMarket: Record<string, MarketTrade[]> = {};
     const swapSymbols = new Set<string>();
 
@@ -258,12 +273,12 @@ export class EquitySnapshotAggregator {
       // Fallback: fetch from connector API
       for (const marketType of filteredTypes) {
         try {
-          const trades = (connector as any).getExecutedOrders
-            ? await (connector as any).getExecutedOrders(marketType, since)
+          const trades = connector.getExecutedOrders
+            ? await connector.getExecutedOrders(marketType, since)
             : [];
           tradesByMarket[marketType] = trades;
           if (marketType === 'swap') {
-            trades.forEach((trade: any) => swapSymbols.add(trade.symbol));
+            trades.forEach((trade: MarketTrade) => swapSymbols.add(trade.symbol));
           }
         } catch (apiError) {
           tradesByMarket[marketType] = [];
@@ -278,17 +293,17 @@ export class EquitySnapshotAggregator {
    * Calculate total funding fees for swap positions
    */
   private async calculateFundingFees(
-    connector: any,
+    connector: ExtendedConnector,
     swapSymbols: Set<string>,
     since: Date
   ): Promise<number> {
     if (swapSymbols.size === 0) return 0;
 
     try {
-      const fundingData = (connector as any).getFundingFees
-        ? await (connector as any).getFundingFees(Array.from(swapSymbols), since)
+      const fundingData = connector.getFundingFees
+        ? await connector.getFundingFees(Array.from(swapSymbols), since)
         : [];
-      return fundingData.reduce((sum: number, f: any) => sum + f.amount, 0);
+      return fundingData.reduce((sum: number, f: FundingFeeData) => sum + f.amount, 0);
     } catch (error) {
       return 0;
     }
@@ -299,12 +314,12 @@ export class EquitySnapshotAggregator {
    */
   private buildMarketBreakdown(
     balancesByMarket: Record<string, MarketBalanceBreakdown>,
-    tradesByMarket: Record<string, any[]>,
+    tradesByMarket: Record<string, MarketTrade[]>,
     totalFundingFees: number,
     globalEquity: number,
     globalMargin: number
-  ) {
-    const breakdown: Record<string, any> = {};
+  ): BreakdownByMarket {
+    const breakdown: BreakdownByMarket = {};
     let totalVolume = 0;
     let totalTrades = 0;
     let totalTradingFees = 0;
@@ -314,35 +329,25 @@ export class EquitySnapshotAggregator {
       const fees = trades.reduce((sum, t) => sum + (t.fee?.cost || 0), 0);
       const balance = balancesByMarket[marketType];
 
-      const marketData: any = {
+      const marketData: MarketBalanceBreakdown = {
         totalEquityUsd: balance?.totalEquityUsd || 0,
         unrealizedPnl: balance?.unrealizedPnl || 0,
         realizedPnl: balance?.realizedPnl,
         availableBalance: balance?.availableBalance,
         usedMargin: balance?.usedMargin,
-        positions: balance?.positions,
-        volume,
-        orders: trades.length,
-        trading_fees: fees
+        positions: balance?.positions
       };
 
-      if (marketType !== 'spot') {
-        marketData.funding_fees = marketType === 'swap' ? totalFundingFees : 0;
-      }
-
-      breakdown[marketType] = marketData;
+      (breakdown as Record<string, MarketBalanceBreakdown>)[marketType] = marketData;
       totalVolume += volume;
       totalTrades += trades.length;
       totalTradingFees += fees;
     }
 
-    breakdown['global'] = {
+    breakdown.global = {
       totalEquityUsd: globalEquity,
       availableBalance: globalMargin,
-      volume: totalVolume,
-      orders: totalTrades,
-      trading_fees: totalTradingFees,
-      funding_fees: totalFundingFees
+      unrealizedPnl: 0
     };
 
     return breakdown;
@@ -352,7 +357,7 @@ export class EquitySnapshotAggregator {
    * Calculate unrealized PnL from open positions
    */
   private async calculateUnrealizedPnl(
-    connector: any,
+    connector: ExtendedConnector,
     balancesByMarket: Record<string, MarketBalanceBreakdown>
   ): Promise<number> {
     let totalUnrealizedPnl = 0;
@@ -386,7 +391,7 @@ export class EquitySnapshotAggregator {
     currentSnapshot: Date;
     globalEquity: number;
     totalUnrealizedPnl: number;
-    breakdown: Record<string, any>;
+    breakdown: BreakdownByMarket;
   }) {
     const { userUid, exchange, currentSnapshot, globalEquity, totalUnrealizedPnl, breakdown } =
       params;
@@ -401,8 +406,8 @@ export class EquitySnapshotAggregator {
       totalEquity: globalEquity,
       realizedBalance: totalRealizedBalance,
       unrealizedPnL: totalUnrealizedPnl,
-      deposits: 0, // TODO: Implement deposits detection from connector
-      withdrawals: 0, // TODO: Implement withdrawals detection from connector
+      deposits: 0, // Cash flow tracking not yet implemented
+      withdrawals: 0, // Cash flow tracking not yet implemented
       breakdown_by_market: breakdown,
       createdAt: new Date(),
       updatedAt: new Date()
@@ -419,7 +424,7 @@ export class EquitySnapshotAggregator {
       if (!connection) return;
       const credentials = await this.connectionRepo.getDecryptedCredentials(connection.id);
       if (!credentials) return;
-      const connector = this.connectorCache.getOrCreate(exchange, credentials) as any;
+      const connector = this.connectorCache.getOrCreate(exchange, credentials) as ExtendedConnector;
       if (!connector.getHistoricalSummaries) return;
       const historicalData = await connector.getHistoricalSummaries(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
       if (!historicalData || historicalData.length === 0) return;
@@ -448,8 +453,8 @@ export class EquitySnapshotAggregator {
           totalEquity: globalEquity,
           realizedBalance: realizedBalance,
           unrealizedPnL: unrealizedPnl,
-          deposits: 0, // TODO: Extract deposits from IBKR Flex CashTransaction
-          withdrawals: 0, // TODO: Extract withdrawals from IBKR Flex CashTransaction
+          deposits: 0, // Cash flow extraction from IBKR Flex not yet implemented
+          withdrawals: 0, // Cash flow extraction from IBKR Flex not yet implemented
           breakdown_by_market: entry.breakdown
         });
 

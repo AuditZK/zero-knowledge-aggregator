@@ -1,10 +1,15 @@
 import { injectable, inject } from 'tsyringe';
-import { PrismaClient, ExchangeConnection as PrismaExchangeConnection } from '@prisma/client';
+import { PrismaClient, ExchangeConnection as PrismaExchangeConnection, Prisma } from '@prisma/client';
 import { ExchangeConnection, ExchangeCredentials } from '../../types';
 import { EncryptionService } from '../../services/encryption-service';
 import { getLogger } from '../../utils/secure-enclave-logger';
 
 const logger = getLogger('ExchangeConnectionRepository');
+
+// Prisma error type for unique constraint violations
+interface PrismaError extends Error {
+  code?: string;
+}
 
 @injectable()
 export class ExchangeConnectionRepository {
@@ -41,9 +46,10 @@ export class ExchangeConnectionRepository {
       });
 
       return this.mapPrismaConnectionToConnection(connection);
-    } catch (error: any) {
+    } catch (error) {
       // Handle unique constraint violation (P2002)
-      if (error.code === 'P2002') {
+      const prismaError = error as PrismaError;
+      if (prismaError.code === 'P2002') {
         throw new Error(`Exchange ${credentials.exchange} is already connected`);
       }
       throw error;
@@ -59,7 +65,7 @@ export class ExchangeConnectionRepository {
   }
 
   async getConnectionsByUser(userUid: string, activeOnly: boolean = false): Promise<ExchangeConnection[]> {
-    const where: any = { userUid };
+    const where: Prisma.ExchangeConnectionWhereInput = { userUid };
     if (activeOnly) {
       where.isActive = true;
     }
@@ -104,14 +110,14 @@ export class ExchangeConnectionRepository {
   }
 
   async updateConnection(id: string, updates: Partial<ExchangeCredentials>): Promise<ExchangeConnection> {
-    const updateData: any = {};
+    const updateData: Prisma.ExchangeConnectionUpdateInput = {};
 
     if (updates.label) {
-updateData.label = updates.label;
-}
+      updateData.label = updates.label;
+    }
     if (updates.isActive !== undefined) {
-updateData.isActive = updates.isActive;
-}
+      updateData.isActive = updates.isActive;
+    }
 
     if (updates.apiKey) {
       updateData.encryptedApiKey = EncryptionService.encrypt(updates.apiKey);
