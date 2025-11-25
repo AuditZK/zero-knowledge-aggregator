@@ -1,6 +1,7 @@
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import path from 'path';
+import fs from 'fs';
 import { container } from 'tsyringe';
 import { EnclaveWorker } from './enclave-worker';
 import { getLogger } from './utils/secure-enclave-logger';
@@ -464,8 +465,6 @@ export class EnclaveServer {
    * - TLS_SERVER_KEY: Server private key (default: /etc/enclave/server.key)
    */
   private createServerCredentials(): grpc.ServerCredentials {
-    const fs = require('fs');
-
     const caCertPath = process.env.TLS_CA_CERT || '/etc/enclave/ca.crt';
     const serverCertPath = process.env.TLS_SERVER_CERT || '/etc/enclave/server.crt';
     const serverKeyPath = process.env.TLS_SERVER_KEY || '/etc/enclave/server.key';

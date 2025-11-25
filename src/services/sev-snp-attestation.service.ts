@@ -1,8 +1,11 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { getLogger } from '../utils/secure-enclave-logger';
 
 const logger = getLogger('SevSnpAttestation');
+const execAsync = promisify(exec);
 
 export interface AttestationResult {
   verified: boolean;
@@ -27,10 +30,10 @@ export class SevSnpAttestationService {
 
     try {
       const report = await this.fetchAttestation();
-      if (!report) throw new Error('Failed to retrieve attestation report');
+      if (!report) {throw new Error('Failed to retrieve attestation report');}
 
       const signatureValid = await this.verifySignature(report);
-      if (!signatureValid) throw new Error('Attestation signature verification failed');
+      if (!signatureValid) {throw new Error('Attestation signature verification failed');}
 
       logger.info('AMD SEV-SNP attestation successful', { measurement: report.measurement });
       return {
@@ -55,7 +58,7 @@ export class SevSnpAttestationService {
 
   private checkCpuInfo(): boolean {
     try {
-      if (!fs.existsSync('/proc/cpuinfo')) return false;
+      if (!fs.existsSync('/proc/cpuinfo')) {return false;}
       const cpuinfo = fs.readFileSync('/proc/cpuinfo', 'utf8');
       return cpuinfo.includes('sev_snp') || cpuinfo.includes('sev');
     } catch { return false; }
@@ -78,10 +81,6 @@ export class SevSnpAttestationService {
   }
 
   private async getSevGuestAttestation(): Promise<any> {
-    const { exec } = require('child_process');
-    const { promisify } = require('util');
-    const execAsync = promisify(exec);
-
     const tools = ['/opt/amd/sev-guest/bin/get-report', '/usr/bin/snpguest'];
     for (const tool of tools) {
       if (fs.existsSync(tool)) {
@@ -100,7 +99,7 @@ export class SevSnpAttestationService {
     const response = await fetch(this.AZURE_IMDS_ENDPOINT, {
       headers: { 'Metadata': 'true' }
     });
-    if (!response.ok) throw new Error(`Azure IMDS failed: ${response.statusText}`);
+    if (!response.ok) {throw new Error(`Azure IMDS failed: ${response.statusText}`);}
     const doc = await response.json();
     return doc.sevSnpReport || {};
   }
@@ -109,7 +108,7 @@ export class SevSnpAttestationService {
     const response = await fetch(this.GCP_METADATA_ENDPOINT, {
       headers: { 'Metadata-Flavor': 'Google' }
     });
-    if (!response.ok) throw new Error(`GCP metadata failed: ${response.statusText}`);
+    if (!response.ok) {throw new Error(`GCP metadata failed: ${response.statusText}`);}
     return response.json();
   }
 
@@ -134,7 +133,7 @@ export class SevSnpAttestationService {
   private async getVcekPublicKey(chipId: string): Promise<string> {
     try {
       const response = await fetch(`https://kdsintf.amd.com/vcek/v1/${chipId}`);
-      if (!response.ok) throw new Error(`AMD KDS request failed`);
+      if (!response.ok) {throw new Error(`AMD KDS request failed`);}
       return response.text();
     } catch (error: any) {
       const cachedVcek = process.env.AMD_VCEK_CACHE_PATH || '/etc/enclave/vcek.pem';

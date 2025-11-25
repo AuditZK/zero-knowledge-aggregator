@@ -135,7 +135,7 @@ export class ExchangeConnectorFactory {
   static isSupported(exchange: string): boolean {
     const exchangeLower = exchange.toLowerCase();
     return (
-      this.CCXT_EXCHANGES.hasOwnProperty(exchangeLower) ||
+      Object.hasOwn(this.CCXT_EXCHANGES, exchangeLower) ||
       this.CUSTOM_BROKERS.includes(exchangeLower)
     );
   }
@@ -144,6 +144,6 @@ export class ExchangeConnectorFactory {
    * Check if exchange is a crypto exchange (uses CCXT)
    */
   static isCryptoExchange(exchange: string): boolean {
-    return this.CCXT_EXCHANGES.hasOwnProperty(exchange.toLowerCase());
+    return Object.hasOwn(this.CCXT_EXCHANGES, exchange.toLowerCase());
   }
 }

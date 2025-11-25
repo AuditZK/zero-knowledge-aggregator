@@ -1,7 +1,11 @@
 import { getLogger } from '../utils/secure-enclave-logger';
+import * as fs from 'fs';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import crypto from 'crypto';
 
 const logger = getLogger('MemoryProtection');
-import * as fs from 'fs';
+const execAsync = promisify(exec);
 
 export class MemoryProtectionService {
   private static mlockSupported = false;
@@ -32,10 +36,8 @@ export class MemoryProtectionService {
         return;
       }
 
-      const { exec } = require('child_process');
-      const { promisify } = require('util');
       try {
-        await promisify(exec)('ulimit -c 0');
+        await execAsync('ulimit -c 0');
         this.coreDumpsDisabled = true;
         logger.info('[MEMORY_PROTECTION] ✓ Core dumps disabled via ulimit');
       } catch {
@@ -48,10 +50,10 @@ export class MemoryProtectionService {
 
   private static async enablePtraceProtection(): Promise<void> {
     try {
-      if (process.platform !== 'linux') return;
+      if (process.platform !== 'linux') {return;}
 
       const ptraceScopePath = '/proc/sys/kernel/yama/ptrace_scope';
-      if (!fs.existsSync(ptraceScopePath)) return;
+      if (!fs.existsSync(ptraceScopePath)) {return;}
 
       const scope = fs.readFileSync(ptraceScopePath, 'utf8').trim();
       if (scope === '2' || scope === '3') {
@@ -83,9 +85,9 @@ export class MemoryProtectionService {
   }
 
   static wipeBuffer(buffer: Buffer): void {
-    if (!Buffer.isBuffer(buffer)) return;
+    if (!Buffer.isBuffer(buffer)) {return;}
     try {
-      require('crypto').randomFillSync(buffer);
+      crypto.randomFillSync(buffer);
       buffer.fill(0);
       logger.debug(`[MEMORY_PROTECTION] Wiped ${buffer.length} bytes`);
     } catch (error: any) {
@@ -129,9 +131,9 @@ export class MemoryProtectionService {
 
   static getProductionRecommendations(): string[] {
     const recs: string[] = [];
-    if (!this.coreDumpsDisabled) recs.push('Configure systemd DumpMode=none or ulimit -c 0');
-    if (!this.ptraceProtected) recs.push('Set kernel.yama.ptrace_scope=2');
-    if (!this.mlockSupported) recs.push('Add CAP_IPC_LOCK or systemd LockPersonality=yes');
+    if (!this.coreDumpsDisabled) {recs.push('Configure systemd DumpMode=none or ulimit -c 0');}
+    if (!this.ptraceProtected) {recs.push('Set kernel.yama.ptrace_scope=2');}
+    if (!this.mlockSupported) {recs.push('Add CAP_IPC_LOCK or systemd LockPersonality=yes');}
     if (process.platform === 'linux') {
       recs.push('Run in AMD SEV-SNP VM for hardware memory encryption');
       recs.push('Enable ASLR and seccomp');
