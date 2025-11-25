@@ -9,11 +9,13 @@
 
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
+import * as fs from 'fs';
 import path from 'path';
 
 // Configuration
 const PROTO_PATH = path.join(__dirname, 'src/proto/enclave.proto');
 const SERVER_ADDRESS = 'localhost:50051';
+const CA_CERT_PATH = path.join(__dirname, 'certs/ca.crt');
 
 // Load proto
 const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
@@ -24,10 +26,14 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
   oneofs: true
 });
 
+// Load TLS certificate (server cert verification only, no client cert in dev)
+const caCert = fs.readFileSync(CA_CERT_PATH);
+const sslCredentials = grpc.credentials.createSsl(caCert);
+
 const protoDescriptor = grpc.loadPackageDefinition(packageDefinition) as any;
 const client = new protoDescriptor.enclave.EnclaveService(
   SERVER_ADDRESS,
-  grpc.credentials.createInsecure()
+  sslCredentials
 );
 
 // Color output
@@ -175,7 +181,25 @@ async function testGetAggregatedMetrics() {
         reject(error);
       } else {
         log('green', '✅ Success');
-        console.log(JSON.stringify(response, null, 2));
+
+        // Pretty print snapshots with new fields
+        if (response.snapshots && response.snapshots.length > 0) {
+          log('cyan', `\n📊 Found ${response.snapshots.length} snapshot(s):\n`);
+          response.snapshots.forEach((snap: any, i: number) => {
+            console.log(`${colors.cyan}Snapshot #${i + 1}${colors.reset}`);
+            console.log(`  💰 Total Equity:      $${snap.totalEquity?.toFixed(2) || 'N/A'}`);
+            console.log(`  💵 Realized Balance:  $${snap.realizedBalance?.toFixed(2) || 'N/A'}`);
+            console.log(`  📈 Unrealized P&L:    $${snap.unrealizedPnL?.toFixed(2) || 'N/A'}`);
+            console.log(`  ⬇️  Deposits:          $${snap.deposits?.toFixed(2) || '0.00'}`);
+            console.log(`  ⬆️  Withdrawals:       $${snap.withdrawals?.toFixed(2) || '0.00'}`);
+            console.log(`  🏦 Exchange:          ${snap.exchange || 'N/A'}`);
+            console.log(`  🕐 Timestamp:         ${snap.timestamp ? new Date(snap.timestamp).toLocaleString() : 'N/A'}`);
+            console.log();
+          });
+        } else {
+          console.log(JSON.stringify(response, null, 2));
+        }
+
         resolve(response);
       }
     });
@@ -202,7 +226,25 @@ async function testGetAggregatedMetricsWithExchange() {
         reject(error);
       } else {
         log('green', '✅ Success');
-        console.log(JSON.stringify(response, null, 2));
+
+        // Pretty print snapshots with new fields
+        if (response.snapshots && response.snapshots.length > 0) {
+          log('cyan', `\n📊 Found ${response.snapshots.length} snapshot(s):\n`);
+          response.snapshots.forEach((snap: any, i: number) => {
+            console.log(`${colors.cyan}Snapshot #${i + 1}${colors.reset}`);
+            console.log(`  💰 Total Equity:      $${snap.totalEquity?.toFixed(2) || 'N/A'}`);
+            console.log(`  💵 Realized Balance:  $${snap.realizedBalance?.toFixed(2) || 'N/A'}`);
+            console.log(`  📈 Unrealized P&L:    $${snap.unrealizedPnL?.toFixed(2) || 'N/A'}`);
+            console.log(`  ⬇️  Deposits:          $${snap.deposits?.toFixed(2) || '0.00'}`);
+            console.log(`  ⬆️  Withdrawals:       $${snap.withdrawals?.toFixed(2) || '0.00'}`);
+            console.log(`  🏦 Exchange:          ${snap.exchange || 'N/A'}`);
+            console.log(`  🕐 Timestamp:         ${snap.timestamp ? new Date(snap.timestamp).toLocaleString() : 'N/A'}`);
+            console.log();
+          });
+        } else {
+          console.log(JSON.stringify(response, null, 2));
+        }
+
         resolve(response);
       }
     });

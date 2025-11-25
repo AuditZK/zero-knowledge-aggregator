@@ -1,20 +1,25 @@
 import dotenv from 'dotenv';
 import { ServerConfig, DatabaseConfig } from '../types';
+import { getLogger } from '../utils/secure-enclave-logger';
 
 dotenv.config();
+
+const logger = getLogger('Config');
 
 // CRITICAL: All required environment variables for production
 const requiredEnvVars = [
   'DATABASE_URL',
   'JWT_SECRET',
   'ENCRYPTION_KEY',
-  'REDIS_URL',
 ];
 
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 if (missingVars.length > 0) {
-  console.error(`❌ FATAL: Missing required environment variables: ${missingVars.join(', ')}`);
-  console.error('Please configure all required environment variables before starting the service.');
+  logger.error('FATAL: Missing required environment variables', undefined, {
+    missing_vars: missingVars,
+    required_vars: requiredEnvVars
+  });
+  logger.error('Please configure all required environment variables before starting the service');
   process.exit(1);
 }
 
@@ -43,8 +48,7 @@ export const serverConfig: ServerConfig = {
 export const databaseConfig: DatabaseConfig = {
   url: process.env.DATABASE_URL!, // Validated at startup
   ssl: process.env.DB_SSL === 'true',
-  // Increased from 20 to 50 to handle concurrent Bull workers (5) + API requests
-  // 5 workers * 5 concurrent operations + 25 API handlers = ~50 connections needed
+  // Connection pool size for concurrent gRPC requests and sync operations
   maxConnections: parseInt(process.env.DB_MAX_CONNECTIONS || '50', 10),
   idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT_MS || '30000', 10),
 };

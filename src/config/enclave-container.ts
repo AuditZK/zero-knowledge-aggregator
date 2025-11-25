@@ -17,6 +17,8 @@ import { PrismaClient } from '@prisma/client';
 import { EncryptionService } from '../services/encryption-service';
 import { TradeSyncService } from '../services/trade-sync-service';
 import { EquitySnapshotAggregator } from '../services/equity-snapshot-aggregator';
+import { SyncRateLimiterService } from '../services/sync-rate-limiter.service';
+import { DailySyncSchedulerService } from '../services/daily-sync-scheduler.service';
 import { SevSnpAttestationService } from '../services/sev-snp-attestation.service';
 
 // External Services (handle credentials)
@@ -24,17 +26,20 @@ import { IbkrFlexService } from '../external/ibkr-flex-service';
 import { AlpacaApiService } from '../external/alpaca-api-service';
 
 // Repositories
-import { EnclaveRepository } from '../repositories/enclave-repository';
 import { TradeRepository } from '../core/repositories/trade-repository';
 import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repository';
 import { ExchangeConnectionRepository } from '../core/repositories/exchange-connection-repository';
 import { SyncStatusRepository } from '../core/repositories/sync-status-repository';
+import { UserRepository } from '../core/repositories/user-repository';
 
 // Enclave Worker
 import { EnclaveWorker } from '../enclave-worker';
 
 // Utils
 import { getPrismaClient } from './prisma';
+import { getLogger } from '../utils/secure-enclave-logger';
+
+const logger = getLogger('EnclaveContainer');
 
 /**
  * Configure the Enclave DI container
@@ -50,17 +55,17 @@ export function setupEnclaveContainer(): void {
   container.register<PrismaClient>('PrismaClient', {
     useFactory: () => {
       // Use enclave-specific database user with restricted permissions
-      const databaseUrl = process.env.ENCLAVE_DATABASE_URL || process.env.DATABASE_URL;
-      return getPrismaClient(databaseUrl);
+      // Note: Database URL is configured via environment variables in config/index.ts
+      return getPrismaClient();
     }
   });
 
   // Register Enclave-specific repositories
-  container.registerSingleton(EnclaveRepository);
   container.registerSingleton(TradeRepository);
   container.registerSingleton(SnapshotDataRepository);
   container.registerSingleton(ExchangeConnectionRepository);
   container.registerSingleton(SyncStatusRepository);
+  container.registerSingleton(UserRepository);
 
   // Register External Services (these handle credentials)
   container.registerSingleton(IbkrFlexService);
@@ -70,14 +75,18 @@ export function setupEnclaveContainer(): void {
   container.registerSingleton(EncryptionService);
   container.registerSingleton(EquitySnapshotAggregator);
   container.registerSingleton(TradeSyncService);
+  container.registerSingleton(SyncRateLimiterService);
+  container.registerSingleton(DailySyncSchedulerService);
   container.registerSingleton(SevSnpAttestationService);
 
   // Register Enclave Worker
   container.registerSingleton(EnclaveWorker);
 
-  console.log('[ENCLAVE] Dependency injection container configured');
-  console.log('[ENCLAVE] TCB: ~4,572 LOC');
-  console.log('[ENCLAVE] Access level: SENSITIVE (trades, credentials)');
+  logger.info('Dependency injection container configured', {
+    tcb_loc: 4572,
+    access_level: 'SENSITIVE',
+    capabilities: ['trades', 'credentials', 'encryption']
+  });
 }
 
 /**
@@ -106,31 +115,35 @@ export async function verifyEnclaveIsolation(): Promise<{
 }> {
   const attestationService = container.resolve(SevSnpAttestationService);
 
-  console.log('[ENCLAVE] Performing AMD SEV-SNP attestation...');
+  logger.info('Performing AMD SEV-SNP attestation');
 
   // Get attestation report with cryptographic proof
   const attestationResult = await attestationService.getAttestationReport();
 
   if (attestationResult.verified) {
-    console.log('[ENCLAVE] ✓ AMD SEV-SNP attestation SUCCESSFUL');
-    console.log('[ENCLAVE] ✓ Hardware-level isolation VERIFIED');
-    console.log(`[ENCLAVE] ✓ TCB Measurement: ${attestationResult.measurement}`);
-    console.log(`[ENCLAVE] ✓ Platform Version: ${attestationResult.platformVersion}`);
+    logger.info('AMD SEV-SNP attestation SUCCESSFUL', {
+      hardware_isolation: 'VERIFIED',
+      tcb_measurement: attestationResult.measurement,
+      platform_version: attestationResult.platformVersion,
+      sev_snp_enabled: attestationResult.sevSnpEnabled
+    });
   } else {
-    console.error('[ENCLAVE] ✗ AMD SEV-SNP attestation FAILED');
-    console.error(`[ENCLAVE] ✗ Error: ${attestationResult.errorMessage}`);
+    logger.error('AMD SEV-SNP attestation FAILED', undefined, {
+      error_message: attestationResult.errorMessage,
+      sev_snp_enabled: attestationResult.sevSnpEnabled
+    });
 
     if (process.env.ENCLAVE_MODE === 'true') {
-      console.error('[ENCLAVE] ✗ ENCLAVE_MODE=true but attestation failed');
-      console.error('[ENCLAVE] ✗ This indicates a security compromise or misconfiguration');
+      logger.error('ENCLAVE_MODE=true but attestation failed - security compromise or misconfiguration');
 
       // In production, this should ABORT startup
       if (process.env.NODE_ENV === 'production') {
         throw new Error('CRITICAL: Enclave attestation failed in production mode');
       }
     } else {
-      console.warn('[ENCLAVE] ⚠ Running in DEVELOPMENT mode (no attestation required)');
-      console.warn('[ENCLAVE] ⚠ For production, deploy to AMD SEV-SNP capable hardware');
+      logger.warn('Running in DEVELOPMENT mode (no attestation required)', {
+        recommendation: 'For production, deploy to AMD SEV-SNP capable hardware'
+      });
     }
   }
 

@@ -2,7 +2,7 @@ import { injectable } from 'tsyringe';
 import { IExchangeConnector } from '../../external/interfaces/IExchangeConnector';
 import { ExchangeConnectorFactory } from '../../external/factories/ExchangeConnectorFactory';
 import { ExchangeCredentials } from '../../types';
-import { getLogger } from '../../utils/logger.service';
+import { getLogger } from '../../utils/secure-enclave-logger';
 import crypto from 'crypto';
 
 const logger = getLogger('UniversalConnectorCache');

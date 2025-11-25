@@ -3,16 +3,20 @@ import * as protoLoader from '@grpc/proto-loader';
 import path from 'path';
 import { container } from 'tsyringe';
 import { EnclaveWorker } from './enclave-worker';
-import { logger } from './utils/logger';
+import { getLogger } from './utils/secure-enclave-logger';
+
+const logger = getLogger('EnclaveServer');
 import {
   SyncJobRequestSchema,
   AggregatedMetricsRequestSchema,
+  SnapshotTimeSeriesRequestSchema,
+  CreateUserConnectionRequestSchema,
   HealthCheckRequestSchema,
   validateRequest
 } from './validation/grpc-schemas';
 
 // Load proto file
-const PROTO_PATH = path.join(__dirname, '../proto/enclave.proto');
+const PROTO_PATH = path.join(__dirname, 'proto/enclave.proto');
 
 const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
   keepCase: true,
@@ -53,6 +57,8 @@ export class EnclaveServer {
     this.server.addService(enclaveProto.enclave.EnclaveService.service, {
       ProcessSyncJob: this.processSyncJob.bind(this),
       GetAggregatedMetrics: this.getAggregatedMetrics.bind(this),
+      GetSnapshotTimeSeries: this.getSnapshotTimeSeries.bind(this),
+      CreateUserConnection: this.createUserConnection.bind(this),
       HealthCheck: this.healthCheck.bind(this)
     });
 
@@ -61,29 +67,36 @@ export class EnclaveServer {
 
   /**
    * Handle ProcessSyncJob RPC
+   *
+   * AUTOMATIC BEHAVIOR BY EXCHANGE TYPE:
+   * - IBKR: Auto-backfill from Flex (365 days) on first sync, then current day only
+   * - Crypto: Current snapshot only (DailySyncScheduler handles midnight UTC syncs)
    */
   private async processSyncJob(
     call: grpc.ServerUnaryCall<any, any>,
     callback: grpc.sendUnaryData<any>
   ): Promise<void> {
     try {
-      const request = call.request;
+      const rawRequest = call.request;
+
+      // Normalize gRPC defaults: convert empty strings to undefined
+      const request = {
+        user_uid: rawRequest.user_uid,
+        exchange: rawRequest.exchange === '' ? undefined : rawRequest.exchange,
+        type: rawRequest.type || 'incremental' // Deprecated, defaults to incremental
+      };
 
       // SECURITY: Validate input before processing
       const validation = validateRequest(SyncJobRequestSchema, request);
       if (!validation.success) {
         logger.warn('Invalid ProcessSyncJob request', {
-          error: validation.error,
-          request: {
-            user_uid: request.user_uid,
-            exchange: request.exchange,
-            type: request.type
-          }
+          error: validation.success === false ? validation.error : 'Unknown error',
+          request: { user_uid: request.user_uid, exchange: request.exchange }
         });
 
         callback({
           code: grpc.status.INVALID_ARGUMENT,
-          message: validation.error
+          message: validation.success === false ? validation.error : 'Validation failed'
         }, null);
         return;
       }
@@ -92,17 +105,13 @@ export class EnclaveServer {
 
       logger.info('Processing sync job request', {
         user_uid: validated.user_uid,
-        exchange: validated.exchange,
-        type: validated.type
+        exchange: validated.exchange
       });
 
-      // Convert validated gRPC request to internal format
+      // Convert validated gRPC request to internal format (type is deprecated)
       const syncRequest = {
         userUid: validated.user_uid,
-        exchange: validated.exchange || undefined,
-        type: validated.type.toLowerCase() as 'incremental' | 'historical' | 'full',
-        startDate: validated.start_date ? new Date(validated.start_date) : undefined,
-        endDate: validated.end_date ? new Date(validated.end_date) : undefined
+        exchange: validated.exchange || undefined
       };
 
       // Process the sync job
@@ -114,7 +123,7 @@ export class EnclaveServer {
         user_uid: result.userUid,
         exchange: result.exchange || '',
         synced: result.synced,
-        hourly_returns_generated: result.hourlyReturnsGenerated,
+        snapshots_generated: result.snapshotsGenerated,
         latest_snapshot: result.latestSnapshot ? {
           balance: result.latestSnapshot.balance,
           equity: result.latestSnapshot.equity,
@@ -125,14 +134,16 @@ export class EnclaveServer {
 
       callback(null, response);
     } catch (error: any) {
+      const errorMessage = error?.message || String(error);
+
       logger.error('ProcessSyncJob failed', {
-        error: error.message,
-        stack: error.stack
+        error: errorMessage,
+        stack: error?.stack
       });
 
       callback({
         code: grpc.status.INTERNAL,
-        message: error.message
+        message: errorMessage
       }, null);
     }
   }
@@ -145,13 +156,19 @@ export class EnclaveServer {
     callback: grpc.sendUnaryData<any>
   ): Promise<void> {
     try {
-      const request = call.request;
+      const rawRequest = call.request;
+
+      // Normalize gRPC defaults: convert empty strings to undefined
+      const request = {
+        user_uid: rawRequest.user_uid,
+        exchange: rawRequest.exchange === '' ? undefined : rawRequest.exchange
+      };
 
       // SECURITY: Validate input before processing
       const validation = validateRequest(AggregatedMetricsRequestSchema, request);
       if (!validation.success) {
         logger.warn('Invalid GetAggregatedMetrics request', {
-          error: validation.error,
+          error: validation.success === false ? validation.error : 'Unknown error',
           request: {
             user_uid: request.user_uid,
             exchange: request.exchange
@@ -160,7 +177,7 @@ export class EnclaveServer {
 
         callback({
           code: grpc.status.INVALID_ARGUMENT,
-          message: validation.error
+          message: validation.success === false ? validation.error : 'Validation failed'
         }, null);
         return;
       }
@@ -192,6 +209,154 @@ export class EnclaveServer {
       callback(null, response);
     } catch (error: any) {
       logger.error('GetAggregatedMetrics failed', {
+        error: error.message,
+        stack: error.stack
+      });
+
+      callback({
+        code: grpc.status.INTERNAL,
+        message: error.message
+      }, null);
+    }
+  }
+
+  /**
+   * Handle GetSnapshotTimeSeries RPC
+   */
+  private async getSnapshotTimeSeries(
+    call: grpc.ServerUnaryCall<any, any>,
+    callback: grpc.sendUnaryData<any>
+  ): Promise<void> {
+    try {
+      const rawRequest = call.request;
+
+      // Normalize gRPC defaults: convert empty strings and "0" timestamps to undefined
+      const request = {
+        user_uid: rawRequest.user_uid,
+        exchange: rawRequest.exchange === '' ? undefined : rawRequest.exchange,
+        start_date: rawRequest.start_date === '0' ? undefined : rawRequest.start_date,
+        end_date: rawRequest.end_date === '0' ? undefined : rawRequest.end_date
+      };
+
+      // SECURITY: Validate input before processing
+      const validation = validateRequest(SnapshotTimeSeriesRequestSchema, request);
+      if (!validation.success) {
+        logger.warn('Invalid GetSnapshotTimeSeries request', {
+          error: validation.success === false ? validation.error : 'Unknown error',
+          request: {
+            user_uid: request.user_uid,
+            exchange: request.exchange
+          }
+        });
+
+        callback({
+          code: grpc.status.INVALID_ARGUMENT,
+          message: validation.success === false ? validation.error : 'Validation failed'
+        }, null);
+        return;
+      }
+
+      const validated = validation.data;
+
+      logger.info('Getting snapshot time series', {
+        user_uid: validated.user_uid,
+        exchange: validated.exchange,
+        start_date: validated.start_date,
+        end_date: validated.end_date
+      });
+
+      // Get snapshot time series with validated data
+      const snapshots = await this.enclaveWorker.getSnapshotTimeSeries(
+        validated.user_uid,
+        validated.exchange || undefined,
+        validated.start_date ? new Date(validated.start_date) : undefined,
+        validated.end_date ? new Date(validated.end_date) : undefined
+      );
+
+      // Convert to gRPC format
+      const response = {
+        snapshots: snapshots.map(snapshot => ({
+          user_uid: snapshot.userUid,
+          exchange: snapshot.exchange,
+          timestamp: snapshot.timestamp.getTime(),
+          total_equity: snapshot.totalEquity,
+          realized_balance: snapshot.realizedBalance,
+          unrealized_pnl: snapshot.unrealizedPnL,
+          deposits: snapshot.deposits,
+          withdrawals: snapshot.withdrawals
+        }))
+      };
+
+      callback(null, response);
+    } catch (error: any) {
+      logger.error('GetSnapshotTimeSeries failed', {
+        error: error.message,
+        stack: error.stack
+      });
+
+      callback({
+        code: grpc.status.INTERNAL,
+        message: error.message
+      }, null);
+    }
+  }
+
+  /**
+   * Handle CreateUserConnection RPC
+   */
+  private async createUserConnection(
+    call: grpc.ServerUnaryCall<any, any>,
+    callback: grpc.sendUnaryData<any>
+  ): Promise<void> {
+    try {
+      const rawRequest = call.request;
+
+      // Normalize gRPC defaults: convert empty strings to undefined
+      const request = {
+        exchange: rawRequest.exchange,
+        label: rawRequest.label,
+        api_key: rawRequest.api_key,
+        api_secret: rawRequest.api_secret,
+        passphrase: rawRequest.passphrase === '' ? undefined : rawRequest.passphrase
+      };
+
+      // SECURITY: Validate input before processing
+      const validation = validateRequest(CreateUserConnectionRequestSchema, request);
+      if (!validation.success) {
+        logger.warn('Invalid CreateUserConnection request', {
+          error: validation.success === false ? validation.error : 'Unknown error'
+        });
+
+        callback({
+          code: grpc.status.INVALID_ARGUMENT,
+          message: validation.success === false ? validation.error : 'Validation failed'
+        }, null);
+        return;
+      }
+
+      const validated = validation.data;
+
+      logger.info('Creating user connection');
+
+      // Create user and connection
+      const result = await this.enclaveWorker.createUserConnection({
+        exchange: validated.exchange,
+        label: validated.label,
+        apiKey: validated.api_key,
+        apiSecret: validated.api_secret,
+        passphrase: validated.passphrase
+      });
+
+      // Convert to gRPC format
+      const response = {
+        success: result.success,
+        user_uid: result.userUid || '',
+        error: result.error || ''
+      };
+
+      callback(null, response);
+    } catch (error: any) {
+      logger.error('CreateUserConnection failed', {
         error: error.message,
         stack: error.stack
       });
@@ -316,13 +481,16 @@ export class EnclaveServer {
         key: serverKeyPath
       });
 
+      // In development, allow disabling client certificate requirement
+      const requireClientCert = process.env.NODE_ENV === 'production' || process.env.REQUIRE_CLIENT_CERT === 'true';
+
       return grpc.ServerCredentials.createSsl(
         rootCert,
         [{
           cert_chain: serverCert,
           private_key: serverKey
         }],
-        true // Mutual TLS: require client certificate
+        requireClientCert // Mutual TLS: require client certificate (disabled in dev by default)
       );
     } catch (error) {
       // SECURITY: NO FALLBACK - server refuses to start without TLS

@@ -1,6 +1,9 @@
 import { injectable, inject } from 'tsyringe';
 import { PrismaClient, SnapshotData as PrismaSnapshotData } from '@prisma/client';
 import { SnapshotData } from '../../types';
+import { getLogger } from '../../utils/secure-enclave-logger';
+
+const logger = getLogger('SnapshotDataRepository');
 
 @injectable()
 export class SnapshotDataRepository {
@@ -18,6 +21,11 @@ export class SnapshotDataRepository {
         },
       },
       update: {
+        totalEquity: snapshot.totalEquity,
+        realizedBalance: snapshot.realizedBalance,
+        unrealizedPnL: snapshot.unrealizedPnL,
+        deposits: snapshot.deposits,
+        withdrawals: snapshot.withdrawals,
         breakdown_by_market: snapshot.breakdown_by_market as any,
         updatedAt: new Date(),
       },
@@ -25,6 +33,11 @@ export class SnapshotDataRepository {
         userUid: snapshot.userUid,
         timestamp: new Date(snapshot.timestamp),
         exchange: snapshot.exchange,
+        totalEquity: snapshot.totalEquity,
+        realizedBalance: snapshot.realizedBalance,
+        unrealizedPnL: snapshot.unrealizedPnL,
+        deposits: snapshot.deposits || 0,
+        withdrawals: snapshot.withdrawals || 0,
         breakdown_by_market: snapshot.breakdown_by_market as any,
       },
     });
@@ -48,23 +61,24 @@ export class SnapshotDataRepository {
 
     if (exchange) {
       where.exchange = exchange;
-      console.log('[SnapshotDataRepository] Filtering by exchange:', exchange);
     }
 
-    console.log('[SnapshotDataRepository] Full where clause:', JSON.stringify(where, null, 2));
-    console.log('[SnapshotDataRepository] userUid:', userUid);
-    console.log('[SnapshotDataRepository] exchange param:', exchange);
+    logger.debug('Querying snapshot data', {
+      userUid,
+      exchange,
+      startDate: startDate?.toISOString(),
+      endDate: endDate?.toISOString()
+    });
 
     const snapshotData = await this.prisma.snapshotData.findMany({
       where,
       orderBy: { timestamp: 'desc' },
     });
 
-    console.log('[SnapshotDataRepository] Found', snapshotData.length, 'snapshots');
-    if (snapshotData.length > 0) {
-      const exchanges = new Set(snapshotData.map(s => s.exchange));
-      console.log('[SnapshotDataRepository] Exchanges in result:', Array.from(exchanges));
-    }
+    logger.debug('Snapshot data query completed', {
+      count: snapshotData.length,
+      exchanges: snapshotData.length > 0 ? Array.from(new Set(snapshotData.map(s => s.exchange))) : []
+    });
 
     return snapshotData.map(this.mapPrismaSnapshotDataToSnapshotData);
   }
@@ -159,6 +173,11 @@ export class SnapshotDataRepository {
       userUid: prismaSnapshotData.userUid,
       timestamp: prismaSnapshotData.timestamp.toISOString(),
       exchange: prismaSnapshotData.exchange,
+      totalEquity: prismaSnapshotData.totalEquity,
+      realizedBalance: prismaSnapshotData.realizedBalance,
+      unrealizedPnL: prismaSnapshotData.unrealizedPnL,
+      deposits: prismaSnapshotData.deposits,
+      withdrawals: prismaSnapshotData.withdrawals,
       breakdown_by_market: prismaSnapshotData.breakdown_by_market as any,
       createdAt: prismaSnapshotData.createdAt,
       updatedAt: prismaSnapshotData.updatedAt,

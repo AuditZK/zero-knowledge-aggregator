@@ -2,7 +2,9 @@ import 'reflect-metadata';
 import { setupEnclaveContainer, verifyEnclaveIsolation } from './config/enclave-container';
 import { startEnclaveServer } from './enclave-server';
 import { getPrismaClient } from './config/prisma';
-import { logger } from './utils/logger';
+import { getLogger } from './utils/secure-enclave-logger';
+
+const logger = getLogger('Main');
 import { MemoryProtectionService } from './services/memory-protection.service';
 
 const startEnclave = async () => {
@@ -77,12 +79,39 @@ const startEnclave = async () => {
     logger.info('[ENCLAVE] Starting gRPC server...');
     const enclaveServer = await startEnclaveServer();
 
+    // Start HTTP log server (for SSE streaming enclave logs)
+    logger.info('[ENCLAVE] Starting HTTP log server for SSE streaming...');
+    const { startHttpLogServer } = await import('./http-log-server');
+    const { registerSSEBroadcast } = await import('./utils/secure-enclave-logger');
+    const httpLogServer = await startHttpLogServer();
+
+    // Register SSE broadcast callback
+    registerSSEBroadcast((log) => httpLogServer.broadcastLog(log));
+
+    logger.info('[ENCLAVE] HTTP log server started with SSE streaming');
+
+    // Start Daily Sync Scheduler (autonomous 00:00 UTC sync)
+    logger.info('[ENCLAVE] Starting daily sync scheduler...');
+    const { container: diContainer } = await import('tsyringe');
+    const { DailySyncSchedulerService } = await import('./services/daily-sync-scheduler.service');
+    const scheduler = diContainer.resolve(DailySyncSchedulerService);
+    scheduler.start();
+
+    const schedulerStatus = scheduler.getStatus();
+    logger.info('[ENCLAVE] Daily sync scheduler started', {
+      nextSync: schedulerStatus.nextSyncTime.toISOString(),
+      timezone: 'UTC',
+      schedule: '00:00 UTC daily',
+      auditProof: 'Rate-limited (23h cooldown)'
+    });
+
     logger.info('[ENCLAVE] Enclave Worker ready to process sync jobs', {
       protocol: 'gRPC',
       port: process.env.ENCLAVE_PORT || 50051,
       tls: 'MANDATORY (mutual TLS)',
       attestation: attestationResult.verified ? 'VERIFIED' : 'DEV MODE',
-      measurement: attestationResult.measurement || 'N/A'
+      measurement: attestationResult.measurement || 'N/A',
+      autoSync: 'ENABLED (00:00 UTC daily)'
     });
 
     // Graceful shutdown
@@ -95,6 +124,12 @@ const startEnclave = async () => {
       }, 30000);
 
       try {
+        // Stop daily sync scheduler
+        scheduler.stop();
+
+        // Stop HTTP log server
+        await httpLogServer.stop();
+
         // Stop gRPC server
         await enclaveServer.stop();
 

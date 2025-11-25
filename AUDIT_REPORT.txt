@@ -1,0 +1,102 @@
+======================================================================
+  TRACK RECORD ENCLAVE - AUDIT REPORT
+======================================================================
+  Date: 2025-11-25 14:43
+======================================================================
+
+[RESUME]
+----------------------------------------------------------------------
+  Total lignes:       12,639
+  Lignes de code:      9,849
+  Fichiers:               62
+  Dependances:            24
+
+[LIGNES PAR TYPE]
+----------------------------------------------------------------------
+  TypeScript        9,306 lignes   7,630 code   38 fichiers
+  Python              905 lignes     673 code    2 fichiers
+  Markdown            775 lignes     450 code    2 fichiers
+  .txt                337 lignes     199 code    5 fichiers
+  .sh                 334 lignes     188 code    2 fichiers
+  JSON                206 lignes     204 code    3 fichiers
+  Prisma              177 lignes     125 code    1 fichiers
+  .reproducible       169 lignes      64 code    1 fichiers
+
+[PLUS GROS FICHIERS]
+----------------------------------------------------------------------
+   1276 lignes  test-server.ts
+    791 lignes  scripts\audit-project.py
+    547 lignes  src\enclave-server.ts
+    527 lignes  src\enclave-worker.ts
+    524 lignes  README.md
+
+[ALERTES SECURITE] (58 detectees)
+----------------------------------------------------------------------
+  console.log           58 occurrences
+
+[QUALITE DU CODE]
+----------------------------------------------------------------------
+  TODO/FIXME:              1 fichiers
+  @ts-ignore:              4 occurrences
+  Type 'any':             85 occurrences
+
+  Fichiers >400 lignes: 4
+     - 1053 lignes: test-server.ts
+     - 581 lignes: scripts\audit-project.py
+     - 435 lignes: src\enclave-server.ts
+
+[COMPLEXITE DU CODE]
+----------------------------------------------------------------------
+  Fonctions complexes:        10
+  Fonctions longues:          10
+  Trop de parametres:          6
+
+  Top fonctions complexes (cyclomatic complexity):
+     - forEach: complexite 26
+     - parseAccountSummary: complexite 25
+     - fetchBalancesByMarket: complexite 20
+
+  Top fonctions longues:
+     - get: 245 lignes
+     - forEach: 159 lignes
+     - async: 131 lignes
+
+[GESTION D'ERREURS]
+----------------------------------------------------------------------
+  Catch blocks vides:          0
+  Catch ignores:               0
+
+[PERFORMANCE]
+----------------------------------------------------------------------
+  await dans boucles:          8 fichiers
+  sync dans boucles:           0 fichiers
+  WARNING: Anti-patterns de performance detectes
+
+[DOCUMENTATION]
+----------------------------------------------------------------------
+  Total fonctions:           606
+  Documentees (JSDoc):       198
+  Couverture:              32.7%
+  WARNING: Couverture documentation faible
+
+[DUPLICATION DE CODE]
+----------------------------------------------------------------------
+  Lignes dupliquees:         390
+  Taux de duplication:      5.1%
+  WARNING: Taux de duplication eleve
+
+[TESTS]
+----------------------------------------------------------------------
+  Fichiers source:         0
+  Fichiers test:           3
+
+[DEPENDANCES]
+----------------------------------------------------------------------
+  Production:             16
+  Developpement:           8
+
+  Principales: @alpacahq/alpaca-trade-api, @grpc/grpc-js, @grpc/proto-loader, @prisma/client, @stoqey/ib
+
+======================================================================
+AUDIT TERMINE
+======================================================================

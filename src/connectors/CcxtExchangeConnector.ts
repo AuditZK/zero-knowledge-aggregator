@@ -4,7 +4,6 @@ import {
   BalanceData,
   PositionData,
   TradeData,
-  CapitalFlowData,
 } from '../external/interfaces/IExchangeConnector';
 import { ExchangeCredentials } from '../types';
 import {
@@ -118,55 +117,6 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
           realizedPnl: (trade.info as any)?.realizedPnl || 0,
         }));
     });
-  }
-
-  protected async fetchDeposits(startDate: Date, endDate: Date): Promise<CapitalFlowData[]> {
-    return this.withErrorHandling('fetchDeposits', async () => {
-      if (!this.exchange.has['fetchDeposits']) {
-        this.logger.warn(`${this.exchangeName} does not support fetchDeposits`);
-        return [];
-      }
-
-      const since = this.dateToTimestamp(startDate);
-      const deposits = await this.exchange.fetchDeposits(undefined, since);
-
-      return deposits
-        .filter(deposit => this.isInDateRange(this.timestampToDate(deposit.timestamp || 0), startDate, endDate))
-        .map(deposit => ({
-          type: 'deposit' as const, amount: deposit.amount || 0, currency: deposit.currency,
-          timestamp: this.timestampToDate(deposit.timestamp || 0), txId: deposit.txid || deposit.id || '',
-          status: this.mapDepositStatus(deposit.status), address: deposit.address, network: deposit.network,
-        }));
-    });
-  }
-
-  protected async fetchWithdrawals(startDate: Date, endDate: Date): Promise<CapitalFlowData[]> {
-    return this.withErrorHandling('fetchWithdrawals', async () => {
-      if (!this.exchange.has['fetchWithdrawals']) {
-        this.logger.warn(`${this.exchangeName} does not support fetchWithdrawals`);
-        return [];
-      }
-
-      const since = this.dateToTimestamp(startDate);
-      const withdrawals = await this.exchange.fetchWithdrawals(undefined, since);
-
-      return withdrawals
-        .filter(withdrawal => this.isInDateRange(this.timestampToDate(withdrawal.timestamp || 0), startDate, endDate))
-        .map(withdrawal => ({
-          type: 'withdrawal' as const, amount: withdrawal.amount || 0, currency: withdrawal.currency,
-          timestamp: this.timestampToDate(withdrawal.timestamp || 0), txId: withdrawal.txid || withdrawal.id || '',
-          status: this.mapDepositStatus(withdrawal.status), fee: withdrawal.fee?.cost || 0,
-          address: withdrawal.address, network: withdrawal.network,
-        }));
-    });
-  }
-
-  private mapDepositStatus(status?: string): 'pending' | 'completed' | 'failed' {
-    if (!status) return 'pending';
-    const statusLower = status.toLowerCase();
-    if (statusLower === 'ok' || statusLower === 'complete' || statusLower === 'success') return 'completed';
-    if (statusLower === 'pending' || statusLower === 'processing') return 'pending';
-    return 'failed';
   }
 
   async testConnection(): Promise<boolean> {

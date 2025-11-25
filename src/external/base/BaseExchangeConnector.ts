@@ -1,13 +1,12 @@
 import {
   IExchangeConnector,
   BalanceData,
-  CapitalFlowData,
   TradeData,
   PositionData,
   ExchangeFeature,
 } from '../interfaces/IExchangeConnector';
 import { ExchangeCredentials } from '../../types';
-import { getLogger } from '../../utils/logger.service';
+import { getLogger } from '../../utils/secure-enclave-logger';
 
 /**
  * Base class for all exchange connectors
@@ -77,46 +76,10 @@ export abstract class BaseExchangeConnector implements IExchangeConnector {
   }
 
   /**
-   * Get deposits with feature check
-   * Subclasses should override fetchDeposits() if supported
-   */
-  async getDeposits(startDate: Date, endDate: Date): Promise<CapitalFlowData[]> {
-    if (!this.supportsFeature('capital_flows')) {
-      this.logger.warn(`${this.getExchangeName()}: Capital flows not supported via API`);
-      return [];
-    }
-
-    try {
-      return await this.fetchDeposits(startDate, endDate);
-    } catch (error) {
-      this.handleError(error, 'getDeposits');
-    }
-  }
-
-  /**
-   * Get withdrawals with feature check
-   * Subclasses should override fetchWithdrawals() if supported
-   */
-  async getWithdrawals(startDate: Date, endDate: Date): Promise<CapitalFlowData[]> {
-    if (!this.supportsFeature('capital_flows')) {
-      this.logger.warn(`${this.getExchangeName()}: Capital flows not supported via API`);
-      return [];
-    }
-
-    try {
-      return await this.fetchWithdrawals(startDate, endDate);
-    } catch (error) {
-      this.handleError(error, 'getWithdrawals');
-    }
-  }
-
-  /**
-   * Feature detection - default: all features supported except capital_flows
+   * Feature detection - default: all features supported
    * Subclasses should override to specify supported features
    */
   supportsFeature(feature: ExchangeFeature): boolean {
-    // By default, assume all exchanges support positions and trades
-    // But capital_flows requires explicit API support
     const defaultSupported: ExchangeFeature[] = ['positions', 'trades'];
     return defaultSupported.includes(feature);
   }
@@ -124,24 +87,6 @@ export abstract class BaseExchangeConnector implements IExchangeConnector {
   // ========================================
   // Protected helper methods
   // ========================================
-
-  /**
-   * Fetch deposits - should be overridden by subclasses if supported
-   * Default: returns empty array (most exchanges don't support via API)
-   */
-  protected async fetchDeposits(startDate: Date, endDate: Date): Promise<CapitalFlowData[]> {
-    this.logger.warn(`${this.getExchangeName()}: Capital flows not supported via API`);
-    return [];
-  }
-
-  /**
-   * Fetch withdrawals - should be overridden by subclasses if supported
-   * Default: returns empty array (most exchanges don't support via API)
-   */
-  protected async fetchWithdrawals(startDate: Date, endDate: Date): Promise<CapitalFlowData[]> {
-    this.logger.warn(`${this.getExchangeName()}: Capital flows not supported via API`);
-    return [];
-  }
 
   /**
    * Standardized error handling

@@ -1,14 +1,13 @@
-import { injectable, inject, container } from 'tsyringe';
+import { injectable, inject } from 'tsyringe';
 import { ExchangeConnectionRepository } from '../core/repositories/exchange-connection-repository';
 import { SyncStatusRepository } from '../core/repositories/sync-status-repository';
 import { TradeRepository } from '../core/repositories/trade-repository';
 import { UserRepository } from '../core/repositories/user-repository';
 import { ExchangeConnectorFactory } from '../external/factories/ExchangeConnectorFactory';
-import { EquitySnapshotAggregator } from './equity-snapshot-aggregator';
 import { UniversalConnectorCacheService } from '../core/services/universal-connector-cache.service';
 import { EncryptionService } from './encryption-service';
-import { TradeData, SyncStatus, ExchangeCredentials } from '../types';
-import { getLogger } from '../utils/logger.service';
+import { TradeData, ExchangeCredentials } from '../types';
+import { getLogger } from '../utils/secure-enclave-logger';
 
 const logger = getLogger('TradeSyncService');
 
@@ -19,7 +18,6 @@ export class TradeSyncService {
     @inject(SyncStatusRepository) private readonly syncStatusRepo: SyncStatusRepository,
     @inject(TradeRepository) private readonly tradeRepo: TradeRepository,
     @inject(UserRepository) private readonly userRepo: UserRepository,
-    @inject(EquitySnapshotAggregator) private readonly equitySnapshotAggregator: EquitySnapshotAggregator,
     @inject(UniversalConnectorCacheService) private readonly connectorCache: UniversalConnectorCacheService,
   ) {}
 
@@ -96,16 +94,19 @@ export class TradeSyncService {
     });
 
     try {
-      const bufferHours = 2;
+      // Sync full day of trades (for daily snapshot metrics: volume, fees, order count)
       const now = new Date();
-      const startDate = new Date(now.getTime() - (bufferHours * 60 * 60 * 1000));
+      const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
       const lastTradeTimestamp = await this.tradeRepo.getLastTradeTimestamp(userUid, credentials.exchange);
       const isFirstSync = !lastTradeTimestamp;
 
+      // Use start of day for daily sync, or last trade timestamp if more recent
+      const startDate = lastTradeTimestamp && lastTradeTimestamp > startOfDay ? lastTradeTimestamp : startOfDay;
+
       if (isFirstSync) {
-        logger.info(`First sync for ${credentials.exchange} - fetching last ${bufferHours}h only`);
+        logger.info(`First sync for ${credentials.exchange} - fetching today's trades`);
       } else {
-        logger.info(`Incremental sync for ${credentials.exchange} from ${startDate.toISOString()}`);
+        logger.info(`Daily sync for ${credentials.exchange} from ${startDate.toISOString()}`);
       }
 
       const trades: TradeData[] = await this.fetchTradesUnified(credentials, startDate);
@@ -133,10 +134,9 @@ export class TradeSyncService {
 
         const insertedTrades = await this.tradeRepo.batchCreateTrades(createRequests);
         syncedCount = insertedTrades.length;
-        if (insertedTrades.length > 0) {
-          await this.equitySnapshotAggregator.updateCurrentSnapshot(userUid, credentials.exchange);
-        }
       }
+
+      // Note: IBKR backfill is handled by enclave-worker.updateSnapshotsForExchanges()
 
       await this.syncStatusRepo.upsertSyncStatus({
         userUid, exchange: credentials.exchange, lastSyncTime: new Date(),
@@ -155,12 +155,12 @@ export class TradeSyncService {
 
   async syncTradesForStatistics(userUid: string): Promise<{ success: boolean; synced: number; message: string }> {
     try {
-      const uniqueConnections = await this.exchangeConnectionRepo.getUniqueCredentialsForUser(userUid);
+      const uniqueConnections = (await this.exchangeConnectionRepo.getUniqueCredentialsForUser(userUid)) ?? [];
       if (uniqueConnections.length === 0) {
         return { success: false, synced: 0, message: 'No active exchange connections found for user' };
       }
 
-      const totalConnections = await this.exchangeConnectionRepo.getConnectionsByUser(userUid, true);
+      const totalConnections = (await this.exchangeConnectionRepo.getConnectionsByUser(userUid, true)) ?? [];
       const skippedDuplicates = totalConnections.length - uniqueConnections.length;
 
       const syncResults = await Promise.allSettled(
@@ -177,7 +177,7 @@ export class TradeSyncService {
       );
 
       return {
-        success: totalSynced > 0,
+        success: true, // Success = no errors (regardless of trade count)
         synced: totalSynced,
         message: `Synced ${totalSynced} trades from ${uniqueConnections.length} unique exchanges (${skippedDuplicates} duplicates skipped)`,
       };
@@ -240,7 +240,7 @@ export class TradeSyncService {
 
       return {
         success: true,
-        message: 'Exchange connection added successfully - use sync endpoint to fetch historical data',
+        message: 'Exchange connection added successfully - snapshots will be created automatically',
         connectionId: connection.id,
       };
     } catch (error) {
@@ -252,108 +252,6 @@ export class TradeSyncService {
         };
       }
       return { success: false, message: `Failed to add exchange connection: ${error.message}` };
-    }
-  }
-
-  async syncHistoricalTrades(userUid: string, exchange?: string): Promise<{ success: boolean; message: string; synced: number }> {
-    try {
-      await this.ensureUser(userUid);
-
-      const connections = await this.exchangeConnectionRepo.getConnectionsByUser(userUid, true);
-      const connectionsToSync = exchange ? connections.filter(c => c.exchange === exchange) : connections;
-
-      if (connectionsToSync.length === 0) {
-        return {
-          success: false,
-          message: `No active exchange connections found${exchange ? ` for ${exchange}` : ''}`,
-          synced: 0,
-        };
-      }
-
-      let totalSynced = 0;
-      for (const connection of connectionsToSync) {
-        try {
-          const synced = await this.syncHistoricalExchangeTrades(userUid, connection.id);
-          totalSynced += synced;
-        } catch (error) {
-          logger.error(`Failed to sync historical trades from ${connection.exchange}`, error);
-          await this.syncStatusRepo.upsertSyncStatus({
-            userUid, exchange: connection.exchange, lastSyncTime: new Date(),
-            status: 'error', totalTrades: 0,
-            errorMessage: `Historical sync failed: ${error.message}`,
-          });
-        }
-      }
-
-      return {
-        success: true,
-        message: `Historical sync completed for ${connectionsToSync.length} exchange(s)`,
-        synced: totalSynced,
-      };
-    } catch (error) {
-      logger.error(`Historical trade sync failed for user ${userUid}`, error);
-      return { success: false, message: `Historical trade sync failed: ${error.message}`, synced: 0 };
-    }
-  }
-
-  async syncHistoricalExchangeTrades(userUid: string, connectionId: string): Promise<number> {
-    const credentials = await this.exchangeConnectionRepo.getDecryptedCredentials(connectionId);
-    if (!credentials) throw new Error('Failed to get exchange credentials');
-
-    await this.syncStatusRepo.upsertSyncStatus({
-      userUid, exchange: credentials.exchange, lastSyncTime: new Date(),
-      status: 'syncing', totalTrades: 0, errorMessage: null,
-    });
-
-    try {
-      const trades = await this.fetchTradesUnified(credentials);
-
-      if (trades.length === 0) {
-        await this.syncStatusRepo.upsertSyncStatus({
-          userUid, exchange: credentials.exchange, lastSyncTime: new Date(),
-          status: 'completed', totalTrades: 0, errorMessage: null,
-        });
-        return 0;
-      }
-
-      const tradeIds = trades.map(t => t.exchangeTradeId);
-      const existingTradeIds = await this.tradeRepo.getExistingTradeIds(userUid, tradeIds);
-      const newTrades = trades.filter(trade => !existingTradeIds.includes(trade.exchangeTradeId));
-
-      let syncedCount = 0;
-      if (newTrades.length > 0) {
-        const chunkSize = 100;
-        for (let i = 0; i < newTrades.length; i += chunkSize) {
-          const chunk = newTrades.slice(i, i + chunkSize);
-          try {
-            const createRequests = chunk.map(trade => ({
-              userUid: trade.userUid, symbol: trade.symbol, type: trade.type as any,
-              quantity: trade.quantity, price: trade.price, fees: trade.fees,
-              timestamp: trade.timestamp, exchange: credentials.exchange,
-              exchangeTradeId: trade.exchangeTradeId,
-            }));
-
-            const insertedTrades = await this.tradeRepo.batchCreateTrades(createRequests);
-            syncedCount += insertedTrades.length;
-          } catch (error) {
-            logger.error(`Failed to insert trade chunk ${Math.floor(i / chunkSize) + 1}`, error);
-          }
-        }
-      }
-
-      await this.syncStatusRepo.upsertSyncStatus({
-        userUid, exchange: credentials.exchange, lastSyncTime: new Date(),
-        status: 'completed', totalTrades: syncedCount, errorMessage: null,
-      });
-
-      return syncedCount;
-    } catch (error) {
-      await this.syncStatusRepo.upsertSyncStatus({
-        userUid, exchange: credentials.exchange, lastSyncTime: new Date(),
-        status: 'error', totalTrades: 0,
-        errorMessage: `Historical sync error: ${error.message}`,
-      });
-      throw error;
     }
   }
 }

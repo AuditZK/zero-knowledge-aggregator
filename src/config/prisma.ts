@@ -1,6 +1,8 @@
 import { PrismaClient } from '@prisma/client';
-import { dbLogger } from '../utils/logger';
+import { getLogger } from '../utils/secure-enclave-logger';
 import { databaseConfig } from './index';
+
+const dbLogger = getLogger('Database');
 
 // Prisma event types
 interface PrismaQueryEvent {
