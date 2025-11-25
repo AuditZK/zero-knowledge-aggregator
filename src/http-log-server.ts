@@ -1,5 +1,8 @@
 import express from 'express';
-import { getLogBuffer, clearLogBuffer } from './utils/secure-enclave-logger';
+import http from 'http';
+import { getLogBuffer, clearLogBuffer, getLogger } from './utils/secure-enclave-logger';
+
+const logger = getLogger('HttpLogServer');
 
 /**
  * HTTP Log Server for Enclave
@@ -15,7 +18,7 @@ import { getLogBuffer, clearLogBuffer } from './utils/secure-enclave-logger';
 export class HttpLogServer {
   private app: express.Application;
   private port: number;
-  private server: any;
+  private server: http.Server | null = null;
   private sseClients: Set<express.Response> = new Set();
 
   constructor() {
@@ -86,8 +89,8 @@ export class HttpLogServer {
   async start(): Promise<void> {
     return new Promise((resolve) => {
       this.server = this.app.listen(this.port, () => {
-        console.log(`[HttpLogServer] Listening on port ${this.port}`);
-        console.log(`[HttpLogServer] Logs endpoint: http://localhost:${this.port}/logs`);
+        logger.info(`Listening on port ${this.port}`);
+        logger.info(`Logs endpoint: http://localhost:${this.port}/logs`);
         resolve();
       });
     });
@@ -97,7 +100,7 @@ export class HttpLogServer {
     return new Promise((resolve) => {
       if (this.server) {
         this.server.close(() => {
-          console.log('[HttpLogServer] Stopped');
+          logger.info('Stopped');
           resolve();
         });
       } else {

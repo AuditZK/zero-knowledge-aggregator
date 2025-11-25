@@ -6,7 +6,7 @@ import {
   ExchangeFeature,
 } from '../interfaces/IExchangeConnector';
 import { ExchangeCredentials } from '../../types';
-import { getLogger } from '../../utils/secure-enclave-logger';
+import { getLogger, SecureEnclaveLogger } from '../../utils/secure-enclave-logger';
 
 /**
  * Base class for all exchange connectors
@@ -24,7 +24,7 @@ import { getLogger } from '../../utils/secure-enclave-logger';
  * - getExchangeName()
  */
 export abstract class BaseExchangeConnector implements IExchangeConnector {
-  protected logger: any;
+  protected logger: SecureEnclaveLogger;
   protected credentials: ExchangeCredentials;
 
   constructor(credentials: ExchangeCredentials) {
@@ -92,17 +92,18 @@ export abstract class BaseExchangeConnector implements IExchangeConnector {
    * Standardized error handling
    * Logs error and throws with context
    */
-  protected handleError(error: any, context: string): never {
-    const errorMessage = error?.message || 'Unknown error';
+  protected handleError(error: unknown, context: string): never {
+    const err = error as Error;
+    const errorMessage = err?.message || 'Unknown error';
     const fullMessage = `${this.getExchangeName()}: ${context} failed - ${errorMessage}`;
 
     this.logger.error(fullMessage, {
       context,
       exchange: this.getExchangeName(),
       error: {
-        name: error?.name,
+        name: err?.name,
         message: errorMessage,
-        stack: error?.stack,
+        stack: err?.stack,
       },
     });
 
