@@ -38,7 +38,7 @@ export class DatabaseMigrationService {
   }
 
   private async applyMigration(name: string, fn: () => Promise<void>): Promise<void> {
-    if (await this.isMigrationApplied(name)) return;
+    if (await this.isMigrationApplied(name)) {return;}
     try { await fn(); await this.markMigrationApplied(name); }
     catch (error) { logger.error(`Migration ${name} failed:`, error); throw error; }
   }
@@ -71,7 +71,13 @@ export class DatabaseMigrationService {
 
   private async addColumn(tableName: string, columnName: string, columnType: string): Promise<void> {
     try { await this.prisma.$executeRawUnsafe(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`); }
-    catch (err: any) { if (!err.message.includes('duplicate column name')) { logger.error(`Error adding column ${columnName} to ${tableName}`, err); throw err; } }
+    catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      if (!errorMessage.includes('duplicate column name')) {
+        logger.error(`Error adding column ${columnName} to ${tableName}`, err);
+        throw err;
+      }
+    }
   }
 
   async columnExists(tableName: string, columnName: string): Promise<boolean> {
@@ -86,13 +92,13 @@ export class DatabaseMigrationService {
   private async fixColumnNaming(): Promise<void> {
     const migrationName = 'fix_column_naming_snake_case';
     try {
-      if (await this.isMigrationApplied(migrationName)) return;
+      if (await this.isMigrationApplied(migrationName)) {return;}
       const needsPositionsFix = await this.columnExists('positions', 'userUid');
       const needsReturnsfix = await this.columnExists('hourly_returns', 'userUid');
       const needsTradesFix = await this.columnExists('trades', 'userUid');
-      if (needsPositionsFix) await this.recreatePositionsTable();
-      if (needsReturnsfix) await this.recreateHourlyReturnsTable();
-      if (needsTradesFix) await this.recreateTradesTable();
+      if (needsPositionsFix) {await this.recreatePositionsTable();}
+      if (needsReturnsfix) {await this.recreateHourlyReturnsTable();}
+      if (needsTradesFix) {await this.recreateTradesTable();}
       await this.markMigrationApplied(migrationName);
     } catch (error) {
       logger.error(`Failed to apply migration ${migrationName}:`, error);
@@ -143,11 +149,11 @@ export class DatabaseMigrationService {
   private async fixIdColumnsToAutoIncrement(): Promise<void> {
     const migrationName = 'fix_id_columns_to_autoincrement';
     try {
-      if (await this.isMigrationApplied(migrationName)) return;
+      if (await this.isMigrationApplied(migrationName)) {return;}
       const tables = ['exchange_connections', 'sync_statuses', 'trades', 'positions', 'hourly_returns'];
       for (const tableName of tables) {
         const needsFix = await this.checkIdColumnType(tableName);
-        if (needsFix) await this.recreateTableWithAutoIncrementId(tableName);
+        if (needsFix) {await this.recreateTableWithAutoIncrementId(tableName);}
       }
       await this.markMigrationApplied(migrationName);
     } catch (error) {
@@ -181,7 +187,7 @@ export class DatabaseMigrationService {
       'positions': `CREATE TABLE positions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_uid TEXT NOT NULL, exchange TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT CHECK (side IN ('long', 'short')) NOT NULL, size DECIMAL(20,8) NOT NULL, entry_price DECIMAL(20,8), mark_price DECIMAL(20,8), pnl DECIMAL(20,8) DEFAULT 0, realized_pnl DECIMAL(20,8), unrealized_pnl DECIMAL(20,8), percentage DECIMAL(10,4), net_profit DECIMAL(20,8), status TEXT CHECK (status IN ('open', 'closed')) DEFAULT 'open', timestamp TIMESTAMP NOT NULL, closed_at TIMESTAMP DEFAULT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_uid) REFERENCES users(uid) ON DELETE CASCADE)`,
       'hourly_returns': `CREATE TABLE hourly_returns (id INTEGER PRIMARY KEY AUTOINCREMENT, user_uid TEXT NOT NULL, hour TEXT NOT NULL, exchange TEXT NOT NULL, volume DECIMAL(20,8) DEFAULT 0, total_quantity DECIMAL(20,8) DEFAULT 0, trades INTEGER DEFAULT 0, return_pct DECIMAL(10,6) DEFAULT 0, return_usd DECIMAL(20,8) DEFAULT 0, total_fees DECIMAL(20,8) DEFAULT 0, realized_pnl DECIMAL(20,8) DEFAULT 0, unrealized_pnl DECIMAL(20,8) DEFAULT 0, matches INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_uid) REFERENCES users(uid) ON DELETE CASCADE, UNIQUE(user_uid, hour, exchange))`
     };
-    if (!tables[tableName]) throw new Error(`Unknown table: ${tableName}`);
+    if (!tables[tableName]) {throw new Error(`Unknown table: ${tableName}`);}
     return tables[tableName];
   }
 
@@ -193,7 +199,7 @@ export class DatabaseMigrationService {
       'positions': `INSERT INTO positions (user_uid, exchange, symbol, side, size, entry_price, mark_price, pnl, realized_pnl, unrealized_pnl, percentage, net_profit, status, timestamp, closed_at, created_at, updated_at) SELECT user_uid, exchange, symbol, side, size, entry_price, mark_price, pnl, realized_pnl, unrealized_pnl, percentage, net_profit, status, timestamp, closed_at, created_at, updated_at FROM positions_old`,
       'hourly_returns': `INSERT INTO hourly_returns (user_uid, hour, exchange, volume, total_quantity, trades, return_pct, return_usd, total_fees, realized_pnl, unrealized_pnl, matches, created_at, updated_at) SELECT user_uid, hour, exchange, volume, total_quantity, trades, return_pct, return_usd, total_fees, realized_pnl, unrealized_pnl, matches, created_at, updated_at FROM hourly_returns_old`
     };
-    if (!copies[tableName]) throw new Error(`Unknown table: ${tableName}`);
+    if (!copies[tableName]) {throw new Error(`Unknown table: ${tableName}`);}
     return copies[tableName];
   }
 

@@ -79,9 +79,9 @@ export class AlpacaConnector extends RestBrokerConnector {
           symbol: pos.symbol,
           side: side as 'long' | 'short',
           size,
-          entryPrice: this.parseFloat(pos.avg_entry_price),
-          markPrice: this.parseFloat(pos.current_price),
-          unrealizedPnl: this.parseFloat(pos.unrealized_pl),
+          entryPrice: this.parseFloat(pos.avg_entry_price || '0'),
+          markPrice: this.parseFloat(pos.current_price || '0'),
+          unrealizedPnl: this.parseFloat(pos.unrealized_pl || '0'),
           realizedPnl: 0, // Alpaca doesn't provide per-position realized PnL
           leverage: 1, // Alpaca stocks are typically 1x, margin can vary
           assetClass: pos.asset_class,

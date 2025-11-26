@@ -86,14 +86,15 @@ export class IbkrFlexService {
       }
 
       const referenceCode = parsed.FlexStatementResponse?.ReferenceCode?.[0];
-      if (!referenceCode) throw new Error('No reference code received from Flex API');
+      if (!referenceCode) {throw new Error('No reference code received from Flex API');}
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(3);
       logger.info(`Flex report requested successfully (${duration}s)`, { referenceCode });
       return referenceCode;
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error('Failed to request Flex report', error);
-      throw new Error(`Flex request failed: ${error.message}`);
+      throw new Error(`Flex request failed: ${errorMessage}`);
     }
   }
 
@@ -139,9 +140,10 @@ export class IbkrFlexService {
       }
 
       throw new Error('Flex statement generation timeout - report not ready after retries');
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error('Failed to get Flex statement', error);
-      throw new Error(`Flex retrieval failed: ${error.message}`);
+      throw new Error(`Flex retrieval failed: ${errorMessage}`);
     }
   }
 
@@ -155,7 +157,7 @@ export class IbkrFlexService {
         return [];
       }
 
-      return tradesList.map((trade: any) => {
+      return tradesList.map((trade: { $: Record<string, string> }) => {
         const attrs = trade.$;
         return {
           symbol: attrs.symbol || '',
@@ -173,9 +175,10 @@ export class IbkrFlexService {
           fifoPnlRealized: parseFloat(attrs.fifoPnlRealized || '0'),
         };
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error('Failed to parse trades from Flex report', error);
-      throw new Error(`Trade parsing failed: ${error.message}`);
+      throw new Error(`Trade parsing failed: ${errorMessage}`);
     }
   }
 
@@ -189,7 +192,7 @@ export class IbkrFlexService {
         return [];
       }
 
-      return positionsList.map((position: any) => {
+      return positionsList.map((position: { $: Record<string, string> }) => {
         const attrs = position.$;
         return {
           symbol: attrs.symbol || '',
@@ -201,9 +204,10 @@ export class IbkrFlexService {
           fifoPnlUnrealized: parseFloat(attrs.fifoPnlUnrealized || '0'),
         };
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error('Failed to parse positions from Flex report', error);
-      throw new Error(`Position parsing failed: ${error.message}`);
+      throw new Error(`Position parsing failed: ${errorMessage}`);
     }
   }
 
@@ -217,7 +221,7 @@ export class IbkrFlexService {
         return [];
       }
 
-      return cashList.map((cash: any) => {
+      return cashList.map((cash: { $: Record<string, string> }) => {
         const attrs = cash.$;
         return {
           symbol: attrs.symbol || '',
@@ -228,9 +232,10 @@ export class IbkrFlexService {
           description: attrs.description || '',
         };
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error('Failed to parse cash transactions from Flex report', error);
-      throw new Error(`Cash transaction parsing failed: ${error.message}`);
+      throw new Error(`Cash transaction parsing failed: ${errorMessage}`);
     }
   }
 
@@ -238,7 +243,7 @@ export class IbkrFlexService {
     try {
       const parsed = await parseStringPromise(xmlData);
       const flexStatement = parsed.FlexQueryResponse?.FlexStatements?.[0]?.FlexStatement?.[0];
-      if (!flexStatement) return [];
+      if (!flexStatement) {return [];}
 
       // DEBUG: Log all top-level keys in flexStatement
       logger.info('IBKR FlexStatement structure:', {
@@ -270,7 +275,7 @@ export class IbkrFlexService {
         lastCash: lastEntry?.cash
       });
 
-      return dataList.map((info: any) => {
+      return dataList.map((info: { $: Record<string, string> }) => {
         const attrs = info.$;
 
         const netLiquidation = parseFloat(
@@ -288,9 +293,10 @@ export class IbkrFlexService {
           realizedPnL: parseFloat(attrs.realizedPnL || '0'),
         };
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error('Failed to parse account summary from Flex report', error);
-      throw new Error(`Account summary parsing failed: ${error.message}`);
+      throw new Error(`Account summary parsing failed: ${errorMessage}`);
     }
   }
 
@@ -300,7 +306,7 @@ export class IbkrFlexService {
       await this.getFlexStatement(token, referenceCode);
       logger.info('Flex connection test successful');
       return true;
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('Flex connection test failed', error);
       return false;
     }

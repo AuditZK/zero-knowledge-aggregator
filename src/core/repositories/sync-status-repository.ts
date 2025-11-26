@@ -124,10 +124,10 @@ export class SyncStatusRepository {
       id: prismaSyncStatus.id,
       userUid: prismaSyncStatus.userUid,
       exchange: prismaSyncStatus.exchange,
-      lastSyncTime: prismaSyncStatus.lastSyncTime,
+      lastSyncTime: prismaSyncStatus.lastSyncTime || undefined,
       status: prismaSyncStatus.status as 'pending' | 'syncing' | 'completed' | 'error',
       totalTrades: prismaSyncStatus.totalTrades,
-      errorMessage: prismaSyncStatus.errorMessage,
+      errorMessage: prismaSyncStatus.errorMessage || undefined,
       createdAt: prismaSyncStatus.createdAt,
       updatedAt: prismaSyncStatus.updatedAt,
     };

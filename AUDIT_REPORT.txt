@@ -1,49 +1,100 @@
 ======================================================================
   TRACK RECORD ENCLAVE - AUDIT REPORT
 ======================================================================
-  Date: 2025-11-25 14:43
+  Date: 2025-11-26 01:07
 ======================================================================
 
 [RESUME]
 ----------------------------------------------------------------------
-  Total lignes:       12,639
-  Lignes de code:      9,849
-  Fichiers:               62
+  Total lignes:       13,721
+  Lignes de code:     10,070
+  Fichiers:               71
   Dependances:            24
 
 [LIGNES PAR TYPE]
 ----------------------------------------------------------------------
-  TypeScript        9,306 lignes   7,630 code   38 fichiers
-  Python              905 lignes     673 code    2 fichiers
-  Markdown            775 lignes     450 code    2 fichiers
-  .txt                337 lignes     199 code    5 fichiers
-  .sh                 334 lignes     188 code    2 fichiers
-  JSON                206 lignes     204 code    3 fichiers
+  TypeScript        8,343 lignes   6,835 code   38 fichiers
+  Markdown          2,577 lignes   1,472 code    6 fichiers
+  JSON                540 lignes     538 code    5 fichiers
+  .sh                 428 lignes     278 code    3 fichiers
+  .yml                410 lignes     145 code    3 fichiers
+  .txt                404 lignes     252 code    5 fichiers
+  .example            280 lignes      51 code    2 fichiers
   Prisma              177 lignes     125 code    1 fichiers
-  .reproducible       169 lignes      64 code    1 fichiers
 
 [PLUS GROS FICHIERS]
 ----------------------------------------------------------------------
-   1276 lignes  test-server.ts
-    791 lignes  scripts\audit-project.py
-    547 lignes  src\enclave-server.ts
-    527 lignes  src\enclave-worker.ts
+    558 lignes  src\enclave-server.ts
+    532 lignes  src\enclave-worker.ts
     524 lignes  README.md
+    510 lignes  PRODUCTION_SETUP.md
+    466 lignes  src\services\equity-snapshot-aggregator.ts
 
-[ALERTES SECURITE] (58 detectees)
+[ALERTES SECURITE] (8 detectees)
 ----------------------------------------------------------------------
-  console.log           58 occurrences
+  console.log            8 occurrences
 
 [QUALITE DU CODE]
 ----------------------------------------------------------------------
-  TODO/FIXME:              1 fichiers
-  @ts-ignore:              4 occurrences
-  Type 'any':             85 occurrences
+  TODO/FIXME:              0 fichiers
+  @ts-ignore:              0 occurrences
+  Type 'any':              0 occurrences
 
-  Fichiers >400 lignes: 4
-     - 1053 lignes: test-server.ts
-     - 581 lignes: scripts\audit-project.py
-     - 435 lignes: src\enclave-server.ts
+  Fichiers >400 lignes: 2
+     - 443 lignes: src\enclave-server.ts
+     - 440 lignes: src\enclave-worker.ts
+
+[ESLINT]
+----------------------------------------------------------------------
+  Erreurs:                 0
+  Warnings:                0
+  Fichiers touches:        0
+
+[VULNERABILITES NPM]
+----------------------------------------------------------------------
+  Total vulnerabilites:        2
+  Critiques:                   0
+  Elevees:                     2
+  Moderees:                    0
+  Faibles:                     0
+
+  CRITICAL: 2 vulnerabilites critiques/elevees detectees!
+
+[DEPENDANCES NON UTILISEES]
+----------------------------------------------------------------------
+  Dependances inutilisees:            0
+  Dev dependances inutilisees:        0
+  Dependances manquantes:             1
+
+[DEPENDANCES OBSOLETES]
+----------------------------------------------------------------------
+  Packages obsoletes:          2
+
+  Packages a mettre a jour:
+     - @prisma/client: 6.19.0 -> 7.0.1
+     - prisma: 6.19.0 -> 7.0.1
+
+  INFO: 2 packages peuvent etre mis a jour
+
+[TYPESCRIPT STRICTNESS]
+----------------------------------------------------------------------
+  Mode 'strict':         Inactif
+  Checks actives:       3/9
+  Strictness:              33.3%
+
+  Options desactivees:
+     - strict
+     - strictFunctionTypes
+     - noImplicitReturns
+     - noUnusedLocals
+     - noUnusedParameters
+
+  Erreurs TypeScript par option:
+     - strictFunctionTypes           2 erreurs
+     - noImplicitReturns             0 erreurs
+     - strict (toutes)               8 erreurs
+
+  WARNING: Configuration TypeScript peu stricte (33.3%)
 
 [COMPLEXITE DU CODE]
 ----------------------------------------------------------------------
@@ -52,14 +103,14 @@
   Trop de parametres:          6
 
   Top fonctions complexes (cyclomatic complexity):
-     - forEach: complexite 26
+     - forEach: complexite 27
      - parseAccountSummary: complexite 25
      - fetchBalancesByMarket: complexite 20
 
   Top fonctions longues:
-     - get: 245 lignes
-     - forEach: 159 lignes
-     - async: 131 lignes
+     - forEach: 152 lignes
+     - decrypt: 130 lignes
+     - async: 122 lignes
 
 [GESTION D'ERREURS]
 ----------------------------------------------------------------------
@@ -68,34 +119,50 @@
 
 [PERFORMANCE]
 ----------------------------------------------------------------------
-  await dans boucles:          8 fichiers
-  sync dans boucles:           0 fichiers
-  WARNING: Anti-patterns de performance detectes
+  await dans boucles:            7 fichiers
+  sync dans boucles:             0 fichiers
+  forEach avec async:            0 fichiers
+  RegEx dans boucles:            0 fichiers
+  Multiples awaits seq.:         1 fichiers
+  Boucles imbriquees:            1 fichiers
+  Array.push dans boucles:       3 fichiers
+  Requetes sans limite:          8 fichiers
+
+  Fichiers avec await dans boucles:
+     - src\connectors\CcxtExchangeConnector.ts
+     - src\core\services\database-migration-service.ts
+     - src\enclave-worker.ts
+     - src\external\ibkr-flex-service.ts
+     - src\services\daily-sync-scheduler.service.ts
+
+  Fichiers avec awaits sequentiels (parallelisables):
+     - src\core\services\database-migration-service.ts
+
+  WARNING: 12 anti-patterns de performance detectes
 
 [DOCUMENTATION]
 ----------------------------------------------------------------------
-  Total fonctions:           606
-  Documentees (JSDoc):       198
-  Couverture:              32.7%
+  Total fonctions:           600
+  Documentees (JSDoc):       213
+  Couverture:              35.5%
   WARNING: Couverture documentation faible
 
 [DUPLICATION DE CODE]
 ----------------------------------------------------------------------
-  Lignes dupliquees:         390
-  Taux de duplication:      5.1%
-  WARNING: Taux de duplication eleve
+  Lignes dupliquees:         316
+  Taux de duplication:      4.6%
 
 [TESTS]
 ----------------------------------------------------------------------
   Fichiers source:         0
-  Fichiers test:           3
+  Fichiers test:           1
 
 [DEPENDANCES]
 ----------------------------------------------------------------------
-  Production:             16
-  Developpement:           8
+  Production:             13
+  Developpement:          11
 
-  Principales: @alpacahq/alpaca-trade-api, @grpc/grpc-js, @grpc/proto-loader, @prisma/client, @stoqey/ib
+  Principales: @alpacahq/alpaca-trade-api, @grpc/grpc-js, @grpc/proto-loader, @prisma/client, @types/xml2js
 
 ======================================================================
 AUDIT TERMINE

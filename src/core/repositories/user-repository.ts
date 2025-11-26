@@ -119,7 +119,7 @@ export class UserRepository {
         _count: {
           select: {
             trades: true,
-            positions: true,
+            snapshots: true,
             exchangeConnections: true,
           },
         },
@@ -136,7 +136,7 @@ export class UserRepository {
 
     return {
       totalTrades: user._count.trades,
-      totalPositions: user._count.positions,
+      totalPositions: user._count.snapshots, // Using snapshots count (positions not in schema)
       exchangeConnections: user._count.exchangeConnections,
       accountAge,
     };

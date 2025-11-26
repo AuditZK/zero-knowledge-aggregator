@@ -21,8 +21,44 @@ services:
       timeout: 5s
       retries: 5
 
+  # Grafana (Monitoring Dashboards)
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: enclave_grafana_dev
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana-provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+    networks:
+      - enclave_network
+    restart: unless-stopped
+
+  # Prometheus (Metrics Collection)
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: enclave_prometheus_dev
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus-dev.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - enclave_network
+    restart: unless-stopped
+
 volumes:
   enclave_postgres_data:
+    driver: local
+  grafana_data:
+    driver: local
+  prometheus_data:
     driver: local
 
 networks:

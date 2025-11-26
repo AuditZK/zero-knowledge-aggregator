@@ -85,7 +85,12 @@
       "Bash(dir:*)",
       "Bash(cmd /c \"taskkill /F /IM node.exe\")",
       "Bash(timeout /t:*)",
-      "Bash(del \"c:\\Users\\jimmy\\Desktop\\track-record-enclave\\src\\config\\dev-mode.ts\")"
+      "Bash(del \"c:\\Users\\jimmy\\Desktop\\track-record-enclave\\src\\config\\dev-mode.ts\")",
+      "Bash(git commit:*)",
+      "Bash(npx eslint:*)",
+      "Bash(del:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(npx prisma generate:*)"
     ],
     "deny": [],
     "ask": []

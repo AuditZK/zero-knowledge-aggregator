@@ -1,0 +1,113 @@
+# =============================================================================
+# Prometheus Configuration for Track Record Enclave
+# =============================================================================
+# Scrapes metrics from the enclave service for monitoring
+# =============================================================================
+
+global:
+  scrape_interval: 15s       # Scrape targets every 15 seconds
+  evaluation_interval: 15s   # Evaluate rules every 15 seconds
+  scrape_timeout: 10s        # Timeout after 10 seconds
+
+  # Attach these labels to any time series or alerts
+  external_labels:
+    environment: 'production'
+    service: 'track-record-enclave'
+
+# Alertmanager configuration (optional - configure later)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - 'alertmanager:9093'
+
+# Load alerting rules (optional - configure later)
+# rule_files:
+#   - 'alerts/*.yml'
+
+# Scrape configurations
+scrape_configs:
+  # ---------------------------------------------------------------------------
+  # Enclave Service Metrics
+  # ---------------------------------------------------------------------------
+  - job_name: 'enclave'
+
+    # Scrape interval for this job (override global)
+    scrape_interval: 10s
+
+    # Metrics path (default is /metrics)
+    metrics_path: '/metrics'
+
+    # Scheme (http or https)
+    scheme: http
+
+    # Static targets
+    static_configs:
+      - targets:
+          - 'enclave:9090'  # Docker Compose service name
+
+        labels:
+          instance: 'enclave-worker'
+          component: 'grpc-server'
+
+  # ---------------------------------------------------------------------------
+  # Prometheus Self-Monitoring
+  # ---------------------------------------------------------------------------
+  - job_name: 'prometheus'
+
+    static_configs:
+      - targets:
+          - 'localhost:9090'
+
+        labels:
+          instance: 'prometheus'
+
+# =============================================================================
+# Example Alert Rules (create alerts/enclave.yml)
+# =============================================================================
+#
+# groups:
+#   - name: enclave_alerts
+#     interval: 30s
+#     rules:
+#       # Alert if enclave is down
+#       - alert: EnclaveDown
+#         expr: up{job="enclave"} == 0
+#         for: 2m
+#         labels:
+#           severity: critical
+#         annotations:
+#           summary: "Enclave service is down"
+#           description: "The enclave service has been down for more than 2 minutes"
+#
+#       # Alert if memory usage is high
+#       - alert: HighMemoryUsage
+#         expr: process_memory_bytes{job="enclave"} > 1.8e9
+#         for: 5m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "High memory usage detected"
+#           description: "Memory usage is above 1.8GB (90% of 2GB limit)"
+#
+#       # Alert if gRPC error rate is high
+#       - alert: HighGrpcErrorRate
+#         expr: rate(grpc_requests_total{status="error"}[5m]) > 0.01
+#         for: 5m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "High gRPC error rate"
+#           description: "gRPC error rate is above 1% for 5 minutes"
+#
+#       # Alert if attestation is failing
+#       - alert: AttestationFailure
+#         expr: rate(enclave_attestation_failure_total[5m]) > 0
+#         for: 2m
+#         labels:
+#           severity: critical
+#         annotations:
+#           summary: "AMD SEV-SNP attestation failures detected"
+#           description: "Enclave attestation is failing - may indicate security breach"
+#
+# =============================================================================

@@ -26,8 +26,9 @@ export class TradeSyncService {
   private async ensureUser(userUid: string): Promise<void> {
     try {
       await this.userRepo.createUser({ uid: userUid });
-    } catch (error: any) {
-      if (error.code !== 'P2002') throw error;
+    } catch (error: unknown) {
+      const prismaError = error as { code?: string };
+      if (prismaError.code !== 'P2002') {throw error;}
     }
   }
 
@@ -86,11 +87,11 @@ export class TradeSyncService {
 
   async syncExchangeTrades(userUid: string, connectionId: string): Promise<number> {
     const credentials = await this.exchangeConnectionRepo.getDecryptedCredentials(connectionId);
-    if (!credentials) throw new Error('Failed to get exchange credentials');
+    if (!credentials) {throw new Error('Failed to get exchange credentials');}
 
     await this.syncStatusRepo.upsertSyncStatus({
       userUid, exchange: credentials.exchange, lastSyncTime: new Date(),
-      status: 'syncing', totalTrades: 0, errorMessage: null,
+      status: 'syncing', totalTrades: 0, errorMessage: undefined,
     });
 
     try {
@@ -114,7 +115,7 @@ export class TradeSyncService {
       if (trades.length === 0) {
         await this.syncStatusRepo.upsertSyncStatus({
           userUid, exchange: credentials.exchange, lastSyncTime: new Date(),
-          status: 'completed', totalTrades: 0, errorMessage: null,
+          status: 'completed', totalTrades: 0, errorMessage: undefined,
         });
         return 0;
       }
@@ -140,7 +141,7 @@ export class TradeSyncService {
 
       await this.syncStatusRepo.upsertSyncStatus({
         userUid, exchange: credentials.exchange, lastSyncTime: new Date(),
-        status: 'completed', totalTrades: syncedCount, errorMessage: null,
+        status: 'completed', totalTrades: syncedCount, errorMessage: undefined,
       });
 
       return syncedCount;
@@ -235,7 +236,7 @@ export class TradeSyncService {
       const connection = await this.exchangeConnectionRepo.createConnection(testCredentials);
       await this.syncStatusRepo.upsertSyncStatus({
         userUid, exchange, lastSyncTime: undefined, status: 'pending',
-        totalTrades: 0, errorMessage: null,
+        totalTrades: 0, errorMessage: undefined,
       });
 
       return {

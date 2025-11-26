@@ -90,9 +90,34 @@ const startEnclave = async () => {
 
     logger.info('[ENCLAVE] HTTP log server started with SSE streaming');
 
+    // Import DI container for services
+    const { container: diContainer } = await import('tsyringe');
+
+    // Start Prometheus metrics server (production monitoring)
+    if (process.env.METRICS_ENABLED === 'true') {
+      logger.info('[ENCLAVE] Starting Prometheus metrics server...');
+      const { metricsService } = await import('./services/metrics.service');
+      const metricsPort = parseInt(process.env.METRICS_PORT || '9090', 10);
+      metricsService.startMetricsServer(metricsPort);
+      logger.info('[ENCLAVE] Prometheus metrics available', {
+        endpoint: `http://localhost:${metricsPort}/metrics`,
+        port: metricsPort
+      });
+
+      // Register business metrics collector (called on each scrape)
+      const { ExchangeConnectionRepository } = await import('./core/repositories/exchange-connection-repository');
+      const connectionRepo = diContainer.resolve(ExchangeConnectionRepository);
+      metricsService.registerCollector(async () => {
+        const count = await connectionRepo.countAllActiveConnections();
+        metricsService.setGauge('exchange_connections_total', count);
+      });
+      logger.info('[ENCLAVE] Business metrics collectors registered');
+    } else {
+      logger.info('[ENCLAVE] Metrics server disabled (METRICS_ENABLED=false)');
+    }
+
     // Start Daily Sync Scheduler (autonomous 00:00 UTC sync)
     logger.info('[ENCLAVE] Starting daily sync scheduler...');
-    const { container: diContainer } = await import('tsyringe');
     const { DailySyncSchedulerService } = await import('./services/daily-sync-scheduler.service');
     const scheduler = diContainer.resolve(DailySyncSchedulerService);
     scheduler.start();
@@ -129,6 +154,12 @@ const startEnclave = async () => {
 
         // Stop HTTP log server
         await httpLogServer.stop();
+
+        // Stop Prometheus metrics server
+        if (process.env.METRICS_ENABLED === 'true') {
+          const { metricsService } = await import('./services/metrics.service');
+          metricsService.stopMetricsServer();
+        }
 
         // Stop gRPC server
         await enclaveServer.stop();

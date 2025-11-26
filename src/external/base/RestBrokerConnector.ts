@@ -133,12 +133,13 @@ export abstract class RestBrokerConnector extends BaseExchangeConnector {
    * Parse broker-specific error response
    * Override in subclass if broker uses custom error format
    */
-  protected parseBrokerError(error: any): string {
-    if (error.response?.data?.message) {
-      return error.response.data.message;
+  protected parseBrokerError(error: unknown): string {
+    const errorObj = error as { response?: { data?: { message?: string } }; message?: string };
+    if (errorObj.response?.data?.message) {
+      return errorObj.response.data.message;
     }
-    if (error.message) {
-      return error.message;
+    if (errorObj.message) {
+      return errorObj.message;
     }
     return 'Unknown broker error';
   }

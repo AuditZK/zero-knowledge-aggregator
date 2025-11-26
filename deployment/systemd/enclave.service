@@ -1,0 +1,73 @@
+# =============================================================================
+# Track Record Enclave - systemd Service Unit
+# =============================================================================
+# This allows running the enclave with auto-restart and logging WITHOUT Kubernetes
+#
+# Installation:
+#   sudo cp enclave.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable enclave.service
+#   sudo systemctl start enclave.service
+#
+# Usage:
+#   sudo systemctl status enclave    # Check status
+#   sudo systemctl restart enclave   # Restart
+#   sudo journalctl -u enclave -f    # View logs
+# =============================================================================
+
+[Unit]
+Description=Track Record Enclave Worker (AMD SEV-SNP)
+Documentation=https://github.com/your-org/track-record-enclave
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+# Prevent restart if manually stopped
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Working directory
+WorkingDirectory=/opt/track-record-enclave
+
+# Environment file (contains secrets)
+EnvironmentFile=/etc/enclave/.env.production
+
+# Start command (using docker-compose)
+ExecStart=/usr/bin/docker-compose -f /opt/track-record-enclave/docker-compose.prod.yml up -d
+
+# Stop command
+ExecStop=/usr/bin/docker-compose -f /opt/track-record-enclave/docker-compose.prod.yml down
+
+# Reload command (for config updates)
+ExecReload=/usr/bin/docker-compose -f /opt/track-record-enclave/docker-compose.prod.yml restart
+
+# Auto-restart policy (critical for production)
+Restart=on-failure
+RestartSec=10s
+
+# Limit restart attempts (prevent boot loop)
+StartLimitInterval=5min
+StartLimitBurst=3
+
+# Timeout
+TimeoutStartSec=300
+TimeoutStopSec=60
+
+# User/Group (run as root for Docker access)
+User=root
+Group=root
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=enclave
+
+[Install]
+WantedBy=multi-user.target

@@ -7,6 +7,7 @@ Audit sécuritaire pour projets critiques
 import os
 import re
 import json
+import subprocess
 from pathlib import Path
 from collections import defaultdict
 from dataclasses import dataclass
@@ -27,8 +28,8 @@ class FileStats:
 
 class Config:
     """Configuration du scanner"""
-    EXCLUDE_DIRS = {'node_modules', 'dist', 'build', 'coverage', '.git', 'logs', '__pycache__', 'venv'}
-    EXCLUDE_FILES = {'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'}
+    EXCLUDE_DIRS = {'node_modules', 'dist', 'build', 'coverage', '.git', 'logs', '__pycache__', 'venv', 'scripts'}
+    EXCLUDE_FILES = {'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'test-server.ts'}
 
     EXT_NAMES = {
         '.ts': 'TypeScript',
@@ -69,6 +70,12 @@ class Config:
     PERFORMANCE_PATTERNS = {
         'await-in-loop': r'for\s*\([^)]*\)\s*\{[^}]*await\s',  # await dans une boucle
         'sync-in-loop': r'for\s*\([^)]*\)\s*\{[^}]*\.sync\(',  # opération sync dans boucle
+        'foreach-async': r'\.forEach\s*\(\s*async\s*\(',  # forEach avec async (ne fonctionne pas)
+        'regex-in-loop': r'for\s*\([^)]*\)\s*\{[^}]*new\s+RegExp\(',  # RegEx compilée dans boucle
+        'multiple-awaits': r'(await\s+[^;]+;\s*){3,}',  # 3+ awaits séquentiels (peut être parallelisé)
+        'nested-loops': r'for\s*\([^)]*\)\s*\{[^}]*for\s*\(',  # Boucles imbriquées
+        'array-push-loop': r'for\s*\([^)]*\)\s*\{[^}]*\.push\(',  # push dans boucle (inefficace)
+        'no-limit-query': r'\.(find|findMany)\s*\([^)]*\)',  # Requête sans limite potentielle
     }
 
     DOC_PATTERNS = {
@@ -396,6 +403,12 @@ class PerformanceScanner:
         """Scanne les anti-patterns de performance"""
         await_in_loops = []
         sync_in_loops = []
+        foreach_async = []
+        regex_in_loops = []
+        multiple_awaits = []
+        nested_loops = []
+        array_push_loops = []
+        no_limit_queries = []
 
         for f in files:
             if f.extension not in ['.ts', '.js']:
@@ -407,19 +420,63 @@ class PerformanceScanner:
                     content = file.read()
 
                 # await dans boucles
-                for match in re.finditer(Config.PERFORMANCE_PATTERNS['await-in-loop'], content):
+                if re.search(Config.PERFORMANCE_PATTERNS['await-in-loop'], content):
                     await_in_loops.append(f.path)
 
                 # Opérations sync dans boucles
-                for match in re.finditer(Config.PERFORMANCE_PATTERNS['sync-in-loop'], content):
+                if re.search(Config.PERFORMANCE_PATTERNS['sync-in-loop'], content):
                     sync_in_loops.append(f.path)
+
+                # forEach avec async
+                if re.search(Config.PERFORMANCE_PATTERNS['foreach-async'], content):
+                    foreach_async.append(f.path)
+
+                # RegEx dans boucles
+                if re.search(Config.PERFORMANCE_PATTERNS['regex-in-loop'], content):
+                    regex_in_loops.append(f.path)
+
+                # Multiples awaits séquentiels
+                if re.search(Config.PERFORMANCE_PATTERNS['multiple-awaits'], content):
+                    multiple_awaits.append(f.path)
+
+                # Boucles imbriquées
+                if re.search(Config.PERFORMANCE_PATTERNS['nested-loops'], content):
+                    nested_loops.append(f.path)
+
+                # Array.push dans boucles
+                if re.search(Config.PERFORMANCE_PATTERNS['array-push-loop'], content):
+                    array_push_loops.append(f.path)
+
+                # Requêtes sans limite
+                if re.search(Config.PERFORMANCE_PATTERNS['no-limit-query'], content):
+                    no_limit_queries.append(f.path)
+
             except:
                 pass
+
+        total = (len(set(await_in_loops)) + len(set(sync_in_loops)) +
+                 len(set(foreach_async)) + len(set(regex_in_loops)) +
+                 len(set(multiple_awaits)) + len(set(nested_loops)) +
+                 len(set(array_push_loops)))
 
         return {
             'await_in_loops': len(set(await_in_loops)),
             'sync_in_loops': len(set(sync_in_loops)),
-            'total_issues': len(set(await_in_loops)) + len(set(sync_in_loops))
+            'foreach_async': len(set(foreach_async)),
+            'regex_in_loops': len(set(regex_in_loops)),
+            'multiple_awaits': len(set(multiple_awaits)),
+            'nested_loops': len(set(nested_loops)),
+            'array_push_loops': len(set(array_push_loops)),
+            'no_limit_queries': len(set(no_limit_queries)),
+            'await_in_loops_files': sorted(list(set(await_in_loops))),
+            'sync_in_loops_files': sorted(list(set(sync_in_loops))),
+            'foreach_async_files': sorted(list(set(foreach_async))),
+            'regex_in_loops_files': sorted(list(set(regex_in_loops))),
+            'multiple_awaits_files': sorted(list(set(multiple_awaits))),
+            'nested_loops_files': sorted(list(set(nested_loops))),
+            'array_push_loops_files': sorted(list(set(array_push_loops))),
+            'no_limit_queries_files': sorted(list(set(no_limit_queries))),
+            'total_issues': total
         }
 
 
@@ -540,6 +597,379 @@ class DependencyAnalyzer:
             return {}
 
 
+class NpmAuditScanner:
+    """Scanner de vulnérabilités npm"""
+
+    def __init__(self, root_dir: Path):
+        self.root = root_dir
+
+    def scan(self) -> Dict:
+        """Execute npm audit et retourne les résultats"""
+        try:
+            is_windows = os.name == 'nt'
+            npm_cmd = ['cmd', '/c', 'npm'] if is_windows else ['npm']
+
+            result = subprocess.run(
+                npm_cmd + ['audit', '--json'],
+                cwd=self.root,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=30
+            )
+
+            if not result.stdout or result.stdout.strip() == '':
+                return {'available': False, 'error': 'No npm audit output'}
+
+            try:
+                data = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                return {'available': False, 'error': 'Invalid npm audit JSON'}
+
+            vulnerabilities = data.get('vulnerabilities', {})
+
+            by_severity = {
+                'critical': 0,
+                'high': 0,
+                'moderate': 0,
+                'low': 0,
+                'info': 0
+            }
+
+            for vuln_data in vulnerabilities.values():
+                severity = vuln_data.get('severity', 'unknown')
+                if severity in by_severity:
+                    by_severity[severity] += 1
+
+            total = sum(by_severity.values())
+
+            return {
+                'available': True,
+                'total': total,
+                'critical': by_severity['critical'],
+                'high': by_severity['high'],
+                'moderate': by_severity['moderate'],
+                'low': by_severity['low'],
+                'info': by_severity['info']
+            }
+
+        except subprocess.TimeoutExpired:
+            return {'available': False, 'error': 'npm audit timeout'}
+        except FileNotFoundError:
+            return {'available': False, 'error': 'npm not found'}
+        except Exception as e:
+            return {'available': False, 'error': str(e)}
+
+
+class DepcheckScanner:
+    """Scanner de dépendances non utilisées"""
+
+    def __init__(self, root_dir: Path):
+        self.root = root_dir
+
+    def scan(self) -> Dict:
+        """Execute depcheck pour trouver les dépendances inutilisées"""
+        try:
+            is_windows = os.name == 'nt'
+            npx_cmd = ['cmd', '/c', 'npx'] if is_windows else ['npx']
+
+            result = subprocess.run(
+                npx_cmd + ['depcheck', '--json'],
+                cwd=self.root,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=60
+            )
+
+            if not result.stdout or result.stdout.strip() == '':
+                return {'available': False, 'error': 'No depcheck output'}
+
+            try:
+                data = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                return {'available': False, 'error': 'Invalid depcheck JSON'}
+
+            unused_deps = data.get('dependencies', [])
+            unused_dev_deps = data.get('devDependencies', [])
+            missing = data.get('missing', {})
+
+            return {
+                'available': True,
+                'unused_dependencies': len(unused_deps),
+                'unused_dev_dependencies': len(unused_dev_deps),
+                'missing_dependencies': len(missing),
+                'unused_list': unused_deps[:5],  # Top 5
+                'unused_dev_list': unused_dev_deps[:5]  # Top 5
+            }
+
+        except subprocess.TimeoutExpired:
+            return {'available': False, 'error': 'depcheck timeout'}
+        except FileNotFoundError:
+            return {'available': False, 'error': 'npx/depcheck not found'}
+        except Exception as e:
+            return {'available': False, 'error': str(e)}
+
+
+class NpmOutdatedScanner:
+    """Scanner de dépendances obsolètes"""
+
+    def __init__(self, root_dir: Path):
+        self.root = root_dir
+
+    def scan(self) -> Dict:
+        """Execute npm outdated pour trouver les dépendances obsolètes"""
+        try:
+            is_windows = os.name == 'nt'
+            npm_cmd = ['cmd', '/c', 'npm'] if is_windows else ['npm']
+
+            result = subprocess.run(
+                npm_cmd + ['outdated', '--json'],
+                cwd=self.root,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=30
+            )
+
+            # npm outdated retourne code 1 quand il y a des packages obsolètes
+            if not result.stdout or result.stdout.strip() == '':
+                return {'available': True, 'total': 0, 'outdated_list': []}
+
+            try:
+                data = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                return {'available': True, 'total': 0, 'outdated_list': []}
+
+            outdated_list = []
+            for pkg_name, pkg_info in data.items():
+                current = pkg_info.get('current', '')
+                latest = pkg_info.get('latest', '')
+                outdated_list.append({
+                    'name': pkg_name,
+                    'current': current,
+                    'latest': latest
+                })
+
+            return {
+                'available': True,
+                'total': len(outdated_list),
+                'outdated_list': outdated_list[:10]  # Top 10
+            }
+
+        except subprocess.TimeoutExpired:
+            return {'available': False, 'error': 'npm outdated timeout'}
+        except FileNotFoundError:
+            return {'available': False, 'error': 'npm not found'}
+        except Exception as e:
+            return {'available': False, 'error': str(e)}
+
+
+class TypeScriptConfigScanner:
+    """Scanner de configuration TypeScript"""
+
+    def __init__(self, root_dir: Path):
+        self.root = root_dir
+
+    def scan(self) -> Dict:
+        """Analyse la strictness de tsconfig.json et compte les erreurs par option"""
+        tsconfig_path = self.root / 'tsconfig.json'
+
+        if not tsconfig_path.exists():
+            return {'available': False, 'error': 'tsconfig.json not found'}
+
+        try:
+            with open(tsconfig_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                lines = []
+                for line in content.split('\n'):
+                    if '//' in line:
+                        line = line[:line.index('//')]
+                    lines.append(line)
+                clean_content = '\n'.join(lines)
+                data = json.loads(clean_content)
+
+            compiler_options = data.get('compilerOptions', {})
+
+            # Options de strictness à vérifier
+            strict_checks = {
+                'strict': compiler_options.get('strict', False),
+                'noImplicitAny': compiler_options.get('noImplicitAny', False),
+                'strictNullChecks': compiler_options.get('strictNullChecks', False),
+                'strictFunctionTypes': compiler_options.get('strictFunctionTypes', False),
+                'noImplicitReturns': compiler_options.get('noImplicitReturns', False),
+                'noFallthroughCasesInSwitch': compiler_options.get('noFallthroughCasesInSwitch', False),
+                'noUnusedLocals': compiler_options.get('noUnusedLocals', False),
+                'noUnusedParameters': compiler_options.get('noUnusedParameters', False),
+                'noUncheckedIndexedAccess': compiler_options.get('noUncheckedIndexedAccess', False),
+            }
+
+            enabled = sum(1 for v in strict_checks.values() if v)
+            total = len(strict_checks)
+            strictness_percent = (enabled / total * 100) if total > 0 else 0
+            disabled_options = [k for k, v in strict_checks.items() if not v]
+
+            # Compter les erreurs par option désactivée
+            error_counts = {}
+            priority_options = ['noImplicitAny', 'strictNullChecks', 'strictFunctionTypes', 'noImplicitReturns', 'strict']
+            for option in priority_options:
+                if not strict_checks.get(option, False):
+                    errors = self._count_errors_for_option(option, data)
+                    if errors is not None:
+                        error_counts[option] = errors
+
+            return {
+                'available': True,
+                'strict_enabled': strict_checks['strict'],
+                'strictness_percent': round(strictness_percent, 1),
+                'enabled_checks': enabled,
+                'total_checks': total,
+                'disabled_options': disabled_options,
+                'error_counts': error_counts
+            }
+
+        except json.JSONDecodeError as e:
+            return {'available': False, 'error': f'Invalid tsconfig.json: {str(e)}'}
+        except Exception as e:
+            return {'available': False, 'error': str(e)}
+
+    def _count_errors_for_option(self, option: str, tsconfig_data: Dict) -> int:
+        """Compte le nombre d'erreurs TypeScript si on active une option"""
+        try:
+            is_windows = os.name == 'nt'
+            npx_cmd = ['cmd', '/c', 'npx'] if is_windows else ['npx']
+
+            # Créer un tsconfig temporaire avec l'option activée
+            temp_config = tsconfig_data.copy()
+            temp_config['compilerOptions'] = temp_config.get('compilerOptions', {}).copy()
+            temp_config['compilerOptions'][option] = True
+
+            temp_path = self.root / 'tsconfig.temp.json'
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                json.dump(temp_config, f, indent=2)
+
+            try:
+                # Lancer tsc avec le tsconfig temporaire
+                result = subprocess.run(
+                    npx_cmd + ['tsc', '--project', str(temp_path), '--noEmit'],
+                    cwd=self.root,
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    timeout=30
+                )
+
+                # Compter les erreurs dans la sortie
+                error_count = 0
+                if result.stdout:
+                    # Format: "filename(line,col): error TSxxxx: message"
+                    for line in result.stdout.split('\n'):
+                        if ': error TS' in line:
+                            error_count += 1
+
+                return error_count
+
+            finally:
+                # Supprimer le fichier temporaire
+                if temp_path.exists():
+                    temp_path.unlink()
+
+        except subprocess.TimeoutExpired:
+            return None
+        except Exception:
+            return None
+
+
+class ESLintScanner:
+    """Scanner ESLint"""
+
+    def __init__(self, root_dir: Path):
+        self.root = root_dir
+
+    def scan(self) -> Dict:
+        """Execute ESLint et retourne les résultats"""
+        try:
+            # Déterminer la commande selon l'OS
+            is_windows = os.name == 'nt'
+            npx_cmd = ['cmd', '/c', 'npx'] if is_windows else ['npx']
+
+            # Vérifier si ESLint est installé
+            result = subprocess.run(
+                npx_cmd + ['eslint', '--version'],
+                cwd=self.root,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode != 0:
+                return {'available': False, 'error': 'ESLint not installed'}
+
+            # Exécuter ESLint avec format JSON
+            result = subprocess.run(
+                npx_cmd + ['eslint', 'src', '--ext', '.ts,.js', '--format', 'json'],
+                cwd=self.root,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=60
+            )
+
+            # ESLint retourne code 1 s'il y a des erreurs, mais le JSON est toujours valide
+            if not result.stdout or result.stdout.strip() == '':
+                return {'available': True, 'total_errors': 0, 'total_warnings': 0, 'files_with_issues': 0}
+
+            try:
+                data = json.loads(result.stdout)
+            except json.JSONDecodeError as e:
+                return {'available': False, 'error': f'Invalid JSON: {str(e)}'}
+
+            total_errors = 0
+            total_warnings = 0
+            files_with_issues = 0
+            issues_by_rule = defaultdict(int)
+
+            for file_result in data:
+                messages = file_result.get('messages', [])
+                if messages:
+                    files_with_issues += 1
+
+                for msg in messages:
+                    if msg.get('severity') == 2:
+                        total_errors += 1
+                    else:
+                        total_warnings += 1
+
+                    rule_id = msg.get('ruleId', 'unknown')
+                    issues_by_rule[rule_id] += 1
+
+            # Top 5 des règles les plus violées
+            top_rules = sorted(issues_by_rule.items(), key=lambda x: x[1], reverse=True)[:5]
+
+            return {
+                'available': True,
+                'total_errors': total_errors,
+                'total_warnings': total_warnings,
+                'files_with_issues': files_with_issues,
+                'total_issues': total_errors + total_warnings,
+                'top_rules': top_rules
+            }
+
+        except subprocess.TimeoutExpired:
+            return {'available': False, 'error': 'ESLint timeout'}
+        except FileNotFoundError:
+            return {'available': False, 'error': 'npx not found'}
+        except json.JSONDecodeError:
+            return {'available': False, 'error': 'Invalid ESLint output'}
+        except Exception as e:
+            return {'available': False, 'error': str(e)}
+
+
 class ReportGenerator:
     """Générateur de rapports"""
 
@@ -547,7 +977,9 @@ class ReportGenerator:
     def generate(files: List[FileStats], stats_by_ext: Dict,
                  security_issues: List[Dict], deps: Dict, quality: Dict,
                  complexity: Dict, errors: Dict, performance: Dict,
-                 documentation: Dict, duplication: Dict) -> str:
+                 documentation: Dict, duplication: Dict, eslint: Dict,
+                 npm_audit: Dict, depcheck: Dict, npm_outdated: Dict,
+                 tsconfig: Dict) -> str:
         """Génère le rapport d'audit"""
         lines = []
 
@@ -621,6 +1053,130 @@ class ReportGenerator:
                 lines.append(f"     - {lf['lines']} lignes: {lf['file']}")
         lines.append("")
 
+        # ESLint
+        lines.append("[ESLINT]")
+        lines.append("-" * 70)
+        if eslint.get('available'):
+            lines.append(f"  Erreurs:          {eslint.get('total_errors', 0):>8}")
+            lines.append(f"  Warnings:         {eslint.get('total_warnings', 0):>8}")
+            lines.append(f"  Fichiers touches: {eslint.get('files_with_issues', 0):>8}")
+
+            top_rules = eslint.get('top_rules', [])
+            if top_rules:
+                lines.append(f"\n  Top violations de regles:")
+                for rule, count in top_rules[:5]:
+                    lines.append(f"     - {rule}: {count} occurrences")
+
+            if eslint.get('total_issues', 0) > 0:
+                lines.append(f"\n  WARNING: {eslint.get('total_issues', 0)} problemes ESLint detectes")
+        else:
+            lines.append(f"  ESLint non disponible: {eslint.get('error', 'unknown')}")
+        lines.append("")
+
+        # Vulnérabilités npm
+        lines.append("[VULNERABILITES NPM]")
+        lines.append("-" * 70)
+        if npm_audit.get('available'):
+            total_vulns = npm_audit.get('total', 0)
+            lines.append(f"  Total vulnerabilites: {total_vulns:>8}")
+            lines.append(f"  Critiques:            {npm_audit.get('critical', 0):>8}")
+            lines.append(f"  Elevees:              {npm_audit.get('high', 0):>8}")
+            lines.append(f"  Moderees:             {npm_audit.get('moderate', 0):>8}")
+            lines.append(f"  Faibles:              {npm_audit.get('low', 0):>8}")
+
+            critical = npm_audit.get('critical', 0)
+            high = npm_audit.get('high', 0)
+            if critical > 0 or high > 0:
+                lines.append(f"\n  CRITICAL: {critical + high} vulnerabilites critiques/elevees detectees!")
+        else:
+            lines.append(f"  npm audit non disponible: {npm_audit.get('error', 'unknown')}")
+        lines.append("")
+
+        # Dépendances non utilisées
+        lines.append("[DEPENDANCES NON UTILISEES]")
+        lines.append("-" * 70)
+        if depcheck.get('available'):
+            unused = depcheck.get('unused_dependencies', 0)
+            unused_dev = depcheck.get('unused_dev_dependencies', 0)
+            missing = depcheck.get('missing_dependencies', 0)
+
+            lines.append(f"  Dependances inutilisees:     {unused:>8}")
+            lines.append(f"  Dev dependances inutilisees: {unused_dev:>8}")
+            lines.append(f"  Dependances manquantes:      {missing:>8}")
+
+            unused_list = depcheck.get('unused_list', [])
+            if unused_list:
+                lines.append(f"\n  Dependances a supprimer:")
+                for dep in unused_list:
+                    lines.append(f"     - {dep}")
+
+            if unused > 0 or unused_dev > 0:
+                lines.append(f"\n  WARNING: {unused + unused_dev} dependances inutilisees detectees")
+        else:
+            lines.append(f"  depcheck non disponible: {depcheck.get('error', 'unknown')}")
+        lines.append("")
+
+        # Dépendances obsolètes
+        lines.append("[DEPENDANCES OBSOLETES]")
+        lines.append("-" * 70)
+        if npm_outdated.get('available'):
+            total_outdated = npm_outdated.get('total', 0)
+            lines.append(f"  Packages obsoletes:   {total_outdated:>8}")
+
+            outdated_list = npm_outdated.get('outdated_list', [])
+            if outdated_list:
+                lines.append(f"\n  Packages a mettre a jour:")
+                for pkg in outdated_list[:5]:
+                    lines.append(f"     - {pkg['name']}: {pkg['current']} -> {pkg['latest']}")
+
+            if total_outdated > 0:
+                lines.append(f"\n  INFO: {total_outdated} packages peuvent etre mis a jour")
+        else:
+            lines.append(f"  npm outdated non disponible: {npm_outdated.get('error', 'unknown')}")
+        lines.append("")
+
+        # TypeScript Strictness
+        lines.append("[TYPESCRIPT STRICTNESS]")
+        lines.append("-" * 70)
+        if tsconfig.get('available'):
+            strictness = tsconfig.get('strictness_percent', 0)
+            enabled = tsconfig.get('enabled_checks', 0)
+            total = tsconfig.get('total_checks', 0)
+            strict_mode = tsconfig.get('strict_enabled', False)
+
+            lines.append(f"  Mode 'strict':        {'Active' if strict_mode else 'Inactif':>8}")
+            lines.append(f"  Checks actives:       {enabled}/{total}")
+            lines.append(f"  Strictness:           {strictness:>7.1f}%")
+
+            disabled = tsconfig.get('disabled_options', [])
+            if disabled and len(disabled) > 0:
+                lines.append(f"\n  Options desactivees:")
+                for opt in disabled[:5]:
+                    lines.append(f"     - {opt}")
+
+            # Afficher le nombre d'erreurs par option
+            error_counts = tsconfig.get('error_counts', {})
+            if error_counts:
+                lines.append(f"\n  Erreurs TypeScript par option:")
+                option_names = {
+                    'noImplicitAny': 'noImplicitAny',
+                    'strictNullChecks': 'strictNullChecks',
+                    'strictFunctionTypes': 'strictFunctionTypes',
+                    'noImplicitReturns': 'noImplicitReturns',
+                    'strict': 'strict (toutes)'
+                }
+                for option in ['noImplicitAny', 'strictNullChecks', 'strictFunctionTypes', 'noImplicitReturns', 'strict']:
+                    if option in error_counts:
+                        count = error_counts[option]
+                        name = option_names.get(option, option)
+                        lines.append(f"     - {name:25} {count:>5} erreurs")
+
+            if strictness < 50:
+                lines.append(f"\n  WARNING: Configuration TypeScript peu stricte ({strictness:.1f}%)")
+        else:
+            lines.append(f"  tsconfig.json non disponible: {tsconfig.get('error', 'unknown')}")
+        lines.append("")
+
         # Complexité
         lines.append("[COMPLEXITE DU CODE]")
         lines.append("-" * 70)
@@ -653,10 +1209,36 @@ class ReportGenerator:
         # Performance
         lines.append("[PERFORMANCE]")
         lines.append("-" * 70)
-        lines.append(f"  await dans boucles:   {performance.get('await_in_loops', 0):>8} fichiers")
-        lines.append(f"  sync dans boucles:    {performance.get('sync_in_loops', 0):>8} fichiers")
+        lines.append(f"  await dans boucles:        {performance.get('await_in_loops', 0):>5} fichiers")
+        lines.append(f"  sync dans boucles:         {performance.get('sync_in_loops', 0):>5} fichiers")
+        lines.append(f"  forEach avec async:        {performance.get('foreach_async', 0):>5} fichiers")
+        lines.append(f"  RegEx dans boucles:        {performance.get('regex_in_loops', 0):>5} fichiers")
+        lines.append(f"  Multiples awaits seq.:     {performance.get('multiple_awaits', 0):>5} fichiers")
+        lines.append(f"  Boucles imbriquees:        {performance.get('nested_loops', 0):>5} fichiers")
+        lines.append(f"  Array.push dans boucles:   {performance.get('array_push_loops', 0):>5} fichiers")
+        lines.append(f"  Requetes sans limite:      {performance.get('no_limit_queries', 0):>5} fichiers")
+
+        # Afficher les fichiers critiques (await/forEach async)
+        await_files = performance.get('await_in_loops_files', [])
+        if await_files:
+            lines.append(f"\n  Fichiers avec await dans boucles:")
+            for file in await_files[:5]:
+                lines.append(f"     - {file}")
+
+        foreach_files = performance.get('foreach_async_files', [])
+        if foreach_files:
+            lines.append(f"\n  Fichiers avec forEach async (ne fonctionne pas!):")
+            for file in foreach_files[:5]:
+                lines.append(f"     - {file}")
+
+        multiple_awaits_files = performance.get('multiple_awaits_files', [])
+        if multiple_awaits_files:
+            lines.append(f"\n  Fichiers avec awaits sequentiels (parallelisables):")
+            for file in multiple_awaits_files[:5]:
+                lines.append(f"     - {file}")
+
         if performance.get('total_issues', 0) > 0:
-            lines.append("  WARNING: Anti-patterns de performance detectes")
+            lines.append(f"\n  WARNING: {performance.get('total_issues', 0)} anti-patterns de performance detectes")
         lines.append("")
 
         # Documentation
@@ -765,12 +1347,38 @@ class ProjectAuditor:
         dep_analyzer = DependencyAnalyzer(self.root)
         deps = dep_analyzer.analyze()
 
+        # 10. Analyser avec ESLint
+        print("  > Analyse ESLint...")
+        eslint_scanner = ESLintScanner(self.root)
+        eslint = eslint_scanner.scan()
+
+        # 11. Analyser les vulnérabilités npm
+        print("  > Analyse vulnerabilites npm...")
+        npm_audit_scanner = NpmAuditScanner(self.root)
+        npm_audit = npm_audit_scanner.scan()
+
+        # 12. Analyser les dépendances non utilisées
+        print("  > Analyse dependances non utilisees...")
+        depcheck_scanner = DepcheckScanner(self.root)
+        depcheck = depcheck_scanner.scan()
+
+        # 13. Analyser les dépendances obsolètes
+        print("  > Analyse dependances obsoletes...")
+        npm_outdated_scanner = NpmOutdatedScanner(self.root)
+        npm_outdated = npm_outdated_scanner.scan()
+
+        # 14. Analyser la configuration TypeScript
+        print("  > Analyse configuration TypeScript...")
+        tsconfig_scanner = TypeScriptConfigScanner(self.root)
+        tsconfig = tsconfig_scanner.scan()
+
         print("Analyse terminee!\n")
 
         # Générer le rapport
         report = ReportGenerator.generate(
             files, stats_by_ext, security_issues, deps, quality,
-            complexity, errors, performance, documentation, duplication
+            complexity, errors, performance, documentation, duplication, eslint,
+            npm_audit, depcheck, npm_outdated, tsconfig
         )
         print(report)
 

@@ -114,11 +114,11 @@ export class AlpacaApiService {
 
       // Get fill activities (executed trades)
       const activities = await this.alpaca.getAccountActivities({
-        activity_types: 'FILL',
+        activityTypes: 'FILL',
         after: after.toISOString(),
         direction: 'desc',
-        page_size: 500,
-      });
+        pageSize: 500,
+      } as any);
 
       return (activities as AlpacaSDKActivity[]).map((activity) => ({
         id: activity.id,
@@ -147,18 +147,32 @@ export class AlpacaApiService {
     try {
       const account = await this.alpaca.getAccount();
       return {
+        id: account.id || '',
         account_number: account.account_number,
         status: account.status,
         currency: account.currency,
         buying_power: account.buying_power,
+        regt_buying_power: account.regt_buying_power || '',
+        daytrading_buying_power: account.daytrading_buying_power || '',
         cash: account.cash,
         portfolio_value: account.portfolio_value,
         pattern_day_trader: account.pattern_day_trader,
         trading_blocked: account.trading_blocked,
         transfers_blocked: account.transfers_blocked,
         account_blocked: account.account_blocked,
-        trade_suspended_by_user: account.trade_suspended_by_user,
         created_at: account.created_at,
+        trade_suspended_by_user: account.trade_suspended_by_user,
+        multiplier: account.multiplier || '',
+        shorting_enabled: account.shorting_enabled || false,
+        equity: account.equity || '',
+        last_equity: account.last_equity || '',
+        long_market_value: account.long_market_value || '',
+        short_market_value: account.short_market_value || '',
+        initial_margin: account.initial_margin || '',
+        maintenance_margin: account.maintenance_margin || '',
+        last_maintenance_margin: account.last_maintenance_margin || '',
+        sma: account.sma || '',
+        daytrade_count: account.daytrade_count || 0,
       };
     } catch (error) {
       logger.error('Failed to fetch Alpaca account info:', error);

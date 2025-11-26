@@ -29,8 +29,8 @@ export class MemoryProtectionService {
 
   private static async disableCoreDumps(): Promise<void> {
     try {
-      if (process.setrlimit) {
-        process.setrlimit('core', { soft: 0, hard: 0 });
+      if ((process as any).setrlimit) {
+        (process as any).setrlimit('core', { soft: 0, hard: 0 });
         this.coreDumpsDisabled = true;
         logger.info('[MEMORY_PROTECTION] ✓ Core dumps disabled');
         return;
@@ -43,8 +43,9 @@ export class MemoryProtectionService {
       } catch {
         logger.warn('[MEMORY_PROTECTION] ⚠ Core dumps may be enabled - configure at OS level');
       }
-    } catch (error: any) {
-      logger.error('[MEMORY_PROTECTION] Failed to disable core dumps', { error: error.message });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error('[MEMORY_PROTECTION] Failed to disable core dumps', { error: errorMessage });
     }
   }
 
@@ -62,8 +63,9 @@ export class MemoryProtectionService {
       } else {
         logger.warn(`[MEMORY_PROTECTION] ⚠ Weak ptrace protection (scope=${scope})`);
       }
-    } catch (error: any) {
-      logger.error('[MEMORY_PROTECTION] Ptrace protection check failed', { error: error.message });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error('[MEMORY_PROTECTION] Ptrace protection check failed', { error: errorMessage });
     }
   }
 
@@ -79,8 +81,9 @@ export class MemoryProtectionService {
           logger.warn('[MEMORY_PROTECTION] ⚠ mlock not available (missing CAP_IPC_LOCK)');
         }
       }
-    } catch (error: any) {
-      logger.warn('[MEMORY_PROTECTION] Could not check mlock', { error: error.message });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.warn('[MEMORY_PROTECTION] Could not check mlock', { error: errorMessage });
     }
   }
 
@@ -90,8 +93,9 @@ export class MemoryProtectionService {
       crypto.randomFillSync(buffer);
       buffer.fill(0);
       logger.debug(`[MEMORY_PROTECTION] Wiped ${buffer.length} bytes`);
-    } catch (error: any) {
-      logger.error('[MEMORY_PROTECTION] Buffer wipe failed', { error: error.message });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error('[MEMORY_PROTECTION] Buffer wipe failed', { error: errorMessage });
     }
   }
 

@@ -39,7 +39,7 @@ export class TradeRepository {
    * Crée plusieurs trades en une seule transaction
    */
   async createTrades(tradesData: CreateTradeRequest[]): Promise<Trade[]> {
-    const trades = await this.prisma.$transaction(async (prisma) => {
+    const trades = await this.prisma.$transaction(async (prisma: PrismaClient) => {
       return Promise.all(
         tradesData.map(async (tradeData) => {
           const timestamp = tradeData.timestamp || new Date();
@@ -343,7 +343,7 @@ where.exchange = exchange;
    * Crée plusieurs trades en batch avec gestion des doublons
    */
   async batchCreateTrades(tradesData: CreateTradeRequest[]): Promise<Trade[]> {
-    const trades = await this.prisma.$transaction(async (prisma) => {
+    const trades = await this.prisma.$transaction(async (prisma: PrismaClient) => {
       return Promise.all(
         tradesData.map(async (tradeData) => {
           const timestamp = tradeData.timestamp || new Date();
@@ -425,9 +425,9 @@ where.timestamp.lte = filters.endDate;
       price: prismaTrade.price,
       fees: prismaTrade.fees,
       timestamp: prismaTrade.timestamp,
-      exchange: prismaTrade.exchange,
+      exchange: prismaTrade.exchange || undefined,
       status: prismaTrade.status as any,
-      matchedQuantity: prismaTrade.matchedQuantity,
+      matchedQuantity: prismaTrade.matchedQuantity || undefined,
       createdAt: prismaTrade.createdAt,
       updatedAt: prismaTrade.updatedAt,
     };
