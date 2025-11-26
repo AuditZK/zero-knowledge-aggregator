@@ -164,7 +164,7 @@ export class EquitySnapshotAggregator {
    * Fetch balances for all market types
    */
   private async fetchBalancesByMarket(connector: ExtendedConnector, exchange: string) {
-    let balancesByMarket: Record<string, MarketBalanceBreakdown> = {};
+    const balancesByMarket: Record<string, MarketBalanceBreakdown> = {};
     let globalEquity = 0;
     let globalMargin = 0;
     let filteredTypes: MarketType[] = [];
@@ -297,7 +297,7 @@ export class EquitySnapshotAggregator {
     swapSymbols: Set<string>,
     since: Date
   ): Promise<number> {
-    if (swapSymbols.size === 0) return 0;
+    if (swapSymbols.size === 0) {return 0;}
 
     try {
       const fundingData = connector.getFundingFees
@@ -417,17 +417,17 @@ export class EquitySnapshotAggregator {
   }
 
   async backfillIbkrHistoricalSnapshots(userUid: string, exchange: string): Promise<void> {
-    if (exchange !== 'ibkr') return;
+    if (exchange !== 'ibkr') {return;}
     try {
       const connections = (await this.connectionRepo.getConnectionsByUser(userUid)) ?? [];
       const connection = connections.find(c => c.exchange === exchange && c.isActive);
-      if (!connection) return;
+      if (!connection) {return;}
       const credentials = await this.connectionRepo.getDecryptedCredentials(connection.id);
-      if (!credentials) return;
+      if (!credentials) {return;}
       const connector = this.connectorCache.getOrCreate(exchange, credentials) as ExtendedConnector;
-      if (!connector.getHistoricalSummaries) return;
+      if (!connector.getHistoricalSummaries) {return;}
       const historicalData = await connector.getHistoricalSummaries(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
-      if (!historicalData || historicalData.length === 0) return;
+      if (!historicalData || historicalData.length === 0) {return;}
       let processedCount = 0, skippedCount = 0;
       for (const entry of historicalData) {
         // IBKR connector uses 'equity' not 'totalEquityUsd'

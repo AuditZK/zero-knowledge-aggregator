@@ -81,7 +81,7 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
 
       this.logger.info(`Fetching trades from all markets: ${filteredTypes.join(', ')}`);
 
-      let allTrades: ccxt.Trade[] = [];
+      const allTrades: ccxt.Trade[] = [];
       for (const marketType of filteredTypes) {
         try {
           const originalType = this.exchange.options['defaultType'];
@@ -110,11 +110,11 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
       return allTrades
         .filter(trade => this.isInDateRange(this.timestampToDate(trade.timestamp || 0), startDate, endDate))
         .map(trade => ({
-          tradeId: trade.id || `${trade.timestamp}`, symbol: trade.symbol, side: trade.side as 'buy' | 'sell',
+          tradeId: trade.id || `${trade.timestamp}`, symbol: trade.symbol || '', side: trade.side as 'buy' | 'sell',
           quantity: trade.amount || 0, price: trade.price || 0, fee: trade.fee?.cost || 0,
           feeCurrency: trade.fee?.currency || this.defaultCurrency,
           timestamp: this.timestampToDate(trade.timestamp || 0), orderId: trade.order || '',
-          realizedPnl: (trade.info as any)?.realizedPnl || 0,
+          realizedPnl: Number((trade.info as Record<string, unknown>)?.realizedPnl) || 0,
         }));
     });
   }
@@ -136,11 +136,11 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
       const marketTypes = new Set<MarketType>();
 
       for (const [marketId, market] of Object.entries(this.exchange.markets)) {
-        if ((market as any).spot) marketTypes.add('spot');
-        if ((market as any).swap) marketTypes.add('swap');
-        if ((market as any).future) marketTypes.add('future');
-        if ((market as any).option) marketTypes.add('option');
-        if ((market as any).margin) marketTypes.add('margin');
+        if ((market as any).spot) {marketTypes.add('spot');}
+        if ((market as any).swap) {marketTypes.add('swap');}
+        if ((market as any).future) {marketTypes.add('future');}
+        if ((market as any).option) {marketTypes.add('option');}
+        if ((market as any).margin) {marketTypes.add('margin');}
       }
 
       const detected = Array.from(marketTypes);
@@ -159,7 +159,7 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
       const balance = await this.exchange.fetchBalance();
       const usdtBalance = balance['USDT'] || balance['USD'] || balance['USDC'];
 
-      if (!usdtBalance) return { equity: 0, available_margin: 0 };
+      if (!usdtBalance) {return { equity: 0, available_margin: 0 };}
 
       return { equity: usdtBalance.total || 0, available_margin: usdtBalance.free || 0 };
     });
@@ -172,7 +172,7 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
 
       let spotEquity = 0;
       for (const [currency, value] of Object.entries(balance)) {
-        if (['info', 'free', 'used', 'total', 'debt', 'timestamp', 'datetime'].includes(currency)) continue;
+        if (['info', 'free', 'used', 'total', 'debt', 'timestamp', 'datetime'].includes(currency)) {continue;}
         const holding = value as any;
         if (holding && holding.total && Number(holding.total) > 0) {
           spotEquity += Number(holding.total) || 0;
@@ -222,7 +222,7 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
 
       return trades.map(trade => ({
         id: trade.id || `${trade.timestamp}`, timestamp: trade.timestamp || 0,
-        symbol: trade.symbol, side: trade.side as 'buy' | 'sell',
+        symbol: trade.symbol || '', side: trade.side as 'buy' | 'sell',
         price: trade.price || 0, amount: trade.amount || 0,
         cost: trade.cost || (trade.amount || 0) * (trade.price || 0),
         fee: trade.fee ? {

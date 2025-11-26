@@ -5,7 +5,7 @@ import {
   TradeData,
   ExchangeFeature,
 } from '../external/interfaces/IExchangeConnector';
-import { IbkrFlexService } from '../external/ibkr-flex-service';
+import { IbkrFlexService, FlexTrade, FlexAccountSummary } from '../external/ibkr-flex-service';
 import { ExchangeCredentials } from '../types';
 
 export class IbkrFlexConnector extends BaseExchangeConnector {
@@ -48,7 +48,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
   async getBalance(): Promise<BalanceData> {
     return this.withErrorHandling('getBalance', async () => {
       const summaries = await this.fetchFlexData(xml => this.flexService.parseAccountSummary(xml));
-      if (summaries.length === 0) throw new Error('No account data found in Flex report');
+      if (summaries.length === 0) {throw new Error('No account data found in Flex report');}
 
       summaries.sort((a, b) => a.date.localeCompare(b.date));
       const latest = summaries[summaries.length - 1];
@@ -56,14 +56,14 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
     });
   }
 
-  async getHistoricalSummaries(): Promise<Array<{ date: string; breakdown: Record<string, any> }>> {
+  async getHistoricalSummaries(): Promise<Array<{ date: string; breakdown: Record<string, { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number }> }>> {
     return this.withErrorHandling('getHistoricalSummaries', async () => {
       const [summaries, trades] = await Promise.all([
         this.fetchFlexData(xml => this.flexService.parseAccountSummary(xml)),
         this.fetchFlexData(xml => this.flexService.parseTrades(xml))
       ]);
 
-      if (summaries.length === 0) return [];
+      if (summaries.length === 0) {return [];}
 
       const tradesByDate = this.groupTradesByDate(trades);
       return summaries.map(summary => ({
@@ -73,7 +73,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
     });
   }
 
-  private groupTradesByDate(trades: any[]): Map<string, { volume: number; count: number; fees: number }> {
+  private groupTradesByDate(trades: FlexTrade[]): Map<string, { volume: number; count: number; fees: number }> {
     const tradesByDate = new Map<string, { volume: number; count: number; fees: number }>();
 
     for (const trade of trades) {
@@ -94,7 +94,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
     return tradesByDate;
   }
 
-  private mapSummaryToBreakdown(summary: any, tradeMetrics?: { volume: number; count: number; fees: number }): Record<string, any> {
+  private mapSummaryToBreakdown(summary: FlexAccountSummary, tradeMetrics?: { volume: number; count: number; fees: number }): Record<string, { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number }> {
     const totalValue = summary.stockValue + summary.optionValue + summary.commodityValue;
     const totalCash = summary.cash;
     const stockCash = totalValue > 0 ? (summary.stockValue / totalValue) * totalCash : totalCash;
@@ -112,14 +112,14 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
     };
   }
 
-  async getBalanceBreakdown(): Promise<Record<string, any>> {
+  async getBalanceBreakdown(): Promise<Record<string, { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number }>> {
     return this.withErrorHandling('getBalanceBreakdown', async () => {
       const [summaries, trades] = await Promise.all([
         this.fetchFlexData(xml => this.flexService.parseAccountSummary(xml)),
         this.fetchFlexData(xml => this.flexService.parseTrades(xml))
       ]);
 
-      if (summaries.length === 0) throw new Error('No account data found in Flex report');
+      if (summaries.length === 0) {throw new Error('No account data found in Flex report');}
 
       summaries.sort((a, b) => a.date.localeCompare(b.date));
       const latest = summaries[summaries.length - 1];
@@ -161,7 +161,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
   async testConnection(): Promise<boolean> {
     try {
       const isValid = await this.flexService.testConnection(this.flexToken, this.queryId);
-      if (!isValid) this.logger.warn('IBKR Flex connection test failed - invalid token or query ID');
+      if (!isValid) {this.logger.warn('IBKR Flex connection test failed - invalid token or query ID');}
       return isValid;
     } catch (error) {
       this.logger.error('IBKR Flex connection test error', error);

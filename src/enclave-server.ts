@@ -134,12 +134,13 @@ export class EnclaveServer {
       };
 
       callback(null, response);
-    } catch (error: any) {
-      const errorMessage = error?.message || String(error);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
 
       logger.error('ProcessSyncJob failed', {
         error: errorMessage,
-        stack: error?.stack
+        stack: errorStack
       });
 
       callback({
@@ -208,15 +209,18 @@ export class EnclaveServer {
       };
 
       callback(null, response);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+
       logger.error('GetAggregatedMetrics failed', {
-        error: error.message,
-        stack: error.stack
+        error: errorMessage,
+        stack: errorStack
       });
 
       callback({
         code: grpc.status.INTERNAL,
-        message: error.message
+        message: errorMessage
       }, null);
     }
   }
@@ -289,15 +293,18 @@ export class EnclaveServer {
       };
 
       callback(null, response);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+
       logger.error('GetSnapshotTimeSeries failed', {
-        error: error.message,
-        stack: error.stack
+        error: errorMessage,
+        stack: errorStack
       });
 
       callback({
         code: grpc.status.INTERNAL,
-        message: error.message
+        message: errorMessage
       }, null);
     }
   }
@@ -356,15 +363,18 @@ export class EnclaveServer {
       };
 
       callback(null, response);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+
       logger.error('CreateUserConnection failed', {
-        error: error.message,
-        stack: error.stack
+        error: errorMessage,
+        stack: errorStack
       });
 
       callback({
         code: grpc.status.INTERNAL,
-        message: error.message
+        message: errorMessage
       }, null);
     }
   }
@@ -387,9 +397,11 @@ export class EnclaveServer {
       };
 
       callback(null, response);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
       logger.error('HealthCheck failed', {
-        error: error.message
+        error: errorMessage
       });
 
       callback(null, {

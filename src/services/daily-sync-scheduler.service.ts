@@ -55,13 +55,12 @@ export class DailySyncSchedulerService {
         await this.executeDailySync();
       },
       {
-        scheduled: true,
         timezone: 'UTC', // CRITICAL: Force UTC to prevent timezone manipulation
       }
     );
 
-    logger.info('✅ Daily sync scheduler STARTED (executes at 00:00 UTC)');
-    logger.info('⏰ Next sync at: ' + this.getNextSyncTime().toISOString());
+    logger.info('Daily sync scheduler STARTED (executes at 00:00 UTC)');
+    logger.info('Next sync at: ' + this.getNextSyncTime().toISOString());
   }
 
   /**
@@ -94,7 +93,7 @@ export class DailySyncSchedulerService {
     const startTime = Date.now();
 
     logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    logger.info('🔒 DAILY SYNC STARTED (Enclave-Attested Timestamp: ' + new Date().toISOString() + ')');
+    logger.info('DAILY SYNC STARTED (Enclave-Attested Timestamp: ' + new Date().toISOString() + ')');
     logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
     try {
@@ -123,18 +122,18 @@ export class DailySyncSchedulerService {
               // Perform snapshot sync (no rate limiting for automatic daily syncs)
               await this.snapshotAggregator.updateCurrentSnapshot(user.uid, connection.exchange);
 
-              logger.info(`✅ User ${user.uid}/${connection.exchange}: Snapshot created successfully`);
+              logger.info(`User ${user.uid}/${connection.exchange}: Snapshot created successfully`);
               totalSynced++;
 
               // Small delay between exchanges to avoid overwhelming APIs
               await new Promise(resolve => setTimeout(resolve, 500));
             } catch (error) {
-              logger.error(`❌ User ${user.uid}/${connection.exchange}: Snapshot creation failed`, error);
+              logger.error(`User ${user.uid}/${connection.exchange}: Snapshot creation failed`, error);
               totalFailed++;
             }
           }
         } catch (error) {
-          logger.error(`❌ User ${user.uid}: Failed to process user`, error);
+          logger.error(`User ${user.uid}: Failed to process user`, error);
           totalFailed++;
         }
       }
@@ -142,14 +141,14 @@ export class DailySyncSchedulerService {
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
 
       logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      logger.info('📊 DAILY SYNC SUMMARY:');
-      logger.info(`   ✅ Snapshots created: ${totalSynced}`);
-      logger.info(`   ❌ Failed: ${totalFailed}`);
-      logger.info(`   ⏱️  Duration: ${duration}s`);
-      logger.info(`   🕐 Completed at: ${new Date().toISOString()}`);
+      logger.info('DAILY SYNC SUMMARY:');
+      logger.info(`   Snapshots created: ${totalSynced}`);
+      logger.info(`   Failed: ${totalFailed}`);
+      logger.info(`   Duration: ${duration}s`);
+      logger.info(`   Completed at: ${new Date().toISOString()}`);
       logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     } catch (error) {
-      logger.error('❌ DAILY SYNC FAILED', error);
+      logger.error('DAILY SYNC FAILED', error);
     } finally {
       this.isRunning = false;
     }
@@ -162,7 +161,7 @@ export class DailySyncSchedulerService {
    * be used for testing or emergency scenarios. All manual triggers are logged.
    */
   async triggerManualSync(): Promise<void> {
-    logger.warn('⚠️  MANUAL SYNC TRIGGERED (bypassing scheduler)');
+    logger.warn('MANUAL SYNC TRIGGERED (bypassing scheduler)');
     await this.executeDailySync();
   }
 

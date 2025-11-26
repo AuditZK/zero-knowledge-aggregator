@@ -17,6 +17,20 @@ export interface AttestationResult {
   errorMessage?: string;
 }
 
+interface SevSnpReport {
+  measurement: string;
+  reportData?: string;
+  platformVersion?: number;
+  chipId?: string;
+  chip_id?: string;
+  signature: string;
+  version?: number;
+  guest_svn?: number;
+  guestSvn?: number;
+  policy?: number;
+  [key: string]: unknown; // Allow additional properties
+}
+
 export class SevSnpAttestationService {
   private readonly SEV_GUEST_DEVICE = '/dev/sev-guest';
   private readonly AZURE_IMDS_ENDPOINT = 'http://169.254.169.254/metadata/attested/document';
@@ -41,12 +55,13 @@ export class SevSnpAttestationService {
         enclave: true,
         sevSnpEnabled: true,
         measurement: report.measurement,
-        reportData: report.reportData,
+        reportData: report.reportData ?? null,
         platformVersion: report.platformVersion?.toString() || null
       };
-    } catch (error: any) {
-      logger.error('AMD SEV-SNP attestation failed', { error: error.message });
-      return this.createFailureResult(error.message);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error('AMD SEV-SNP attestation failed', { error: errorMessage });
+      return this.createFailureResult(errorMessage);
     }
   }
 
@@ -64,7 +79,7 @@ export class SevSnpAttestationService {
     } catch { return false; }
   }
 
-  private async fetchAttestation(): Promise<any> {
+  private async fetchAttestation(): Promise<SevSnpReport> {
     // Linux /dev/sev-guest
     if (fs.existsSync(this.SEV_GUEST_DEVICE)) {
       return this.getSevGuestAttestation();
@@ -80,41 +95,42 @@ export class SevSnpAttestationService {
     throw new Error('No SEV-SNP attestation method available');
   }
 
-  private async getSevGuestAttestation(): Promise<any> {
+  private async getSevGuestAttestation(): Promise<SevSnpReport> {
     const tools = ['/opt/amd/sev-guest/bin/get-report', '/usr/bin/snpguest'];
     for (const tool of tools) {
       if (fs.existsSync(tool)) {
         try {
           const { stdout } = await execAsync(`${tool} --format json`);
-          return JSON.parse(stdout);
-        } catch (error: any) {
-          logger.warn(`SEV guest tool ${tool} failed: ${error.message}`);
+          return JSON.parse(stdout) as SevSnpReport;
+        } catch (error: unknown) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          logger.warn(`SEV guest tool ${tool} failed: ${errorMessage}`);
         }
       }
     }
     throw new Error('No SEV-SNP guest tools found');
   }
 
-  private async getAzureAttestation(): Promise<any> {
+  private async getAzureAttestation(): Promise<SevSnpReport> {
     const response = await fetch(this.AZURE_IMDS_ENDPOINT, {
       headers: { 'Metadata': 'true' }
     });
     if (!response.ok) {throw new Error(`Azure IMDS failed: ${response.statusText}`);}
-    const doc = await response.json();
-    return doc.sevSnpReport || {};
+    const doc = await response.json() as { sevSnpReport?: SevSnpReport };
+    return doc.sevSnpReport || {} as SevSnpReport;
   }
 
-  private async getGcpAttestation(): Promise<any> {
+  private async getGcpAttestation(): Promise<SevSnpReport> {
     const response = await fetch(this.GCP_METADATA_ENDPOINT, {
       headers: { 'Metadata-Flavor': 'Google' }
     });
     if (!response.ok) {throw new Error(`GCP metadata failed: ${response.statusText}`);}
-    return response.json();
+    return response.json() as Promise<SevSnpReport>;
   }
 
-  private async verifySignature(report: any): Promise<boolean> {
+  private async verifySignature(report: SevSnpReport): Promise<boolean> {
     try {
-      const vcekPubKey = await this.getVcekPublicKey(report.chipId || report.chip_id);
+      const vcekPubKey = await this.getVcekPublicKey(report.chipId || report.chip_id || '');
       const signatureBuffer = Buffer.from(report.signature, 'hex');
 
       if (signatureBuffer.length !== 96) {
@@ -124,8 +140,9 @@ export class SevSnpAttestationService {
       const verify = crypto.createVerify('SHA384');
       verify.update(this.serializeReport(report));
       return verify.verify({ key: vcekPubKey, format: 'pem', type: 'spki' }, signatureBuffer);
-    } catch (error: any) {
-      logger.error('Signature verification failed', { error: error.message });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error('Signature verification failed', { error: errorMessage });
       return false;
     }
   }
@@ -135,7 +152,7 @@ export class SevSnpAttestationService {
       const response = await fetch(`https://kdsintf.amd.com/vcek/v1/${chipId}`);
       if (!response.ok) {throw new Error(`AMD KDS request failed`);}
       return response.text();
-    } catch (error: any) {
+    } catch (error: unknown) {
       const cachedVcek = process.env.AMD_VCEK_CACHE_PATH || '/etc/enclave/vcek.pem';
       if (fs.existsSync(cachedVcek)) {
         return fs.readFileSync(cachedVcek, 'utf8');
@@ -144,7 +161,7 @@ export class SevSnpAttestationService {
     }
   }
 
-  private serializeReport(report: any): Buffer {
+  private serializeReport(report: SevSnpReport): Buffer {
     const buffer = Buffer.alloc(720);
     let offset = 0;
     buffer.writeUInt32LE(report.version || 0, offset); offset += 4;
@@ -160,7 +177,7 @@ export class SevSnpAttestationService {
         signal: AbortSignal.timeout(2000)
       });
       if (response.ok) {
-        const metadata = await response.json();
+        const metadata = await response.json() as { compute?: { securityType?: string } };
         return metadata.compute?.securityType === 'ConfidentialVM';
       }
     } catch {}

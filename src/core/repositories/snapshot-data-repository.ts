@@ -26,7 +26,7 @@ export class SnapshotDataRepository {
         unrealizedPnL: snapshot.unrealizedPnL,
         deposits: snapshot.deposits,
         withdrawals: snapshot.withdrawals,
-        breakdown_by_market: snapshot.breakdown_by_market as Prisma.JsonValue,
+        breakdown_by_market: (snapshot.breakdown_by_market || undefined) as Prisma.InputJsonValue,
         updatedAt: new Date(),
       },
       create: {
@@ -38,7 +38,7 @@ export class SnapshotDataRepository {
         unrealizedPnL: snapshot.unrealizedPnL,
         deposits: snapshot.deposits || 0,
         withdrawals: snapshot.withdrawals || 0,
-        breakdown_by_market: snapshot.breakdown_by_market as Prisma.JsonValue,
+        breakdown_by_market: (snapshot.breakdown_by_market || undefined) as Prisma.InputJsonValue,
       },
     });
 
@@ -55,8 +55,8 @@ export class SnapshotDataRepository {
 
     if (startDate || endDate) {
       where.timestamp = {};
-      if (startDate) where.timestamp.gte = startDate;
-      if (endDate) where.timestamp.lte = endDate;
+      if (startDate) {where.timestamp.gte = startDate;}
+      if (endDate) {where.timestamp.lte = endDate;}
     }
 
     if (exchange) {

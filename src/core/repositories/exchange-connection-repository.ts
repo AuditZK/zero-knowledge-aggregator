@@ -255,6 +255,12 @@ export class ExchangeConnectionRepository {
     });
   }
 
+  async countAllActiveConnections(): Promise<number> {
+    return this.prisma.exchangeConnection.count({
+      where: { isActive: true },
+    });
+  }
+
   private mapPrismaConnectionToConnection(prismaConnection: PrismaExchangeConnection): ExchangeConnection {
     return {
       id: prismaConnection.id,
@@ -263,8 +269,8 @@ export class ExchangeConnectionRepository {
       label: prismaConnection.label,
       encryptedApiKey: prismaConnection.encryptedApiKey,
       encryptedApiSecret: prismaConnection.encryptedApiSecret,
-      encryptedPassphrase: prismaConnection.encryptedPassphrase,
-      credentialsHash: prismaConnection.credentialsHash,
+      encryptedPassphrase: prismaConnection.encryptedPassphrase || undefined,
+      credentialsHash: prismaConnection.credentialsHash || undefined,
       isActive: prismaConnection.isActive,
       createdAt: prismaConnection.createdAt,
       updatedAt: prismaConnection.updatedAt,

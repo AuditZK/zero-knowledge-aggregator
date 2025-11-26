@@ -6,6 +6,7 @@ import { ExchangeConnectionRepository } from './core/repositories/exchange-conne
 import { TradeRepository } from './core/repositories/trade-repository';
 import { UserRepository } from './core/repositories/user-repository';
 import { getLogger } from './utils/secure-enclave-logger';
+import { SnapshotData } from './types';
 
 const logger = getLogger('EnclaveWorker');
 
@@ -36,7 +37,7 @@ export interface SyncJobResponse {
  * Main entry point for the enclave. Orchestrates all sensitive operations:
  * - Syncing trades from exchanges (using decrypted credentials)
  * - Processing individual trades
- * - Aggregating into hourly returns
+ * - Aggregating into daily snapshots 
  * - Returning only aggregated, safe data to the gateway
  *
  * CRITICAL: This worker runs inside the AMD SEV-SNP enclave.
@@ -99,7 +100,7 @@ export class EnclaveWorker {
         duration: Date.now() - startTime
       });
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       return this.handleSyncError(error, userUid, exchange);
     }
   }
@@ -160,9 +161,9 @@ export class EnclaveWorker {
   private async updateSnapshotsForExchanges(
     userUid: string,
     exchange?: string
-  ): Promise<{ snapshotsCount: number; latestSnapshot: any }> {
+  ): Promise<{ snapshotsCount: number; latestSnapshot: SnapshotData | null }> {
     let snapshotsCount = 0;
-    let latestSnapshot = null;
+    let latestSnapshot: SnapshotData | null = null;
 
     // Get all exchanges for the user if not specified
     const exchanges = exchange
@@ -201,9 +202,10 @@ export class EnclaveWorker {
         }
 
         logger.info(`Snapshot updated for ${userUid}/${ex}`, { snapshotsCount });
-      } catch (error: any) {
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
         logger.error(`Failed to update snapshot for ${userUid}/${ex}`, {
-          error: error.message
+          error: errorMessage
         });
         // Continue with other exchanges
       }
@@ -220,7 +222,7 @@ export class EnclaveWorker {
     exchange?: string;
     synced: number;
     snapshotsCount: number;
-    latestSnapshot: any;
+    latestSnapshot: SnapshotData | null;
     duration: number;
   }): SyncJobResponse {
     const { userUid, exchange, synced, snapshotsCount, latestSnapshot, duration } = params;
@@ -265,13 +267,13 @@ export class EnclaveWorker {
    * Handle unexpected errors during sync
    */
   private handleSyncError(
-    error: any,
+    error: unknown,
     userUid: string,
     exchange?: string
   ): SyncJobResponse {
-    const errorMessage = error?.message || error?.toString() || 'Unknown error';
-    const errorStack = error?.stack || 'No stack trace available';
-    const errorName = error?.name || error?.constructor?.name || 'Error';
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack || 'No stack trace available' : 'No stack trace available';
+    const errorName = error instanceof Error ? error.name : 'Error';
 
     logger.error('Enclave sync job failed', {
       userUid,
@@ -395,11 +397,12 @@ export class EnclaveWorker {
         deposits: snapshot.deposits,
         withdrawals: snapshot.withdrawals
       }));
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error('Failed to get snapshot time series', {
         userUid,
         exchange,
-        error: error.message
+        error: errorMessage
       });
       throw error;
     }
@@ -481,15 +484,17 @@ export class EnclaveWorker {
         success: true,
         userUid
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
       logger.error('Failed to create user connection', {
-        error: error.message,
-        stack: error.stack
+        error: errorMessage,
+        stack: errorStack
       });
 
       return {
         success: false,
-        error: error.message || 'Failed to create user connection'
+        error: errorMessage || 'Failed to create user connection'
       };
     }
   }
