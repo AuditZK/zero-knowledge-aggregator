@@ -128,7 +128,6 @@ function checkMemory(): HealthCheckResult {
 
   // Heap size in MB
   const heapUsedMB = memUsage.heapUsed / 1024 / 1024;
-  const heapTotalMB = memUsage.heapTotal / 1024 / 1024;
   const maxHeapMB = 1800; // 1.8GB (leave buffer for 2GB limit)
 
   if (heapUsedMB > maxHeapMB) {

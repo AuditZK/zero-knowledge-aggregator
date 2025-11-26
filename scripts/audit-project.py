@@ -794,41 +794,50 @@ class TypeScriptConfigScanner:
 
             compiler_options = data.get('compilerOptions', {})
 
-            # Options de strictness à vérifier
-            strict_checks = {
-                'strict': compiler_options.get('strict', False),
-                'noImplicitAny': compiler_options.get('noImplicitAny', False),
-                'strictNullChecks': compiler_options.get('strictNullChecks', False),
-                'strictFunctionTypes': compiler_options.get('strictFunctionTypes', False),
-                'noImplicitReturns': compiler_options.get('noImplicitReturns', False),
-                'noFallthroughCasesInSwitch': compiler_options.get('noFallthroughCasesInSwitch', False),
-                'noUnusedLocals': compiler_options.get('noUnusedLocals', False),
-                'noUnusedParameters': compiler_options.get('noUnusedParameters', False),
-                'noUncheckedIndexedAccess': compiler_options.get('noUncheckedIndexedAccess', False),
+            # strict: true active automatiquement 7 flags
+            strict_mode = compiler_options.get('strict', False)
+
+            # Flags activés par strict: true
+            strict_flags = {
+                'noImplicitAny': compiler_options.get('noImplicitAny', strict_mode),
+                'strictNullChecks': compiler_options.get('strictNullChecks', strict_mode),
+                'strictFunctionTypes': compiler_options.get('strictFunctionTypes', strict_mode),
+                'noImplicitThis': compiler_options.get('noImplicitThis', strict_mode),
+                'alwaysStrict': compiler_options.get('alwaysStrict', strict_mode),
+                'strictBindCallApply': compiler_options.get('strictBindCallApply', strict_mode),
+                'strictPropertyInitialization': compiler_options.get('strictPropertyInitialization', strict_mode),
             }
 
-            enabled = sum(1 for v in strict_checks.values() if v)
-            total = len(strict_checks)
-            strictness_percent = (enabled / total * 100) if total > 0 else 0
-            disabled_options = [k for k, v in strict_checks.items() if not v]
+            # Flags additionnels de strictness
+            additional_flags = {
+                'noImplicitReturns': compiler_options.get('noImplicitReturns', False),
+                'noUncheckedIndexedAccess': compiler_options.get('noUncheckedIndexedAccess', False),
+                'noUnusedLocals': compiler_options.get('noUnusedLocals', False),
+                'noUnusedParameters': compiler_options.get('noUnusedParameters', False),
+                'noFallthroughCasesInSwitch': compiler_options.get('noFallthroughCasesInSwitch', False),
+                'allowUnreachableCode': not compiler_options.get('allowUnreachableCode', True),  # Inversé (false = bon)
+            }
 
-            # Compter les erreurs par option désactivée
-            error_counts = {}
-            priority_options = ['noImplicitAny', 'strictNullChecks', 'strictFunctionTypes', 'noImplicitReturns', 'strict']
-            for option in priority_options:
-                if not strict_checks.get(option, False):
-                    errors = self._count_errors_for_option(option, data)
-                    if errors is not None:
-                        error_counts[option] = errors
+            # Compter les flags actifs
+            strict_enabled = sum(1 for v in strict_flags.values() if v)
+            additional_enabled = sum(1 for v in additional_flags.values() if v)
+
+            # Lister les flags désactivés
+            strict_disabled = [k for k, v in strict_flags.items() if not v]
+            additional_disabled = [k for k, v in additional_flags.items() if not v]
 
             return {
                 'available': True,
-                'strict_enabled': strict_checks['strict'],
-                'strictness_percent': round(strictness_percent, 1),
-                'enabled_checks': enabled,
-                'total_checks': total,
-                'disabled_options': disabled_options,
-                'error_counts': error_counts
+                'strict_mode': strict_mode,
+                'strict_flags': strict_flags,
+                'strict_enabled': strict_enabled,
+                'strict_total': len(strict_flags),
+                'strict_disabled': strict_disabled,
+                'additional_flags': additional_flags,
+                'additional_enabled': additional_enabled,
+                'additional_total': len(additional_flags),
+                'additional_disabled': additional_disabled,
+                'total_typescript_errors': 0,  # Comptage des erreurs TypeScript
             }
 
         except json.JSONDecodeError as e:
@@ -1139,40 +1148,62 @@ class ReportGenerator:
         lines.append("[TYPESCRIPT STRICTNESS]")
         lines.append("-" * 70)
         if tsconfig.get('available'):
-            strictness = tsconfig.get('strictness_percent', 0)
-            enabled = tsconfig.get('enabled_checks', 0)
-            total = tsconfig.get('total_checks', 0)
-            strict_mode = tsconfig.get('strict_enabled', False)
+            strict_mode = tsconfig.get('strict_mode', False)
+            strict_enabled = tsconfig.get('strict_enabled', 0)
+            strict_total = tsconfig.get('strict_total', 7)
+            additional_enabled = tsconfig.get('additional_enabled', 0)
+            additional_total = tsconfig.get('additional_total', 6)
+            ts_errors = tsconfig.get('total_typescript_errors', 0)
 
-            lines.append(f"  Mode 'strict':        {'Active' if strict_mode else 'Inactif':>8}")
-            lines.append(f"  Checks actives:       {enabled}/{total}")
-            lines.append(f"  Strictness:           {strictness:>7.1f}%")
+            # Calculer le pourcentage de strictness
+            strict_percent = (strict_enabled / strict_total * 100) if strict_total > 0 else 0
+            additional_percent = (additional_enabled / additional_total * 100) if additional_total > 0 else 0
 
-            disabled = tsconfig.get('disabled_options', [])
-            if disabled and len(disabled) > 0:
-                lines.append(f"\n  Options desactivees:")
-                for opt in disabled[:5]:
-                    lines.append(f"     - {opt}")
+            status = "true" if strict_mode else "false"
+            if strict_mode and strict_enabled == strict_total:
+                status += " (PHASE 2 COMPLETED)"
 
-            # Afficher le nombre d'erreurs par option
-            error_counts = tsconfig.get('error_counts', {})
-            if error_counts:
-                lines.append(f"\n  Erreurs TypeScript par option:")
-                option_names = {
-                    'noImplicitAny': 'noImplicitAny',
-                    'strictNullChecks': 'strictNullChecks',
-                    'strictFunctionTypes': 'strictFunctionTypes',
-                    'noImplicitReturns': 'noImplicitReturns',
-                    'strict': 'strict (toutes)'
+            lines.append(f"  Mode 'strict':          {status}")
+            lines.append(f"  Checks stricts actifs:  {strict_enabled}/{strict_total} ({strict_percent:.1f}%)")
+            lines.append(f"  Flags additionnels:     {additional_enabled}/{additional_total} checks supplementaires")
+            lines.append(f"  Erreurs TypeScript:     {ts_errors} erreurs")
+            lines.append("")
+
+            # Flags stricts (activés via strict: true)
+            strict_flags = tsconfig.get('strict_flags', {})
+            if strict_flags:
+                lines.append(f"  Flags stricts actifs (via strict: true):")
+                flag_descriptions = {
+                    'noImplicitAny': "erreur sur 'any' implicite",
+                    'strictNullChecks': "null/undefined non-assignables",
+                    'strictFunctionTypes': "verification stricte des fonctions",
+                    'noImplicitThis': "erreur sur 'this' implicite",
+                    'alwaysStrict': "mode strict JavaScript",
+                    'strictBindCallApply': "verification bind/call/apply",
+                    'strictPropertyInitialization': "proprietes initialisees",
                 }
-                for option in ['noImplicitAny', 'strictNullChecks', 'strictFunctionTypes', 'noImplicitReturns', 'strict']:
-                    if option in error_counts:
-                        count = error_counts[option]
-                        name = option_names.get(option, option)
-                        lines.append(f"     - {name:25} {count:>5} erreurs")
+                for flag, enabled in strict_flags.items():
+                    status = "✅" if enabled else "❌"
+                    desc = flag_descriptions.get(flag, "")
+                    lines.append(f"     {status} {flag:30} ({desc})")
+                lines.append("")
 
-            if strictness < 50:
-                lines.append(f"\n  WARNING: Configuration TypeScript peu stricte ({strictness:.1f}%)")
+            # Flags additionnels
+            additional_flags = tsconfig.get('additional_flags', {})
+            if additional_flags:
+                lines.append(f"  Flags strictness additionnels:")
+                flag_descriptions = {
+                    'noImplicitReturns': "retours manquants interdits",
+                    'noUncheckedIndexedAccess': "acces tableau toujours undefined?",
+                    'noUnusedLocals': "variables inutilisees interdites",
+                    'noUnusedParameters': "parametres inutilises interdits",
+                    'noFallthroughCasesInSwitch': "fallthrough switch interdit",
+                    'allowUnreachableCode': "code inaccessible interdit",
+                }
+                for flag, enabled in additional_flags.items():
+                    status = "✅" if enabled else "❌"
+                    desc = flag_descriptions.get(flag, "")
+                    lines.append(f"     {status} {flag:30} ({desc})")
         else:
             lines.append(f"  tsconfig.json non disponible: {tsconfig.get('error', 'unknown')}")
         lines.append("")

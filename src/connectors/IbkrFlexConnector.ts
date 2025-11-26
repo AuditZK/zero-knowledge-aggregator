@@ -12,7 +12,6 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
   private flexService: IbkrFlexService;
   private flexToken: string;
   private queryId: string;
-  private accountId?: string;
 
   /**
    * @param credentials Exchange credentials (apiKey=token, apiSecret=queryId)
@@ -26,7 +25,6 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
 
     this.flexToken = credentials.apiKey;
     this.queryId = credentials.apiSecret;
-    this.accountId = credentials.passphrase;
     // Use injected singleton or create new instance (for backwards compatibility/testing)
     this.flexService = flexService || new IbkrFlexService();
   }
@@ -51,7 +49,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
       if (summaries.length === 0) {throw new Error('No account data found in Flex report');}
 
       summaries.sort((a, b) => a.date.localeCompare(b.date));
-      const latest = summaries[summaries.length - 1];
+      const latest = summaries[summaries.length - 1]!;
       return this.createBalanceData(latest.cash, latest.netLiquidationValue, 'USD');
     });
   }
@@ -122,7 +120,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
       if (summaries.length === 0) {throw new Error('No account data found in Flex report');}
 
       summaries.sort((a, b) => a.date.localeCompare(b.date));
-      const latest = summaries[summaries.length - 1];
+      const latest = summaries[summaries.length - 1]!;
       const tradesByDate = this.groupTradesByDate(trades);
       return this.mapSummaryToBreakdown(latest, tradesByDate.get(latest.date));
     });

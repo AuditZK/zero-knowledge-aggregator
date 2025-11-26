@@ -12,7 +12,6 @@ import {
   AggregatedMetricsRequestSchema,
   SnapshotTimeSeriesRequestSchema,
   CreateUserConnectionRequestSchema,
-  HealthCheckRequestSchema,
   validateRequest
 } from './validation/grpc-schemas';
 
@@ -383,7 +382,7 @@ export class EnclaveServer {
    * Handle HealthCheck RPC
    */
   private async healthCheck(
-    call: grpc.ServerUnaryCall<any, any>,
+    _call: grpc.ServerUnaryCall<any, any>,
     callback: grpc.sendUnaryData<any>
   ): Promise<void> {
     try {

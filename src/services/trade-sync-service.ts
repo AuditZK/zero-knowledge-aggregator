@@ -81,7 +81,8 @@ export class TradeSyncService {
       };
     } catch (error) {
       logger.error(`Real-time sync failed for user ${userUid}`, error);
-      return { success: false, message: `Real-time sync failed: ${error.message}`, synced: 0 };
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return { success: false, message: `Real-time sync failed: ${errorMessage}`, synced: 0 };
     }
   }
 
@@ -146,9 +147,10 @@ export class TradeSyncService {
 
       return syncedCount;
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       await this.syncStatusRepo.upsertSyncStatus({
         userUid, exchange: credentials.exchange, lastSyncTime: new Date(),
-        status: 'error', totalTrades: 0, errorMessage: error.message,
+        status: 'error', totalTrades: 0, errorMessage,
       });
       throw error;
     }
@@ -184,7 +186,8 @@ export class TradeSyncService {
       };
     } catch (error) {
       logger.error(`Trade context sync failed for user ${userUid}`, error);
-      return { success: false, synced: 0, message: `Trade context sync failed: ${error.message}` };
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return { success: false, synced: 0, message: `Trade context sync failed: ${errorMessage}` };
     }
   }
 
@@ -246,13 +249,14 @@ export class TradeSyncService {
       };
     } catch (error) {
       logger.error('Failed to add exchange connection', error);
-      if (error.message?.includes('UNIQUE constraint failed')) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('UNIQUE constraint failed')) {
         return {
           success: false,
           message: `A connection for ${exchange} with label "${label}" already exists. Please use a different label.`,
         };
       }
-      return { success: false, message: `Failed to add exchange connection: ${error.message}` };
+      return { success: false, message: `Failed to add exchange connection: ${errorMessage}` };
     }
   }
 }

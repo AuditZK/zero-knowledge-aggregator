@@ -30,7 +30,7 @@ export class DatabaseMigrationService {
 
   private async isMigrationApplied(name: string): Promise<boolean> {
     const result = await this.prisma.$queryRaw<{count: number}[]>`SELECT COUNT(*) as count FROM migrations WHERE name = ${name}`;
-    return result[0].count > 0;
+    return result[0]!.count > 0;
   }
 
   private async markMigrationApplied(name: string): Promise<void> {

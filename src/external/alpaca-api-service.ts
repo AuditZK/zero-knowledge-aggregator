@@ -52,7 +52,7 @@ export class AlpacaApiService {
   private alpaca: Alpaca;
   private isPaper: boolean;
 
-  constructor(private credentials: ExchangeCredentials) {
+  constructor(credentials: ExchangeCredentials) {
     // Determine if using paper trading based on API key prefix
     this.isPaper = credentials.apiKey.startsWith('PK');
 
@@ -72,7 +72,7 @@ export class AlpacaApiService {
    */
   async testConnection(): Promise<boolean> {
     try {
-      const account = await this.alpaca.getAccount();
+      await this.alpaca.getAccount();
       return true;
     } catch (error) {
       logger.error('Alpaca connection test failed', error);

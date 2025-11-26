@@ -36,7 +36,7 @@ export class SevSnpAttestationService {
   private readonly AZURE_IMDS_ENDPOINT = 'http://169.254.169.254/metadata/attested/document';
   private readonly GCP_METADATA_ENDPOINT = 'http://metadata.google.internal/computeMetadata/v1/instance/confidential-computing/attestation-report';
 
-  async getAttestationReport(reportData?: Buffer): Promise<AttestationResult> {
+  async getAttestationReport(_reportData?: Buffer): Promise<AttestationResult> {
     if (!this.isSevSnpAvailable()) {
       logger.warn('AMD SEV-SNP not available on this system');
       return this.createFailureResult('SEV-SNP hardware not available');

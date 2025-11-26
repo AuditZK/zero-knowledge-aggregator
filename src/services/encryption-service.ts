@@ -2,7 +2,6 @@ import * as crypto from 'crypto';
 
 export class EncryptionService {
   private static readonly ALGORITHM = 'aes-256-gcm';
-  private static readonly KEY_LENGTH = 32;
   private static readonly IV_LENGTH = 16;
   private static readonly TAG_LENGTH = 16;
 
