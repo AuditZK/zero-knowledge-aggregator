@@ -1,34 +1,34 @@
 ======================================================================
   TRACK RECORD ENCLAVE - AUDIT REPORT
 ======================================================================
-  Date: 2025-11-26 01:07
+  Date: 2025-11-26 02:59
 ======================================================================
 
 [RESUME]
 ----------------------------------------------------------------------
-  Total lignes:       13,721
-  Lignes de code:     10,070
-  Fichiers:               71
+  Total lignes:       15,248
+  Lignes de code:     11,565
+  Fichiers:               72
   Dependances:            24
 
 [LIGNES PAR TYPE]
 ----------------------------------------------------------------------
-  TypeScript        8,343 lignes   6,835 code   38 fichiers
-  Markdown          2,577 lignes   1,472 code    6 fichiers
-  JSON                540 lignes     538 code    5 fichiers
+  TypeScript        8,397 lignes   6,877 code   38 fichiers
+  Markdown          2,789 lignes   1,689 code    5 fichiers
+  JSON              1,716 lignes   1,703 code    5 fichiers
+  .yml                487 lignes     209 code    5 fichiers
   .sh                 428 lignes     278 code    3 fichiers
-  .yml                410 lignes     145 code    3 fichiers
-  .txt                404 lignes     252 code    5 fichiers
+  .txt                412 lignes     259 code    5 fichiers
   .example            280 lignes      51 code    2 fichiers
   Prisma              177 lignes     125 code    1 fichiers
 
 [PLUS GROS FICHIERS]
 ----------------------------------------------------------------------
-    558 lignes  src\enclave-server.ts
+   1478 lignes  monitoring\grafana-dashboards\enclave-dashboard.json
+   1129 lignes  SECURITY.md
+    557 lignes  src\enclave-server.ts
     532 lignes  src\enclave-worker.ts
     524 lignes  README.md
-    510 lignes  PRODUCTION_SETUP.md
-    466 lignes  src\services\equity-snapshot-aggregator.ts
 
 [ALERTES SECURITE] (8 detectees)
 ----------------------------------------------------------------------
@@ -40,9 +40,10 @@
   @ts-ignore:              0 occurrences
   Type 'any':              0 occurrences
 
-  Fichiers >400 lignes: 2
-     - 443 lignes: src\enclave-server.ts
-     - 440 lignes: src\enclave-worker.ts
+  Fichiers >400 lignes: 4
+     - 745 lignes: SECURITY.md
+     - 1478 lignes: monitoring\grafana-dashboards\enclave-dashboard.json
+     - 442 lignes: src\enclave-server.ts
 
 [ESLINT]
 ----------------------------------------------------------------------
@@ -78,23 +79,27 @@
 
 [TYPESCRIPT STRICTNESS]
 ----------------------------------------------------------------------
-  Mode 'strict':         Inactif
-  Checks actives:       3/9
-  Strictness:              33.3%
+  Mode 'strict':          true
+  Checks stricts actifs:  6/7 (85.7%)
+  Flags additionnels:     6/6 checks supplementaires
+  Erreurs TypeScript:     0 erreurs
 
-  Options desactivees:
-     - strict
-     - strictFunctionTypes
-     - noImplicitReturns
-     - noUnusedLocals
-     - noUnusedParameters
+  Flags stricts actifs (via strict: true):
+     ✅ noImplicitAny                  (erreur sur 'any' implicite)
+     ✅ strictNullChecks               (null/undefined non-assignables)
+     ✅ strictFunctionTypes            (verification stricte des fonctions)
+     ✅ noImplicitThis                 (erreur sur 'this' implicite)
+     ✅ alwaysStrict                   (mode strict JavaScript)
+     ✅ strictBindCallApply            (verification bind/call/apply)
+     ❌ strictPropertyInitialization   (proprietes initialisees)
 
-  Erreurs TypeScript par option:
-     - strictFunctionTypes           2 erreurs
-     - noImplicitReturns             0 erreurs
-     - strict (toutes)               8 erreurs
-
-  WARNING: Configuration TypeScript peu stricte (33.3%)
+  Flags strictness additionnels:
+     ✅ noImplicitReturns              (retours manquants interdits)
+     ✅ noUncheckedIndexedAccess       (acces tableau toujours undefined?)
+     ✅ noUnusedLocals                 (variables inutilisees interdites)
+     ✅ noUnusedParameters             (parametres inutilises interdits)
+     ✅ noFallthroughCasesInSwitch     (fallthrough switch interdit)
+     ✅ allowUnreachableCode           (code inaccessible interdit)
 
 [COMPLEXITE DU CODE]
 ----------------------------------------------------------------------
@@ -109,8 +114,8 @@
 
   Top fonctions longues:
      - forEach: 152 lignes
-     - decrypt: 130 lignes
-     - async: 122 lignes
+     - decrypt: 136 lignes
+     - async: 117 lignes
 
 [GESTION D'ERREURS]
 ----------------------------------------------------------------------
@@ -142,15 +147,15 @@
 
 [DOCUMENTATION]
 ----------------------------------------------------------------------
-  Total fonctions:           600
-  Documentees (JSDoc):       213
-  Couverture:              35.5%
+  Total fonctions:           604
+  Documentees (JSDoc):       215
+  Couverture:              35.6%
   WARNING: Couverture documentation faible
 
 [DUPLICATION DE CODE]
 ----------------------------------------------------------------------
-  Lignes dupliquees:         316
-  Taux de duplication:      4.6%
+  Lignes dupliquees:         320
+  Taux de duplication:      4.7%
 
 [TESTS]
 ----------------------------------------------------------------------

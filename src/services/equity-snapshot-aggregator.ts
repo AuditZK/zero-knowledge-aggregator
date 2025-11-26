@@ -7,7 +7,7 @@ import { UniversalConnectorCacheService } from '../core/services/universal-conne
 import type { SnapshotData, IConnectorWithMarketTypes, IConnectorWithBalanceBreakdown, IConnectorWithBalance, MarketBalanceBreakdown, BreakdownByMarket } from '../types';
 import { MarketType, getFilteredMarketTypes } from '../types/snapshot-breakdown';
 import { getLogger } from '../utils/secure-enclave-logger';
-import { IExchangeConnector, PositionData } from '../external/interfaces/IExchangeConnector';
+import { IExchangeConnector } from '../external/interfaces/IExchangeConnector';
 
 const logger = getLogger('EquitySnapshotAggregator');
 
@@ -315,7 +315,7 @@ export class EquitySnapshotAggregator {
   private buildMarketBreakdown(
     balancesByMarket: Record<string, MarketBalanceBreakdown>,
     tradesByMarket: Record<string, MarketTrade[]>,
-    totalFundingFees: number,
+    _totalFundingFees: number,
     globalEquity: number,
     globalMargin: number
   ): BreakdownByMarket {

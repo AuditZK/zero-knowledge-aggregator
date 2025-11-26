@@ -29,7 +29,7 @@ const parseCorsOrigin = (origin?: string): string | string[] => {
 return 'http://localhost:3000';
 }
   const origins = origin.split(',').map(o => o.trim());
-  return origins.length === 1 ? origins[0] : origins;
+  return origins.length === 1 ? origins[0]! : origins;
 };
 
 export const serverConfig: ServerConfig = {

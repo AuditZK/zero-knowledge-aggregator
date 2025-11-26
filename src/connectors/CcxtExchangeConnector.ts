@@ -95,7 +95,7 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
                 this.logger.info(`Fetched ${marketTrades.length} trades from ${marketType} market`);
               }
             } catch (error) {
-              this.logger.warn(`Failed to fetch ${marketType} trades:`, error);
+              this.logger.warn(`Failed to fetch ${marketType} trades:`, { error: error instanceof Error ? error.message : String(error) });
             }
           }
 
@@ -135,7 +135,7 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
       await this.exchange.loadMarkets();
       const marketTypes = new Set<MarketType>();
 
-      for (const [marketId, market] of Object.entries(this.exchange.markets)) {
+      for (const [_marketId, market] of Object.entries(this.exchange.markets)) {
         if ((market as any).spot) {marketTypes.add('spot');}
         if ((market as any).swap) {marketTypes.add('swap');}
         if ((market as any).future) {marketTypes.add('future');}
@@ -212,7 +212,7 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
         try {
           trades = await this.exchange.fetchMyTrades(undefined, sinceTimestamp);
         } catch (error) {
-          this.logger.warn(`fetchMyTrades failed for ${marketType}, exchange requires symbol:`, error);
+          this.logger.warn(`fetchMyTrades failed for ${marketType}, exchange requires symbol:`, { error: error instanceof Error ? error.message : String(error) });
           return [];
         }
       } else {
@@ -254,7 +254,7 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
             });
           }
         } catch (error) {
-          this.logger.warn(`Failed to fetch funding for ${symbol}:`, error);
+          this.logger.warn(`Failed to fetch funding for ${symbol}:`, { error: error instanceof Error ? error.message : String(error) });
         }
       }
 
