@@ -18,8 +18,7 @@ model User {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  // Relations
-  trades            Trade[]
+  // Relations - NO trades table (alpha protection: trades processed in-memory only)
   snapshots         SnapshotData[]
   exchangeConnections ExchangeConnection[]
   syncStatuses      SyncStatus[]
@@ -27,31 +26,9 @@ model User {
   @@map("users")
 }
 
-// Trades table
-model Trade {
-  id              String      @id @default(cuid())
-  userUid         String
-  symbol          String
-  type            TradeType
-  side            String? // Legacy field for compatibility
-  quantity        Float
-  price           Float
-  fees            Float
-  timestamp       DateTime
-  exchange        String?
-  exchangeTradeId String?
-  status          TradeStatus @default(pending)
-  matchedQuantity Float?      @default(0)
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-
-  user User @relation(fields: [userUid], references: [uid], onDelete: Cascade)
-
-  @@index([userUid, symbol, timestamp])
-  @@index([exchange, timestamp])
-  @@index([status])
-  @@map("trades")
-}
+// SECURITY: Individual trades are NEVER persisted to database
+// Trades are fetched from exchange API → aggregated in memory → only snapshots stored
+// This prevents alpha/strategy leakage from trade timing, symbols, and prices
 
 // Snapshot data aggregation - DAILY account state snapshots
 // Captures daily equity snapshots with deposits/withdrawals for accurate PnL calculation
@@ -158,17 +135,6 @@ model Migration {
 }
 
 // Enums
-enum TradeType {
-  buy
-  sell
-}
-
-enum TradeStatus {
-  pending
-  matched
-  partially_matched
-}
-
 enum SyncStatusEnum {
   pending
   syncing

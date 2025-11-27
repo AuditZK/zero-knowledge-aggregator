@@ -57,11 +57,11 @@ const startEnclave = async () => {
       await prisma.$queryRaw`SELECT 1`;
       logger.info('[ENCLAVE] Database connection established');
 
-      // Verify we can access trades (enclave only)
-      const tradeCount = await prisma.trade.count();
-      logger.info('[ENCLAVE] Verified access to sensitive data', {
-        tradeCount,
-        accessLevel: 'FULL',
+      // Verify database access (snapshots only - trades are memory-only)
+      const snapshotCount = await prisma.snapshotData.count();
+      logger.info('[ENCLAVE] Verified database access', {
+        snapshotCount,
+        accessLevel: 'AGGREGATED_ONLY',
       });
     } catch (error) {
       logger.error('[ENCLAVE] Database connection failed', error);
@@ -69,10 +69,10 @@ const startEnclave = async () => {
     }
 
     logger.info('[ENCLAVE] Security status:', {
-      tradesAccess: '✅ ALLOWED (Enclave only)',
-      credentialsAccess: '✅ ALLOWED (Decrypted in-memory)',
-      encryptionKeys: '✅ LOADED',
-      outputRestriction: 'Aggregated data only',
+      tradesStorage: '❌ DISABLED (memory only - alpha protection)',
+      snapshotsAccess: '✅ ALLOWED (aggregated data)',
+      credentialsAccess: '✅ ALLOWED (decrypted in-memory)',
+      outputRestriction: 'Aggregated snapshots only',
     });
 
     // Start gRPC server

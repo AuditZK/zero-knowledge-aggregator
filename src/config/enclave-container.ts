@@ -5,8 +5,9 @@
  * It contains all services that work with sensitive data:
  * - Encryption/decryption services
  * - Exchange connectors
- * - Trade processing
- * - Individual trade access
+ * - Aggregated snapshot processing
+ *
+ * SECURITY: Individual trades are NEVER persisted - only aggregated in memory
  */
 
 import 'reflect-metadata';
@@ -25,8 +26,7 @@ import { SevSnpAttestationService } from '../services/sev-snp-attestation.servic
 import { IbkrFlexService } from '../external/ibkr-flex-service';
 import { AlpacaApiService } from '../external/alpaca-api-service';
 
-// Repositories
-import { TradeRepository } from '../core/repositories/trade-repository';
+// Repositories (NO TradeRepository - trades are memory-only for alpha protection)
 import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repository';
 import { ExchangeConnectionRepository } from '../core/repositories/exchange-connection-repository';
 import { SyncStatusRepository } from '../core/repositories/sync-status-repository';
@@ -60,8 +60,7 @@ export function setupEnclaveContainer(): void {
     }
   });
 
-  // Register Enclave-specific repositories
-  container.registerSingleton(TradeRepository);
+  // Register Enclave-specific repositories (NO trades - memory only)
   container.registerSingleton(SnapshotDataRepository);
   container.registerSingleton(ExchangeConnectionRepository);
   container.registerSingleton(SyncStatusRepository);
@@ -83,9 +82,9 @@ export function setupEnclaveContainer(): void {
   container.registerSingleton(EnclaveWorker);
 
   logger.info('Dependency injection container configured', {
-    tcb_loc: 4572,
     access_level: 'SENSITIVE',
-    capabilities: ['trades', 'credentials', 'encryption']
+    capabilities: ['snapshots', 'credentials', 'encryption'],
+    security: 'trades_memory_only'
   });
 }
 
