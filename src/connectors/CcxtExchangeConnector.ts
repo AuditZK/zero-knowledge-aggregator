@@ -6,6 +6,7 @@ import {
   TradeData,
 } from '../external/interfaces/IExchangeConnector';
 import { ExchangeCredentials } from '../types';
+import { extractErrorMessage } from '../utils/secure-enclave-logger';
 import {
   MarketBalanceData,
   ExecutedOrderData,
@@ -136,7 +137,7 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
         if ((market as any).spot) {marketTypes.add('spot');}
         if ((market as any).swap) {marketTypes.add('swap');}
         if ((market as any).future) {marketTypes.add('future');}
-        if ((market as any).option) {marketTypes.add('option');}
+        if ((market as any).option) {marketTypes.add('options');}
         if ((market as any).margin) {marketTypes.add('margin');}
       }
 
@@ -340,7 +341,7 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
             });
           }
         } catch (error) {
-          this.logger.warn(`Failed to fetch funding for ${symbol}:`, { error: error instanceof Error ? error.message : String(error) });
+          this.logger.warn(`Failed to fetch funding for ${symbol}:`, { error: extractErrorMessage(error) });
         }
       }
 

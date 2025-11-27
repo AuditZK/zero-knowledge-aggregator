@@ -15,6 +15,7 @@
 
 import { createConnection } from 'net';
 import { PrismaClient } from '@prisma/client';
+import { extractErrorMessage } from './utils/secure-enclave-logger';
 
 const GRPC_PORT = parseInt(process.env.ENCLAVE_PORT || '50051', 10);
 const TIMEOUT_MS = parseInt(process.env.HEALTH_CHECK_TIMEOUT_MS || '5000', 10);
@@ -109,7 +110,7 @@ async function checkDatabase(): Promise<HealthCheckResult> {
       duration_ms: Date.now() - startTime
     };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorMessage = extractErrorMessage(error);
     return {
       check: 'database',
       status: 'fail',

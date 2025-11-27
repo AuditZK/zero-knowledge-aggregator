@@ -92,9 +92,10 @@ export class DailySyncSchedulerService {
     this.isRunning = true;
     const startTime = Date.now();
 
-    logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    logger.info('DAILY SYNC STARTED (Enclave-Attested Timestamp: ' + new Date().toISOString() + ')');
-    logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    logger.info('Daily sync started', {
+      timestamp: new Date().toISOString(),
+      mode: 'enclave_attested'
+    });
 
     try {
       // Get all users with active connections
@@ -138,15 +139,14 @@ export class DailySyncSchedulerService {
         }
       }
 
-      const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+      const durationSec = ((Date.now() - startTime) / 1000).toFixed(2);
 
-      logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      logger.info('DAILY SYNC SUMMARY:');
-      logger.info(`   Snapshots created: ${totalSynced}`);
-      logger.info(`   Failed: ${totalFailed}`);
-      logger.info(`   Duration: ${duration}s`);
-      logger.info(`   Completed at: ${new Date().toISOString()}`);
-      logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      logger.info('Daily sync completed', {
+        snapshots_created: totalSynced,
+        failed: totalFailed,
+        duration_sec: durationSec,
+        completed_at: new Date().toISOString()
+      });
     } catch (error) {
       logger.error('DAILY SYNC FAILED', error);
     } finally {

@@ -6,6 +6,7 @@ import { UniversalConnectorCacheService } from '../core/services/universal-conne
 import type { SnapshotData, IConnectorWithMarketTypes, IConnectorWithBalanceBreakdown, IConnectorWithBalance, MarketBalanceBreakdown, BreakdownByMarket } from '../types';
 import { MarketType, getFilteredMarketTypes } from '../types/snapshot-breakdown';
 import { getLogger } from '../utils/secure-enclave-logger';
+import { TimeUtils } from '../utils/time-utils';
 import { IExchangeConnector } from '../external/interfaces/IExchangeConnector';
 
 const logger = getLogger('EquitySnapshotAggregator');
@@ -62,7 +63,7 @@ export class EquitySnapshotAggregator {
     switch (marketType) {
       case 'swap': return s.includes('PERP') || s.includes('SWAP') || s.includes(':USDT') || s.includes(':USD') || s.includes(':BUSD');
       case 'future': return /\d{6}/.test(s) && !s.includes('-C') && !s.includes('-P');
-      case 'option': return s.includes('-C') || s.includes('-P');
+      case 'options': return s.includes('-C') || s.includes('-P');
       case 'spot':
       case 'margin': return !s.includes('PERP') && !s.includes('SWAP') && !s.includes(':USDT') && !s.includes(':USD') && !/\d{6}/.test(s) && !s.includes('-C') && !s.includes('-P');
       default: return true;
@@ -87,12 +88,7 @@ export class EquitySnapshotAggregator {
 
       // Step 3: Fetch trades by market - ALWAYS from start of day (00:00 UTC)
       // Daily snapshots need ALL trades from the day, not just since last sync
-      const startOfDay = new Date(Date.UTC(
-        currentSnapshot.getUTCFullYear(),
-        currentSnapshot.getUTCMonth(),
-        currentSnapshot.getUTCDate(),
-        0, 0, 0, 0
-      ));
+      const startOfDay = TimeUtils.getStartOfDayUTC(currentSnapshot);
       const { tradesByMarket, swapSymbols } = await this.fetchTradesByMarket(
         exchange,
         startOfDay,
@@ -299,6 +295,19 @@ export class EquitySnapshotAggregator {
   }
 
   /**
+   * Helper to create both camelCase and snake_case properties for gRPC compatibility
+   * gRPC expects snake_case but TypeScript uses camelCase internally
+   */
+  private createDualCaseMetrics(tradingFees: number, fundingFees: number) {
+    return {
+      tradingFees,
+      trading_fees: tradingFees,
+      fundingFees,
+      funding_fees: fundingFees
+    };
+  }
+
+  /**
    * Build detailed breakdown by market type
    * Always categorizes trades into spot/swap/options even if balance data only exists globally
    * Uses snake_case for JSON properties to match gRPC expected format
@@ -319,7 +328,7 @@ export class EquitySnapshotAggregator {
     }
 
     // Standard market types to always categorize
-    const standardMarkets: MarketType[] = ['spot', 'swap', 'option'];
+    const standardMarkets: MarketType[] = ['spot', 'swap', 'options'];
 
     let totalVolume = 0;
     let totalTrades = 0;
@@ -357,15 +366,10 @@ export class EquitySnapshotAggregator {
         // Trading activity metrics (both camelCase and snake_case)
         volume,
         trades,
-        tradingFees: fees,
-        trading_fees: fees,
-        fundingFees: fundingForMarket,
-        funding_fees: fundingForMarket
+        ...this.createDualCaseMetrics(fees, fundingForMarket)
       };
 
-      // Map 'option' to 'options' for gRPC consistency (proto uses 'options' plural)
-      const outputKey = marketType === 'option' ? 'options' : marketType;
-      (breakdown as Record<string, MarketBalanceBreakdown>)[outputKey] = marketData;
+      (breakdown as Record<string, MarketBalanceBreakdown>)[marketType] = marketData;
       totalVolume += volume;
       totalTrades += trades;
       totalTradingFees += fees;
@@ -381,10 +385,7 @@ export class EquitySnapshotAggregator {
       // Global totals (both camelCase and snake_case)
       volume: totalVolume,
       trades: totalTrades,
-      tradingFees: totalTradingFees,
-      trading_fees: totalTradingFees,
-      fundingFees: totalFundingFees,
-      funding_fees: totalFundingFees
+      ...this.createDualCaseMetrics(totalTradingFees, totalFundingFees)
     };
 
     return breakdown;

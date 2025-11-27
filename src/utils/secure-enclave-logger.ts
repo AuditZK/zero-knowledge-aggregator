@@ -419,6 +419,25 @@ export function getLogLevel(): LogLevel {
 }
 
 /**
+ * Extract error message from unknown error type
+ * Common utility to standardize error message extraction across the codebase
+ *
+ * @param error Error object (unknown type from catch blocks)
+ * @returns String representation of the error message
+ *
+ * @example
+ * try {
+ *   await riskyOperation();
+ * } catch (error: unknown) {
+ *   const message = extractErrorMessage(error);
+ *   logger.error('Operation failed', { error: message });
+ * }
+ */
+export function extractErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
  * Default logger instance (for backward compatibility)
  */
 export const logger = new SecureEnclaveLogger('Enclave');

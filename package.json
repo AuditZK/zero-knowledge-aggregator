@@ -12,7 +12,7 @@
     "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "test": "jest",
-    "test:web": "ts-node test-server.ts",
+    "test:web": "ts-node scripts/test/test-server.ts",
     "lint": "eslint src --ext .ts",
     "prisma:generate": "prisma generate",
     "docker:build": "docker-compose -f docker-compose.dev.yml build",

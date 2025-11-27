@@ -1,7 +1,7 @@
 import { injectable } from 'tsyringe';
 import axios from 'axios';
 import { parseStringPromise } from 'xml2js';
-import { getLogger } from '../utils/secure-enclave-logger';
+import { getLogger, extractErrorMessage } from '../utils/secure-enclave-logger';
 
 const logger = getLogger('IbkrFlexService');
 
@@ -93,7 +93,7 @@ export class IbkrFlexService {
       logger.info(`Flex report requested successfully (${duration}s)`, { referenceCode });
       return referenceCode;
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       logger.error('Failed to request Flex report', error);
       throw new Error(`Flex request failed: ${errorMessage}`);
     }
@@ -142,7 +142,7 @@ export class IbkrFlexService {
 
       throw new Error('Flex statement generation timeout - report not ready after retries');
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       logger.error('Failed to get Flex statement', error);
       throw new Error(`Flex retrieval failed: ${errorMessage}`);
     }
@@ -178,7 +178,7 @@ export class IbkrFlexService {
         };
       });
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       logger.error('Failed to parse trades from Flex report', error);
       throw new Error(`Trade parsing failed: ${errorMessage}`);
     }
@@ -207,7 +207,7 @@ export class IbkrFlexService {
         };
       });
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       logger.error('Failed to parse positions from Flex report', error);
       throw new Error(`Position parsing failed: ${errorMessage}`);
     }
@@ -235,7 +235,7 @@ export class IbkrFlexService {
         };
       });
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       logger.error('Failed to parse cash transactions from Flex report', error);
       throw new Error(`Cash transaction parsing failed: ${errorMessage}`);
     }
@@ -297,7 +297,7 @@ export class IbkrFlexService {
         };
       });
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       logger.error('Failed to parse account summary from Flex report', error);
       throw new Error(`Account summary parsing failed: ${errorMessage}`);
     }

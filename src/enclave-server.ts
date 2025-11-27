@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { container } from 'tsyringe';
 import { EnclaveWorker } from './enclave-worker';
-import { getLogger } from './utils/secure-enclave-logger';
+import { getLogger, extractErrorMessage } from './utils/secure-enclave-logger';
 
 const logger = getLogger('EnclaveServer');
 import {
@@ -134,7 +134,7 @@ export class EnclaveServer {
 
       callback(null, response);
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       const errorStack = error instanceof Error ? error.stack : undefined;
 
       logger.error('ProcessSyncJob failed', {
@@ -209,7 +209,7 @@ export class EnclaveServer {
 
       callback(null, response);
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       const errorStack = error instanceof Error ? error.stack : undefined;
 
       logger.error('GetAggregatedMetrics failed', {
@@ -322,7 +322,7 @@ export class EnclaveServer {
 
       callback(null, response);
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       const errorStack = error instanceof Error ? error.stack : undefined;
 
       logger.error('GetSnapshotTimeSeries failed', {
@@ -392,7 +392,7 @@ export class EnclaveServer {
 
       callback(null, response);
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       const errorStack = error instanceof Error ? error.stack : undefined;
 
       logger.error('CreateUserConnection failed', {
@@ -426,7 +426,7 @@ export class EnclaveServer {
 
       callback(null, response);
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
 
       logger.error('HealthCheck failed', {
         error: errorMessage
