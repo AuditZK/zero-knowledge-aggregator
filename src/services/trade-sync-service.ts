@@ -16,7 +16,8 @@ import { ExchangeConnectorFactory } from '../external/factories/ExchangeConnecto
 import { UniversalConnectorCacheService } from '../core/services/universal-connector-cache.service';
 import { EncryptionService } from './encryption-service';
 import { ExchangeCredentials } from '../types';
-import { getLogger } from '../utils/secure-enclave-logger';
+import { getLogger, extractErrorMessage } from '../utils/secure-enclave-logger';
+import { TimeUtils } from '../utils/time-utils';
 
 const logger = getLogger('TradeSyncService');
 
@@ -28,8 +29,6 @@ export class TradeSyncService {
     @inject(UserRepository) private readonly userRepo: UserRepository,
     @inject(UniversalConnectorCacheService) private readonly connectorCache: UniversalConnectorCacheService,
   ) {}
-
-  async initialize(): Promise<void> {}
 
   private async ensureUser(userUid: string): Promise<void> {
     try {
@@ -86,7 +85,7 @@ export class TradeSyncService {
       };
     } catch (error) {
       logger.error(`Sync failed for user ${userUid}`, error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       return { success: false, message: `Sync failed: ${errorMessage}`, synced: 0 };
     }
   }
@@ -111,13 +110,7 @@ export class TradeSyncService {
 
     try {
       // Always sync from start of day (00:00 UTC) for daily snapshots
-      const now = new Date();
-      const startOfDay = new Date(Date.UTC(
-        now.getUTCFullYear(),
-        now.getUTCMonth(),
-        now.getUTCDate(),
-        0, 0, 0, 0
-      ));
+      const startOfDay = TimeUtils.getStartOfDayUTC();
 
       logger.info(`Daily sync for ${credentials.exchange} from ${startOfDay.toISOString()}`);
 
@@ -135,7 +128,7 @@ export class TradeSyncService {
 
       return tradeCount;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       await this.syncStatusRepo.upsertSyncStatus({
         userUid,
         exchange: credentials.exchange,
@@ -178,7 +171,7 @@ export class TradeSyncService {
       };
     } catch (error) {
       logger.error(`Sync failed for user ${userUid}`, error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       return { success: false, synced: 0, message: `Sync failed: ${errorMessage}` };
     }
   }
@@ -252,7 +245,7 @@ export class TradeSyncService {
       };
     } catch (error) {
       logger.error('Failed to add exchange connection', error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       if (errorMessage.includes('UNIQUE constraint failed')) {
         return {
           success: false,

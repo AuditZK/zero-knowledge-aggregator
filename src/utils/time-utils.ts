@@ -120,4 +120,25 @@ export class TimeUtils {
     const truncatedHour = this.truncateToHour(hour);
     return truncatedDate.getTime() === truncatedHour.getTime();
   }
+
+  /**
+   * Retourne le début de journée (00:00:00.000 UTC) pour une date donnée
+   * Utilisé pour aligner les snapshots sur minuit UTC
+   *
+   * @param date Date à arrondir (par défaut: maintenant)
+   * @returns Date à 00:00:00.000 UTC
+   *
+   * @example
+   * const now = new Date('2025-01-15T14:23:45.123Z');
+   * const midnight = TimeUtils.getStartOfDayUTC(now);
+   * // => '2025-01-15T00:00:00.000Z'
+   */
+  static getStartOfDayUTC(date: Date = new Date()): Date {
+    return new Date(Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate(),
+      0, 0, 0, 0
+    ));
+  }
 }

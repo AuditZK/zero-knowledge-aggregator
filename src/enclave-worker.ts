@@ -5,7 +5,7 @@ import { SnapshotDataRepository } from './core/repositories/snapshot-data-reposi
 import { ExchangeConnectionRepository } from './core/repositories/exchange-connection-repository';
 import { SyncStatusRepository } from './core/repositories/sync-status-repository';
 import { UserRepository } from './core/repositories/user-repository';
-import { getLogger } from './utils/secure-enclave-logger';
+import { getLogger, extractErrorMessage } from './utils/secure-enclave-logger';
 import { SnapshotData } from './types';
 // SECURITY: No TradeRepository - trades are memory-only (alpha protection)
 
@@ -204,7 +204,7 @@ export class EnclaveWorker {
 
         logger.info(`Snapshot updated for ${userUid}/${ex}`, { snapshotsCount });
       } catch (error: unknown) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = extractErrorMessage(error);
         logger.error(`Failed to update snapshot for ${userUid}/${ex}`, {
           error: errorMessage
         });
@@ -272,7 +272,7 @@ export class EnclaveWorker {
     userUid: string,
     exchange?: string
   ): SyncJobResponse {
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorMessage = extractErrorMessage(error);
     const errorStack = error instanceof Error ? error.stack || 'No stack trace available' : 'No stack trace available';
     const errorName = error instanceof Error ? error.name : 'Error';
 
@@ -425,7 +425,7 @@ export class EnclaveWorker {
         };
       });
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       logger.error('Failed to get snapshot time series', {
         userUid,
         exchange,
@@ -512,7 +512,7 @@ export class EnclaveWorker {
         userUid
       };
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       const errorStack = error instanceof Error ? error.stack : undefined;
       logger.error('Failed to create user connection', {
         error: errorMessage,

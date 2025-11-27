@@ -45,21 +45,6 @@ export interface Position {
   timestamp?: Date;
 }
 
-export interface ReturnMetrics {
-  volume: number;
-  trades: number;
-  returnPct: number;
-  returnUsd: number;
-  totalFees: number;
-  realizedPnl: number; // PnL réalisé via matching
-  unrealizedPnl?: number; // PnL non-réalisé (positions ouvertes)
-  totalPnl?: number; // Total = realizedPnl + unrealizedPnl
-  matches?: number; // Nombre de matches de la période
-  openPositions?: number; // Nombre de positions ouvertes
-  periodStart: string;
-  periodEnd: string;
-}
-
 // Market-specific balance breakdown
 export interface MarketBalanceBreakdown {
   totalEquityUsd: number;

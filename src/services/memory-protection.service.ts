@@ -1,4 +1,4 @@
-import { getLogger } from '../utils/secure-enclave-logger';
+import { getLogger, extractErrorMessage } from '../utils/secure-enclave-logger';
 import * as fs from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -44,7 +44,7 @@ export class MemoryProtectionService {
         logger.warn('[MEMORY_PROTECTION] ⚠ Core dumps may be enabled - configure at OS level');
       }
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       logger.error('[MEMORY_PROTECTION] Failed to disable core dumps', { error: errorMessage });
     }
   }
@@ -64,7 +64,7 @@ export class MemoryProtectionService {
         logger.warn(`[MEMORY_PROTECTION] ⚠ Weak ptrace protection (scope=${scope})`);
       }
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       logger.error('[MEMORY_PROTECTION] Ptrace protection check failed', { error: errorMessage });
     }
   }
@@ -82,7 +82,7 @@ export class MemoryProtectionService {
         }
       }
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       logger.warn('[MEMORY_PROTECTION] Could not check mlock', { error: errorMessage });
     }
   }
@@ -94,7 +94,7 @@ export class MemoryProtectionService {
       buffer.fill(0);
       logger.debug(`[MEMORY_PROTECTION] Wiped ${buffer.length} bytes`);
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       logger.error('[MEMORY_PROTECTION] Buffer wipe failed', { error: errorMessage });
     }
   }

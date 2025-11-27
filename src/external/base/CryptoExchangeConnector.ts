@@ -43,33 +43,4 @@ export abstract class CryptoExchangeConnector extends BaseExchangeConnector {
   protected dateToTimestamp(date: Date): number {
     return date.getTime();
   }
-
-  /**
-   * Map common crypto status strings to standardized format
-   * Override in subclass if exchange uses different status codes
-   */
-  protected mapCryptoStatus(
-    status: string | number
-  ): 'pending' | 'completed' | 'failed' {
-    const statusStr = String(status).toLowerCase();
-
-    if (
-      statusStr.includes('success') ||
-      statusStr.includes('completed') ||
-      statusStr === 'finished' ||
-      statusStr === '1' ||
-      statusStr === '2'
-    ) {
-      return 'completed';
-    } else if (
-      statusStr.includes('pending') ||
-      statusStr.includes('processing') ||
-      statusStr === 'waiting' ||
-      statusStr === '0'
-    ) {
-      return 'pending';
-    } else {
-      return 'failed';
-    }
-  }
 }

@@ -104,7 +104,7 @@ export function isUnifiedAccountExchange(exchangeId: string): boolean {
 /**
  * Market types supported by crypto exchanges
  */
-export type MarketType = 'spot' | 'swap' | 'future' | 'option' | 'margin';
+export type MarketType = 'spot' | 'swap' | 'future' | 'options' | 'margin';
 
 /**
  * Get filtered market types for unified account exchanges

@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { getLogger } from '../utils/secure-enclave-logger';
+import { getLogger, extractErrorMessage } from '../utils/secure-enclave-logger';
 
 const logger = getLogger('SevSnpAttestation');
 const execAsync = promisify(exec);
@@ -59,7 +59,7 @@ export class SevSnpAttestationService {
         platformVersion: report.platformVersion?.toString() || null
       };
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       logger.error('AMD SEV-SNP attestation failed', { error: errorMessage });
       return this.createFailureResult(errorMessage);
     }
@@ -103,7 +103,7 @@ export class SevSnpAttestationService {
           const { stdout } = await execAsync(`${tool} --format json`);
           return JSON.parse(stdout) as SevSnpReport;
         } catch (error: unknown) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
+          const errorMessage = extractErrorMessage(error);
           logger.warn(`SEV guest tool ${tool} failed: ${errorMessage}`);
         }
       }
@@ -141,7 +141,7 @@ export class SevSnpAttestationService {
       verify.update(this.serializeReport(report));
       return verify.verify({ key: vcekPubKey, format: 'pem', type: 'spki' }, signatureBuffer);
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       logger.error('Signature verification failed', { error: errorMessage });
       return false;
     }

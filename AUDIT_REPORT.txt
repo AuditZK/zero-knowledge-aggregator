@@ -1,0 +1,174 @@
+======================================================================
+  TRACK RECORD ENCLAVE - AUDIT REPORT
+======================================================================
+  Date: 2025-11-27 10:59
+======================================================================
+
+[RESUME]
+----------------------------------------------------------------------
+  Total lignes:       15,830
+  Lignes de code:     11,898
+  Fichiers:               72
+  Dependances:            24
+
+[LIGNES PAR TYPE]
+----------------------------------------------------------------------
+  TypeScript        8,241 lignes   6,715 code   37 fichiers
+  Markdown          3,434 lignes   2,130 code    6 fichiers
+  JSON              1,734 lignes   1,721 code    5 fichiers
+  .yml                534 lignes     244 code    5 fichiers
+  .txt                508 lignes     304 code    6 fichiers
+  .sh                 364 lignes     244 code    2 fichiers
+  .example            280 lignes      51 code    2 fichiers
+  .reproducible       169 lignes      64 code    1 fichiers
+
+[PLUS GROS FICHIERS]
+----------------------------------------------------------------------
+   1478 lignes  monitoring\grafana-dashboards\enclave-dashboard.json
+   1129 lignes  SECURITY.md
+    645 lignes  .claude\CLAUDE.md
+    586 lignes  src\enclave-server.ts
+    559 lignes  src\enclave-worker.ts
+
+[ALERTES SECURITE] (8 detectees)
+----------------------------------------------------------------------
+  console.log            8 occurrences
+
+[QUALITE DU CODE]
+----------------------------------------------------------------------
+  TODO/FIXME:              0 fichiers
+  @ts-ignore:              0 occurrences
+  Type 'any':              1 occurrences
+
+  Fichiers >400 lignes: 5
+     - 745 lignes: SECURITY.md
+     - 441 lignes: .claude\CLAUDE.md
+     - 1478 lignes: monitoring\grafana-dashboards\enclave-dashboard.json
+
+[ESLINT]
+----------------------------------------------------------------------
+  Erreurs:                 0
+  Warnings:                0
+  Fichiers touches:        0
+
+[VULNERABILITES NPM]
+----------------------------------------------------------------------
+  Total vulnerabilites:        2
+  Critiques:                   0
+  Elevees:                     2
+  Moderees:                    0
+  Faibles:                     0
+
+  CRITICAL: 2 vulnerabilites critiques/elevees detectees!
+
+[DEPENDANCES NON UTILISEES]
+----------------------------------------------------------------------
+  Dependances inutilisees:            0
+  Dev dependances inutilisees:        0
+  Dependances manquantes:             1
+
+[DEPENDANCES OBSOLETES]
+----------------------------------------------------------------------
+  Packages obsoletes:          2
+
+  Packages a mettre a jour:
+     - @prisma/client: 6.19.0 -> 7.0.1
+     - prisma: 6.19.0 -> 7.0.1
+
+  INFO: 2 packages peuvent etre mis a jour
+
+[TYPESCRIPT STRICTNESS]
+----------------------------------------------------------------------
+  Mode 'strict':          true
+  Checks stricts actifs:  6/7 (85.7%)
+  Flags additionnels:     6/6 checks supplementaires
+  Erreurs TypeScript:     0 erreurs
+
+  Flags stricts actifs (via strict: true):
+     ✅ noImplicitAny                  (erreur sur 'any' implicite)
+     ✅ strictNullChecks               (null/undefined non-assignables)
+     ✅ strictFunctionTypes            (verification stricte des fonctions)
+     ✅ noImplicitThis                 (erreur sur 'this' implicite)
+     ✅ alwaysStrict                   (mode strict JavaScript)
+     ✅ strictBindCallApply            (verification bind/call/apply)
+     ❌ strictPropertyInitialization   (proprietes initialisees)
+
+  Flags strictness additionnels:
+     ✅ noImplicitReturns              (retours manquants interdits)
+     ✅ noUncheckedIndexedAccess       (acces tableau toujours undefined?)
+     ✅ noUnusedLocals                 (variables inutilisees interdites)
+     ✅ noUnusedParameters             (parametres inutilises interdits)
+     ✅ noFallthroughCasesInSwitch     (fallthrough switch interdit)
+     ✅ allowUnreachableCode           (code inaccessible interdit)
+
+[COMPLEXITE DU CODE]
+----------------------------------------------------------------------
+  Fonctions complexes:        10
+  Fonctions longues:          10
+  Trop de parametres:          5
+
+  Top fonctions complexes (cyclomatic complexity):
+     - forEach: complexite 33
+     - parseAccountSummary: complexite 27
+     - getActiveSymbols: complexite 22
+
+  Top fonctions longues:
+     - decrypt: 136 lignes
+     - forEach: 132 lignes
+     - async: 115 lignes
+
+[GESTION D'ERREURS]
+----------------------------------------------------------------------
+  Catch blocks vides:          0
+  Catch ignores:               0
+
+[PERFORMANCE]
+----------------------------------------------------------------------
+  await dans boucles:            7 fichiers
+  sync dans boucles:             0 fichiers
+  forEach avec async:            0 fichiers
+  RegEx dans boucles:            0 fichiers
+  Multiples awaits seq.:         1 fichiers
+  Boucles imbriquees:            1 fichiers
+  Array.push dans boucles:       3 fichiers
+  Requetes sans limite:          7 fichiers
+
+  Fichiers avec await dans boucles:
+     - src\connectors\CcxtExchangeConnector.ts
+     - src\core\services\database-migration-service.ts
+     - src\enclave-worker.ts
+     - src\external\ibkr-flex-service.ts
+     - src\services\daily-sync-scheduler.service.ts
+
+  Fichiers avec awaits sequentiels (parallelisables):
+     - src\core\services\database-migration-service.ts
+
+  WARNING: 12 anti-patterns de performance detectes
+
+[DOCUMENTATION]
+----------------------------------------------------------------------
+  Total fonctions:           583
+  Documentees (JSDoc):       205
+  Couverture:              35.2%
+  WARNING: Couverture documentation faible
+
+[DUPLICATION DE CODE]
+----------------------------------------------------------------------
+  Lignes dupliquees:         297
+  Taux de duplication:      4.4%
+
+[TESTS]
+----------------------------------------------------------------------
+  Fichiers source:         0
+  Fichiers test:           1
+
+[DEPENDANCES]
+----------------------------------------------------------------------
+  Production:             13
+  Developpement:          11
+
+  Principales: @alpacahq/alpaca-trade-api, @grpc/grpc-js, @grpc/proto-loader, @prisma/client, @types/xml2js
+
+======================================================================
+AUDIT TERMINE
+======================================================================
