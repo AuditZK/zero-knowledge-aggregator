@@ -119,7 +119,7 @@ message MarketMetrics {
   double equity = 1;
   double available_margin = 2;
   double volume = 3;
-  int32 orders = 4;
+  int32 trades = 4;  // Number of executed trades (not orders)
   double trading_fees = 5;
   double funding_fees = 6; // Only for swap/perp markets
 }

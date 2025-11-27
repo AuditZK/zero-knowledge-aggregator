@@ -333,7 +333,7 @@ export class EquitySnapshotAggregator {
     const standardMarkets: MarketType[] = ['spot', 'swap', 'option'];
 
     let totalVolume = 0;
-    let totalOrders = 0;
+    let totalTrades = 0;
     let totalTradingFees = 0;
 
     // Always categorize trades by market type
@@ -341,9 +341,13 @@ export class EquitySnapshotAggregator {
       // Filter trades for this market type
       const marketTrades = allTrades.filter(t => this.matchesMarketType(t.symbol, marketType));
 
-      const volume = marketTrades.reduce((sum, t) => sum + (t.cost || 0), 0);
+      // Volume = trade cost (price * amount). Fallback to manual calculation if cost not set.
+      const volume = marketTrades.reduce((sum, t) => {
+        const tradeCost = t.cost || (t.price && t.amount ? t.price * t.amount : 0);
+        return sum + tradeCost;
+      }, 0);
       const fees = marketTrades.reduce((sum, t) => sum + (t.fee?.cost || 0), 0);
-      const orders = marketTrades.length;
+      const trades = marketTrades.length;
 
       // Use balance data if available for this market type
       const balance = balancesByMarket[marketType];
@@ -363,7 +367,7 @@ export class EquitySnapshotAggregator {
         available_margin: balance?.availableBalance || balance?.available_margin || 0,
         // Trading activity metrics (both camelCase and snake_case)
         volume,
-        orders,
+        trades,
         tradingFees: fees,
         trading_fees: fees,
         fundingFees: fundingForMarket,
@@ -374,7 +378,7 @@ export class EquitySnapshotAggregator {
       const outputKey = marketType === 'option' ? 'options' : marketType;
       (breakdown as Record<string, MarketBalanceBreakdown>)[outputKey] = marketData;
       totalVolume += volume;
-      totalOrders += orders;
+      totalTrades += trades;
       totalTradingFees += fees;
     }
 
@@ -387,7 +391,7 @@ export class EquitySnapshotAggregator {
       available_margin: globalMargin,
       // Global totals (both camelCase and snake_case)
       volume: totalVolume,
-      orders: totalOrders,
+      trades: totalTrades,
       tradingFees: totalTradingFees,
       trading_fees: totalTradingFees,
       fundingFees: totalFundingFees,
