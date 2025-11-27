@@ -15,6 +15,9 @@ build/
 .env.*.local
 .env.production.example
 
+# Docker configuration (production)
+docker-compose.prod.yml
+
 # IDE
 .vscode/
 .idea/
@@ -22,9 +25,6 @@ build/
 *.swp
 *.swo
 *~
-
-# Git configuration (local only)
-.gitignore
 
 # OS
 .DS_Store
