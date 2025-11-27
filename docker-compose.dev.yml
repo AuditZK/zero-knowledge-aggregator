@@ -1,6 +1,52 @@
 version: '3.8'
 
 services:
+  # Enclave Worker (Simulated AMD SEV-SNP Enclave)
+  enclave:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: enclave_worker_dev
+    ports:
+      - "50051:50051"  # gRPC Server
+      - "50052:50052"  # HTTP Log Server (SSE)
+      - "9090:9090"    # Prometheus Metrics
+    environment:
+      # Database Connection (points to postgres container)
+      DATABASE_URL: postgresql://enclave_user:${POSTGRES_PASSWORD:-enclavepass123}@postgres:5432/aggregator_db
+
+      # Security (use proper secrets in production)
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_production}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-dev_encryption_key_32_chars_min}
+
+      # Server Configuration
+      NODE_ENV: development
+      PORT: 3001
+      ENCLAVE_PORT: 50051
+
+      # Monitoring
+      METRICS_ENABLED: "true"
+      METRICS_PORT: 9090
+      ENABLE_ENCLAVE_LOG_STREAMING: "true"
+
+      # Development Mode (disable attestation requirement)
+      SKIP_ATTESTATION: "true"
+    volumes:
+      # Mount TLS certificates for secure gRPC
+      - ./certs:/etc/enclave:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - enclave_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:9090/metrics', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+
   # PostgreSQL Database for Enclave Development
   postgres:
     image: postgres:15-alpine

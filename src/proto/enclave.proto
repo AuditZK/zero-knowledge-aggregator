@@ -94,6 +94,34 @@ message DailySnapshot {
   double unrealized_pnl = 6; // Unrealized P&L from open positions
   double deposits = 7; // Cash deposited on this day
   double withdrawals = 8; // Cash withdrawn on this day
+  MarketBreakdown breakdown = 9; // Market breakdown (spot/swap/options)
+}
+
+// Market breakdown for a snapshot
+// Supports both crypto (spot/swap) and traditional (stocks/futures/cfd)
+message MarketBreakdown {
+  MarketMetrics global = 1;
+  // Crypto categories
+  MarketMetrics spot = 2;
+  MarketMetrics swap = 3;
+  // Traditional categories (IBKR, etc.)
+  MarketMetrics stocks = 5;
+  MarketMetrics futures = 6;
+  MarketMetrics cfd = 7;
+  MarketMetrics forex = 8;
+  MarketMetrics commodities = 9;
+  // Shared
+  MarketMetrics options = 4;
+}
+
+// Metrics per market type
+message MarketMetrics {
+  double equity = 1;
+  double available_margin = 2;
+  double volume = 3;
+  int32 orders = 4;
+  double trading_fees = 5;
+  double funding_fees = 6; // Only for swap/perp markets
 }
 
 // Request to create a user with exchange connection

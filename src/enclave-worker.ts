@@ -369,6 +369,12 @@ export class EnclaveWorker {
     unrealizedPnL: number;
     deposits: number;
     withdrawals: number;
+    breakdown?: {
+      global?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
+      spot?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
+      swap?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
+      options?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
+    };
   }>> {
     try {
       logger.info('Getting snapshot time series', {
@@ -386,17 +392,37 @@ export class EnclaveWorker {
         exchange
       ) ?? [];
 
-      // Map to response format (exclude breakdown_by_market which contains detailed data)
-      return snapshots.map(snapshot => ({
-        userUid: snapshot.userUid,
-        exchange: snapshot.exchange,
-        timestamp: new Date(snapshot.timestamp),
-        totalEquity: snapshot.totalEquity,
-        realizedBalance: snapshot.realizedBalance,
-        unrealizedPnL: snapshot.unrealizedPnL,
-        deposits: snapshot.deposits,
-        withdrawals: snapshot.withdrawals
-      }));
+      // Map to response format (include breakdown_by_market for volume/fees/orders metrics)
+      return snapshots.map(snapshot => {
+        // Parse breakdown_by_market JSON if present
+        let breakdown: typeof snapshot.breakdown_by_market = undefined;
+        if (snapshot.breakdown_by_market) {
+          try {
+            breakdown = typeof snapshot.breakdown_by_market === 'string'
+              ? JSON.parse(snapshot.breakdown_by_market)
+              : snapshot.breakdown_by_market;
+          } catch {
+            breakdown = undefined;
+          }
+        }
+
+        return {
+          userUid: snapshot.userUid,
+          exchange: snapshot.exchange,
+          timestamp: new Date(snapshot.timestamp),
+          totalEquity: snapshot.totalEquity,
+          realizedBalance: snapshot.realizedBalance,
+          unrealizedPnL: snapshot.unrealizedPnL,
+          deposits: snapshot.deposits,
+          withdrawals: snapshot.withdrawals,
+          breakdown: breakdown as {
+            global?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
+            spot?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
+            swap?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
+            options?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
+          } | undefined
+        };
+      });
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error('Failed to get snapshot time series', {

@@ -71,8 +71,21 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
     });
   }
 
-  private groupTradesByDate(trades: FlexTrade[]): Map<string, { volume: number; count: number; fees: number }> {
-    const tradesByDate = new Map<string, { volume: number; count: number; fees: number }>();
+  // IBKR asset categories for trade metrics: stocks, options, futures, cfd, forex, commodities
+
+  // Trade metrics grouped by IBKR asset category
+  private groupTradesByDate(trades: FlexTrade[]): Map<string, Record<string, { volume: number; count: number; fees: number }>> {
+    const tradesByDate = new Map<string, Record<string, { volume: number; count: number; fees: number }>>();
+
+    const createEmptyMetrics = () => ({
+      stocks: { volume: 0, count: 0, fees: 0 },
+      options: { volume: 0, count: 0, fees: 0 },
+      futures: { volume: 0, count: 0, fees: 0 },
+      cfd: { volume: 0, count: 0, fees: 0 },
+      forex: { volume: 0, count: 0, fees: 0 },
+      commodities: { volume: 0, count: 0, fees: 0 },
+      total: { volume: 0, count: 0, fees: 0 }
+    });
 
     for (const trade of trades) {
       const date = trade.tradeDate;
@@ -80,33 +93,104 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
       const fees = Math.abs(trade.ibCommission || 0);
 
       if (!tradesByDate.has(date)) {
-        tradesByDate.set(date, { volume: 0, count: 0, fees: 0 });
+        tradesByDate.set(date, createEmptyMetrics());
       }
 
       const dayMetrics = tradesByDate.get(date)!;
-      dayMetrics.volume += volume;
-      dayMetrics.count += 1;
-      dayMetrics.fees += fees;
+
+      // Map IBKR assetCategory to native category names
+      const category = trade.assetCategory?.toUpperCase() || 'STK';
+      let marketType: string;
+
+      switch (category) {
+        case 'STK': marketType = 'stocks'; break;
+        case 'OPT': marketType = 'options'; break;
+        case 'FUT': case 'FOP': marketType = 'futures'; break;
+        case 'CFD': marketType = 'cfd'; break;
+        case 'CASH': marketType = 'forex'; break;
+        case 'CMDTY': marketType = 'commodities'; break;
+        default: marketType = 'stocks'; // Default to stocks
+      }
+
+      const categoryMetrics = dayMetrics[marketType];
+      if (categoryMetrics) {
+        categoryMetrics.volume += volume;
+        categoryMetrics.count += 1;
+        categoryMetrics.fees += fees;
+      }
+      dayMetrics.total!.volume += volume;
+      dayMetrics.total!.count += 1;
+      dayMetrics.total!.fees += fees;
     }
 
     return tradesByDate;
   }
 
-  private mapSummaryToBreakdown(summary: FlexAccountSummary, tradeMetrics?: { volume: number; count: number; fees: number }): Record<string, { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number }> {
-    const totalValue = summary.stockValue + summary.optionValue + summary.commodityValue;
-    const totalCash = summary.cash;
-    const stockCash = totalValue > 0 ? (summary.stockValue / totalValue) * totalCash : totalCash;
-    const optionsCash = totalValue > 0 ? (summary.optionValue / totalValue) * totalCash : 0;
-    const commoditiesCash = totalValue > 0 ? (summary.commodityValue / totalValue) * totalCash : 0;
-    const volume = tradeMetrics?.volume || 0;
-    const orders = tradeMetrics?.count || 0;
-    const trading_fees = tradeMetrics?.fees || 0;
+  private mapSummaryToBreakdown(
+    summary: FlexAccountSummary,
+    tradeMetrics?: Record<string, { volume: number; count: number; fees: number }>
+  ): Record<string, { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number }> {
+    const getMetrics = (key: string) => tradeMetrics?.[key] || { volume: 0, count: 0, fees: 0 };
+    const totalMetrics = getMetrics('total');
 
+    // Use IBKR native category names
     return {
-      global: { equity: summary.netLiquidationValue, available_margin: summary.cash, volume, orders, trading_fees, funding_fees: 0 },
-      stocks: { equity: summary.stockValue, available_margin: stockCash, volume, orders, trading_fees, funding_fees: 0 },
-      options: { equity: summary.optionValue, available_margin: optionsCash, volume: 0, orders: 0, trading_fees: 0, funding_fees: 0 },
-      commodities: { equity: summary.commodityValue, available_margin: commoditiesCash, volume: 0, orders: 0, trading_fees: 0, funding_fees: 0 },
+      global: {
+        equity: summary.netLiquidationValue,
+        available_margin: summary.cash,
+        volume: totalMetrics.volume,
+        orders: totalMetrics.count,
+        trading_fees: totalMetrics.fees,
+        funding_fees: 0
+      },
+      stocks: {
+        equity: summary.stockValue,
+        available_margin: 0,
+        volume: getMetrics('stocks').volume,
+        orders: getMetrics('stocks').count,
+        trading_fees: getMetrics('stocks').fees,
+        funding_fees: 0
+      },
+      options: {
+        equity: summary.optionValue,
+        available_margin: 0,
+        volume: getMetrics('options').volume,
+        orders: getMetrics('options').count,
+        trading_fees: getMetrics('options').fees,
+        funding_fees: 0
+      },
+      futures: {
+        equity: 0, // IBKR doesn't separate futures equity in EquitySummary
+        available_margin: 0,
+        volume: getMetrics('futures').volume,
+        orders: getMetrics('futures').count,
+        trading_fees: getMetrics('futures').fees,
+        funding_fees: 0
+      },
+      cfd: {
+        equity: 0,
+        available_margin: 0,
+        volume: getMetrics('cfd').volume,
+        orders: getMetrics('cfd').count,
+        trading_fees: getMetrics('cfd').fees,
+        funding_fees: 0
+      },
+      forex: {
+        equity: 0,
+        available_margin: 0,
+        volume: getMetrics('forex').volume,
+        orders: getMetrics('forex').count,
+        trading_fees: getMetrics('forex').fees,
+        funding_fees: 0
+      },
+      commodities: {
+        equity: summary.commodityValue,
+        available_margin: 0,
+        volume: getMetrics('commodities').volume,
+        orders: getMetrics('commodities').count,
+        trading_fees: getMetrics('commodities').fees,
+        funding_fees: 0
+      }
     };
   }
 
