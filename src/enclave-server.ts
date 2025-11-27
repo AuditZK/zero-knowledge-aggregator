@@ -288,7 +288,7 @@ export class EnclaveServer {
             equity: data.equity || 0,
             available_margin: data.available_margin || 0,
             volume: data.volume || 0,
-            orders: data.orders || 0,
+            trades: data.trades || 0,
             trading_fees: data.trading_fees || 0,
             funding_fees: data.funding_fees || 0
           } : undefined;

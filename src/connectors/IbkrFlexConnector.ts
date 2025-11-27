@@ -54,7 +54,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
     });
   }
 
-  async getHistoricalSummaries(): Promise<Array<{ date: string; breakdown: Record<string, { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number }> }>> {
+  async getHistoricalSummaries(): Promise<Array<{ date: string; breakdown: Record<string, { equity: number; available_margin: number; volume: number; trades: number; trading_fees: number; funding_fees: number }> }>> {
     return this.withErrorHandling('getHistoricalSummaries', async () => {
       const [summaries, trades] = await Promise.all([
         this.fetchFlexData(xml => this.flexService.parseAccountSummary(xml)),
@@ -129,7 +129,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
   private mapSummaryToBreakdown(
     summary: FlexAccountSummary,
     tradeMetrics?: Record<string, { volume: number; count: number; fees: number }>
-  ): Record<string, { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number }> {
+  ): Record<string, { equity: number; available_margin: number; volume: number; trades: number; trading_fees: number; funding_fees: number }> {
     const getMetrics = (key: string) => tradeMetrics?.[key] || { volume: 0, count: 0, fees: 0 };
     const totalMetrics = getMetrics('total');
 
@@ -139,7 +139,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
         equity: summary.netLiquidationValue,
         available_margin: summary.cash,
         volume: totalMetrics.volume,
-        orders: totalMetrics.count,
+        trades: totalMetrics.count,
         trading_fees: totalMetrics.fees,
         funding_fees: 0
       },
@@ -147,7 +147,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
         equity: summary.stockValue,
         available_margin: 0,
         volume: getMetrics('stocks').volume,
-        orders: getMetrics('stocks').count,
+        trades: getMetrics('stocks').count,
         trading_fees: getMetrics('stocks').fees,
         funding_fees: 0
       },
@@ -155,7 +155,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
         equity: summary.optionValue,
         available_margin: 0,
         volume: getMetrics('options').volume,
-        orders: getMetrics('options').count,
+        trades: getMetrics('options').count,
         trading_fees: getMetrics('options').fees,
         funding_fees: 0
       },
@@ -163,7 +163,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
         equity: 0, // IBKR doesn't separate futures equity in EquitySummary
         available_margin: 0,
         volume: getMetrics('futures').volume,
-        orders: getMetrics('futures').count,
+        trades: getMetrics('futures').count,
         trading_fees: getMetrics('futures').fees,
         funding_fees: 0
       },
@@ -171,7 +171,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
         equity: 0,
         available_margin: 0,
         volume: getMetrics('cfd').volume,
-        orders: getMetrics('cfd').count,
+        trades: getMetrics('cfd').count,
         trading_fees: getMetrics('cfd').fees,
         funding_fees: 0
       },
@@ -179,7 +179,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
         equity: 0,
         available_margin: 0,
         volume: getMetrics('forex').volume,
-        orders: getMetrics('forex').count,
+        trades: getMetrics('forex').count,
         trading_fees: getMetrics('forex').fees,
         funding_fees: 0
       },
@@ -187,14 +187,14 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
         equity: summary.commodityValue,
         available_margin: 0,
         volume: getMetrics('commodities').volume,
-        orders: getMetrics('commodities').count,
+        trades: getMetrics('commodities').count,
         trading_fees: getMetrics('commodities').fees,
         funding_fees: 0
       }
     };
   }
 
-  async getBalanceBreakdown(): Promise<Record<string, { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number }>> {
+  async getBalanceBreakdown(): Promise<Record<string, { equity: number; available_margin: number; volume: number; trades: number; trading_fees: number; funding_fees: number }>> {
     return this.withErrorHandling('getBalanceBreakdown', async () => {
       const [summaries, trades] = await Promise.all([
         this.fetchFlexData(xml => this.flexService.parseAccountSummary(xml)),

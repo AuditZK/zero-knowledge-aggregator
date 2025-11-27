@@ -70,7 +70,7 @@ export interface MarketBalanceBreakdown {
   positions?: number;
   // Trading activity metrics (per market type)
   volume?: number;          // Trading volume in USD
-  orders?: number;          // Number of executed orders
+  trades?: number;          // Number of executed trades (not orders)
   tradingFees?: number;     // Total trading fees (camelCase)
   fundingFees?: number;     // Funding fees - swap/perp only (camelCase)
   // snake_case aliases for gRPC mapping
