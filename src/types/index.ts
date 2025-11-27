@@ -68,6 +68,14 @@ export interface MarketBalanceBreakdown {
   availableBalance?: number;
   usedMargin?: number;
   positions?: number;
+  // Trading activity metrics (per market type)
+  volume?: number;          // Trading volume in USD
+  orders?: number;          // Number of executed orders
+  tradingFees?: number;     // Total trading fees (camelCase)
+  fundingFees?: number;     // Funding fees - swap/perp only (camelCase)
+  // snake_case aliases for gRPC mapping
+  trading_fees?: number;    // Alias for tradingFees
+  funding_fees?: number;    // Alias for fundingFees
   // IBKR format aliases (IbkrFlexConnector uses these)
   equity?: number;
   available_margin?: number;
@@ -79,6 +87,7 @@ export interface BreakdownByMarket {
   future?: MarketBalanceBreakdown;
   margin?: MarketBalanceBreakdown;
   option?: MarketBalanceBreakdown;
+  options?: MarketBalanceBreakdown; // Alias for gRPC (uses plural)
   global?: MarketBalanceBreakdown;
 }
 

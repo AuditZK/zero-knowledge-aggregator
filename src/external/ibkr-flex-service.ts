@@ -24,6 +24,7 @@ export interface FlexTrade {
   netCash: number;
   closePrice: number;
   fifoPnlRealized: number;
+  assetCategory: string; // STK, OPT, FUT, CASH, etc.
 }
 
 export interface FlexPosition {
@@ -173,6 +174,7 @@ export class IbkrFlexService {
           netCash: parseFloat(attrs.netCash || '0'),
           closePrice: parseFloat(attrs.closePrice || '0'),
           fifoPnlRealized: parseFloat(attrs.fifoPnlRealized || '0'),
+          assetCategory: attrs.assetCategory || 'STK', // STK, OPT, FUT, CASH
         };
       });
     } catch (error: unknown) {
@@ -287,7 +289,8 @@ export class IbkrFlexService {
           cash: parseFloat(attrs.cash || '0'),
           stockValue: parseFloat(attrs.stock || attrs.stockMarketValue || '0'),
           optionValue: parseFloat(attrs.options || attrs.optionMarketValue || '0'),
-          commodityValue: parseFloat(attrs.commodityOptions || attrs.commodityMarketValue || '0'),
+          // IBKR uses 'commodities' for futures/commodities equity value
+          commodityValue: parseFloat(attrs.commodities || attrs.commodityOptions || attrs.commodityMarketValue || '0'),
           netLiquidationValue: netLiquidation,
           unrealizedPnL: parseFloat(attrs.forexCfdUnrealizedPl || attrs.unrealizedPnL || '0'),
           realizedPnL: parseFloat(attrs.realizedPnL || '0'),

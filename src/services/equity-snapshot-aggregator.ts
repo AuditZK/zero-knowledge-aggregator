@@ -311,43 +311,87 @@ export class EquitySnapshotAggregator {
 
   /**
    * Build detailed breakdown by market type
+   * Always categorizes trades into spot/swap/options even if balance data only exists globally
+   * Uses snake_case for JSON properties to match gRPC expected format
    */
   private buildMarketBreakdown(
     balancesByMarket: Record<string, MarketBalanceBreakdown>,
     tradesByMarket: Record<string, MarketTrade[]>,
-    _totalFundingFees: number,
+    totalFundingFees: number,
     globalEquity: number,
     globalMargin: number
   ): BreakdownByMarket {
     const breakdown: BreakdownByMarket = {};
+
+    // Collect all trades from all market buckets
+    const allTrades: MarketTrade[] = [];
+    for (const trades of Object.values(tradesByMarket)) {
+      allTrades.push(...trades);
+    }
+
+    // Standard market types to always categorize
+    const standardMarkets: MarketType[] = ['spot', 'swap', 'option'];
+
     let totalVolume = 0;
-    let totalTrades = 0;
+    let totalOrders = 0;
     let totalTradingFees = 0;
 
-    for (const [marketType, trades] of Object.entries(tradesByMarket)) {
-      const volume = trades.reduce((sum, t) => sum + (t.cost || 0), 0);
-      const fees = trades.reduce((sum, t) => sum + (t.fee?.cost || 0), 0);
+    // Always categorize trades by market type
+    for (const marketType of standardMarkets) {
+      // Filter trades for this market type
+      const marketTrades = allTrades.filter(t => this.matchesMarketType(t.symbol, marketType));
+
+      const volume = marketTrades.reduce((sum, t) => sum + (t.cost || 0), 0);
+      const fees = marketTrades.reduce((sum, t) => sum + (t.fee?.cost || 0), 0);
+      const orders = marketTrades.length;
+
+      // Use balance data if available for this market type
       const balance = balancesByMarket[marketType];
 
+      // Use snake_case format for JSON (matches gRPC expected format)
+      const fundingForMarket = marketType === 'swap' ? totalFundingFees : 0;
       const marketData: MarketBalanceBreakdown = {
+        // Main fields using TypeScript interface
         totalEquityUsd: balance?.totalEquityUsd || 0,
         unrealizedPnl: balance?.unrealizedPnl || 0,
         realizedPnl: balance?.realizedPnl,
         availableBalance: balance?.availableBalance,
         usedMargin: balance?.usedMargin,
-        positions: balance?.positions
+        positions: balance?.positions,
+        // snake_case aliases for gRPC mapping
+        equity: balance?.totalEquityUsd || balance?.equity || 0,
+        available_margin: balance?.availableBalance || balance?.available_margin || 0,
+        // Trading activity metrics (both camelCase and snake_case)
+        volume,
+        orders,
+        tradingFees: fees,
+        trading_fees: fees,
+        fundingFees: fundingForMarket,
+        funding_fees: fundingForMarket
       };
 
-      (breakdown as Record<string, MarketBalanceBreakdown>)[marketType] = marketData;
+      // Map 'option' to 'options' for gRPC consistency (proto uses 'options' plural)
+      const outputKey = marketType === 'option' ? 'options' : marketType;
+      (breakdown as Record<string, MarketBalanceBreakdown>)[outputKey] = marketData;
       totalVolume += volume;
-      totalTrades += trades.length;
+      totalOrders += orders;
       totalTradingFees += fees;
     }
 
     breakdown.global = {
       totalEquityUsd: globalEquity,
       availableBalance: globalMargin,
-      unrealizedPnl: 0
+      unrealizedPnl: 0,
+      // snake_case aliases
+      equity: globalEquity,
+      available_margin: globalMargin,
+      // Global totals (both camelCase and snake_case)
+      volume: totalVolume,
+      orders: totalOrders,
+      tradingFees: totalTradingFees,
+      trading_fees: totalTradingFees,
+      fundingFees: totalFundingFees,
+      funding_fees: totalFundingFees
     };
 
     return breakdown;

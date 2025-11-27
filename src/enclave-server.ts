@@ -277,18 +277,47 @@ export class EnclaveServer {
         validated.end_date ? new Date(validated.end_date) : undefined
       );
 
-      // Convert to gRPC format
+      // Convert to gRPC format with market breakdown
+      // Supports both crypto (spot/swap) and traditional (stocks/futures/cfd) categories
       const response = {
-        snapshots: snapshots.map(snapshot => ({
-          user_uid: snapshot.userUid,
-          exchange: snapshot.exchange,
-          timestamp: snapshot.timestamp.getTime(),
-          total_equity: snapshot.totalEquity,
-          realized_balance: snapshot.realizedBalance,
-          unrealized_pnl: snapshot.unrealizedPnL,
-          deposits: snapshot.deposits,
-          withdrawals: snapshot.withdrawals
-        }))
+        snapshots: snapshots.map(snapshot => {
+          const bd = snapshot.breakdown as Record<string, any> | undefined;
+
+          // Helper to map market metrics
+          const mapMetrics = (data: any) => data ? {
+            equity: data.equity || 0,
+            available_margin: data.available_margin || 0,
+            volume: data.volume || 0,
+            orders: data.orders || 0,
+            trading_fees: data.trading_fees || 0,
+            funding_fees: data.funding_fees || 0
+          } : undefined;
+
+          return {
+            user_uid: snapshot.userUid,
+            exchange: snapshot.exchange,
+            timestamp: snapshot.timestamp.getTime(),
+            total_equity: snapshot.totalEquity,
+            realized_balance: snapshot.realizedBalance,
+            unrealized_pnl: snapshot.unrealizedPnL,
+            deposits: snapshot.deposits,
+            withdrawals: snapshot.withdrawals,
+            breakdown: bd ? {
+              global: mapMetrics(bd.global),
+              // Crypto categories
+              spot: mapMetrics(bd.spot),
+              swap: mapMetrics(bd.swap),
+              // Traditional categories (IBKR)
+              stocks: mapMetrics(bd.stocks),
+              futures: mapMetrics(bd.futures),
+              cfd: mapMetrics(bd.cfd),
+              forex: mapMetrics(bd.forex),
+              commodities: mapMetrics(bd.commodities),
+              // Shared
+              options: mapMetrics(bd.options)
+            } : undefined
+          };
+        })
       };
 
       callback(null, response);

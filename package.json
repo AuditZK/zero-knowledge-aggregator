@@ -15,12 +15,19 @@
     "test:web": "ts-node test-server.ts",
     "lint": "eslint src --ext .ts",
     "prisma:generate": "prisma generate",
+    "docker:build": "docker-compose -f docker-compose.dev.yml build",
     "docker:up": "docker-compose -f docker-compose.dev.yml up -d",
     "docker:down": "docker-compose -f docker-compose.dev.yml down",
     "docker:logs": "docker-compose -f docker-compose.dev.yml logs -f",
+    "docker:logs:enclave": "docker logs -f enclave_worker_dev",
+    "docker:restart": "docker-compose -f docker-compose.dev.yml restart enclave",
+    "docker:rebuild": "docker-compose -f docker-compose.dev.yml up --build -d enclave",
+    "docker:shell": "docker exec -it enclave_worker_dev sh",
+    "docker:clean": "docker-compose -f docker-compose.dev.yml down -v",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "db:push:docker": "docker exec enclave_worker_dev npx prisma db push"
   },
   "keywords": [
     "trading",

@@ -1,5 +1,5 @@
 # Prometheus Configuration for Development
-# Scrapes metrics from the enclave running on host machine
+# Scrapes metrics from the enclave container
 
 global:
   scrape_interval: 15s
@@ -7,19 +7,20 @@ global:
   scrape_timeout: 10s
 
 scrape_configs:
-  # Enclave Metrics (running on host, not in Docker)
+  # Enclave Metrics (running in Docker container)
   - job_name: 'enclave'
     scrape_interval: 10s
     metrics_path: '/metrics'
     scheme: http
     static_configs:
       - targets:
-          # Windows/Mac: Use host.docker.internal to access host machine
-          - 'host.docker.internal:9090'
+          # Access enclave container via Docker network
+          - 'enclave:9090'
         labels:
           instance: 'enclave-worker-dev'
           component: 'grpc-server'
           environment: 'development'
+          enclave_type: 'simulated-docker'
 
   # Prometheus Self-Monitoring
   - job_name: 'prometheus'
