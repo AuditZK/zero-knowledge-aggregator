@@ -118,11 +118,11 @@ export class UserRepository {
       include: {
         _count: {
           select: {
-            trades: true,
             snapshots: true,
             exchangeConnections: true,
           },
         },
+        syncStatuses: true, // Get trade count from sync status (trades are memory-only)
       },
     });
 
@@ -134,9 +134,12 @@ export class UserRepository {
       (Date.now() - user.createdAt.getTime()) / (1000 * 60 * 60 * 24),
     );
 
+    // Trade count from sync status (trades never persisted - alpha protection)
+    const totalTrades = user.syncStatuses.reduce((sum, s) => sum + s.totalTrades, 0);
+
     return {
-      totalTrades: user._count.trades,
-      totalPositions: user._count.snapshots, // Using snapshots count (positions not in schema)
+      totalTrades,
+      totalPositions: user._count.snapshots,
       exchangeConnections: user._count.exchangeConnections,
       accountAge,
     };

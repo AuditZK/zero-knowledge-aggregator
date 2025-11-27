@@ -75,37 +75,34 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
   async getTrades(startDate: Date, endDate: Date): Promise<TradeData[]> {
     return this.withErrorHandling('getTrades', async () => {
       const since = this.dateToTimestamp(startDate);
-      const endTimestamp = this.dateToTimestamp(endDate);
       const marketTypes = await this.detectMarketTypes();
       const filteredTypes = getFilteredMarketTypes(this.exchangeName, marketTypes);
 
-      this.logger.info(`Fetching trades from all markets: ${filteredTypes.join(', ')}`);
+      this.logger.info(`Fetching trades from markets: ${filteredTypes.join(', ')}`);
 
       const allTrades: ccxt.Trade[] = [];
       for (const marketType of filteredTypes) {
-        try {
-          const originalType = this.exchange.options['defaultType'];
-          this.exchange.options['defaultType'] = marketType;
+        const originalType = this.exchange.options['defaultType'];
+        this.exchange.options['defaultType'] = marketType;
 
-          if (this.exchange.has['fetchMyTrades']) {
-            try {
-              const marketTrades = await this.exchange.fetchMyTrades(undefined, since, undefined, { endTime: endTimestamp });
-              if (marketTrades.length > 0) {
-                allTrades.push(...marketTrades);
-                this.logger.info(`Fetched ${marketTrades.length} trades from ${marketType} market`);
-              }
-            } catch (error) {
-              this.logger.warn(`Failed to fetch ${marketType} trades:`, { error: error instanceof Error ? error.message : String(error) });
+        // Universal approach: fetch trades per symbol
+        const symbols = await this.getActiveSymbols(marketType, since);
+
+        for (const symbol of symbols) {
+          try {
+            const symbolTrades = await this.exchange.fetchMyTrades(symbol, since);
+            if (symbolTrades.length > 0) {
+              allTrades.push(...symbolTrades);
             }
+          } catch {
+            // Symbol might not have trades
           }
-
-          this.exchange.options['defaultType'] = originalType;
-        } catch (error) {
-          this.logger.error(`Error processing ${marketType} market:`, error);
         }
+
+        this.exchange.options['defaultType'] = originalType;
       }
 
-      this.logger.info(`Total trades fetched: ${allTrades.length} from ${filteredTypes.length} markets`);
+      this.logger.info(`Total: ${allTrades.length} trades from ${filteredTypes.length} markets`);
 
       return allTrades
         .filter(trade => this.isInDateRange(this.timestampToDate(trade.timestamp || 0), startDate, endDate))
@@ -207,30 +204,119 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
       this.exchange.options['defaultType'] = marketType;
       const sinceTimestamp = this.dateToTimestamp(since);
 
-      let trades: ccxt.Trade[] = [];
-      if (this.exchange.has['fetchMyTrades']) {
-        try {
-          trades = await this.exchange.fetchMyTrades(undefined, sinceTimestamp);
-        } catch (error) {
-          this.logger.warn(`fetchMyTrades failed for ${marketType}, exchange requires symbol:`, { error: error instanceof Error ? error.message : String(error) });
-          return [];
-        }
-      } else {
-        this.logger.warn(`Exchange does not support fetchMyTrades for ${marketType}`);
+      if (!this.exchange.has['fetchMyTrades']) {
+        this.logger.warn(`${this.exchangeName} does not support fetchMyTrades`);
         return [];
       }
 
-      return trades.map(trade => ({
-        id: trade.id || `${trade.timestamp}`, timestamp: trade.timestamp || 0,
-        symbol: trade.symbol || '', side: trade.side as 'buy' | 'sell',
-        price: trade.price || 0, amount: trade.amount || 0,
-        cost: trade.cost || (trade.amount || 0) * (trade.price || 0),
-        fee: trade.fee ? {
-          cost: trade.fee.cost || 0,
-          currency: trade.fee.currency || this.defaultCurrency,
-        } : undefined,
-      }));
+      // Universal approach: fetch trades per symbol
+      // This works for ALL exchanges (Binance, Bitget, etc.)
+      // Each trade has its own timestamp = correct daily volume distribution
+      const symbols = await this.getActiveSymbols(marketType, sinceTimestamp);
+
+      if (symbols.length === 0) {
+        this.logger.info(`No symbols traded in ${marketType} market`);
+        return [];
+      }
+
+      this.logger.info(`Fetching trades for ${symbols.length} ${marketType} symbols`);
+
+      const allTrades: ccxt.Trade[] = [];
+      for (const symbol of symbols) {
+        try {
+          const symbolTrades = await this.exchange.fetchMyTrades(symbol, sinceTimestamp);
+          if (symbolTrades.length > 0) {
+            allTrades.push(...symbolTrades);
+            this.logger.debug(`${symbol}: ${symbolTrades.length} trades`);
+          }
+        } catch (error) {
+          this.logger.debug(`${symbol}: no trades or error`);
+        }
+      }
+
+      this.logger.info(`Total: ${allTrades.length} trades from ${marketType} market`);
+      return this.mapTradesToExecutedOrders(allTrades);
     });
+  }
+
+  /**
+   * Map CCXT trades to ExecutedOrderData
+   * Each trade = one execution with its own timestamp (correct for daily volume distribution)
+   */
+  private mapTradesToExecutedOrders(trades: ccxt.Trade[]): ExecutedOrderData[] {
+    return trades.map(trade => ({
+      id: trade.id || `${trade.timestamp}`,
+      timestamp: trade.timestamp || 0,
+      symbol: trade.symbol || '',
+      side: trade.side as 'buy' | 'sell',
+      price: trade.price || 0,
+      amount: trade.amount || 0,
+      cost: trade.cost || (trade.amount || 0) * (trade.price || 0),
+      fee: trade.fee ? {
+        cost: trade.fee.cost || 0,
+        currency: trade.fee.currency || this.defaultCurrency,
+      } : undefined,
+    }));
+  }
+
+  /**
+   * Get symbols that were traded (from closed orders, positions, balances)
+   * Uses fetchClosedOrders ONLY for symbol discovery, NOT for trade data
+   */
+  private async getActiveSymbols(marketType: MarketType, since?: number): Promise<string[]> {
+    const symbols = new Set<string>();
+
+    // 1. Discover symbols from closed orders (works for all exchanges)
+    if (this.exchange.has['fetchClosedOrders']) {
+      try {
+        const closedOrders = await this.exchange.fetchClosedOrders(undefined, since);
+        closedOrders.forEach(order => {
+          if (order.symbol) symbols.add(order.symbol);
+        });
+        this.logger.debug(`Found ${symbols.size} symbols from closed orders`);
+      } catch (error) {
+        // Some exchanges require symbol for fetchClosedOrders too - continue to other methods
+        this.logger.debug(`fetchClosedOrders without symbol not supported`);
+      }
+    }
+
+    // 2. For swap/futures: also check open positions
+    if (marketType === 'swap' || marketType === 'future') {
+      try {
+        if (this.exchange.has['fetchPositions']) {
+          const positions = await this.exchange.fetchPositions();
+          positions.forEach(pos => {
+            if (pos.symbol) symbols.add(pos.symbol);
+          });
+        }
+      } catch {
+        // Positions not available
+      }
+    }
+
+    // 3. For spot: also check balance for held assets
+    if (marketType === 'spot') {
+      try {
+        const balance = await this.exchange.fetchBalance();
+        await this.exchange.loadMarkets();
+
+        const totalBalances = balance.total as Record<string, number> | undefined;
+        const assets = Object.keys(totalBalances || {}).filter(asset => {
+          const total = totalBalances?.[asset] || 0;
+          return total > 0 && asset !== 'USDT' && asset !== 'USD' && asset !== 'USDC';
+        });
+
+        for (const asset of assets) {
+          const pair = `${asset}/USDT`;
+          if (this.exchange.markets[pair]) symbols.add(pair);
+        }
+      } catch {
+        // Balance not available
+      }
+    }
+
+    this.logger.info(`Discovered ${symbols.size} symbols for ${marketType}`);
+    return Array.from(symbols);
   }
 
   async getFundingFees(symbols: string[], since: Date): Promise<FundingFeeData[]> {

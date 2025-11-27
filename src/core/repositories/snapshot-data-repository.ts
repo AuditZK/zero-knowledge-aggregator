@@ -158,6 +158,13 @@ export class SnapshotDataRepository {
     return result.count;
   }
 
+  /**
+   * Count total snapshots (used for health check database connectivity)
+   */
+  async countSnapshots(): Promise<number> {
+    return await this.prisma.snapshotData.count();
+  }
+
   async countSnapshotDataByUser(userUid: string, exchange?: string): Promise<number> {
     const where: Prisma.SnapshotDataWhereInput = { userUid };
     if (exchange) {

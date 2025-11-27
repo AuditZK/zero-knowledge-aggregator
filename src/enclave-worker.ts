@@ -3,10 +3,11 @@ import { TradeSyncService } from './services/trade-sync-service';
 import { EquitySnapshotAggregator } from './services/equity-snapshot-aggregator';
 import { SnapshotDataRepository } from './core/repositories/snapshot-data-repository';
 import { ExchangeConnectionRepository } from './core/repositories/exchange-connection-repository';
-import { TradeRepository } from './core/repositories/trade-repository';
+import { SyncStatusRepository } from './core/repositories/sync-status-repository';
 import { UserRepository } from './core/repositories/user-repository';
 import { getLogger } from './utils/secure-enclave-logger';
 import { SnapshotData } from './types';
+// SECURITY: No TradeRepository - trades are memory-only (alpha protection)
 
 const logger = getLogger('EnclaveWorker');
 
@@ -50,7 +51,7 @@ export class EnclaveWorker {
     @inject(EquitySnapshotAggregator) private readonly equitySnapshotAggregator: EquitySnapshotAggregator,
     @inject(SnapshotDataRepository) private readonly snapshotDataRepo: SnapshotDataRepository,
     @inject(ExchangeConnectionRepository) private readonly exchangeConnectionRepo: ExchangeConnectionRepository,
-    @inject(TradeRepository) private readonly tradeRepo: TradeRepository,
+    @inject(SyncStatusRepository) private readonly syncStatusRepo: SyncStatusRepository,
     @inject(UserRepository) private readonly userRepo: UserRepository
   ) {}
 
@@ -332,9 +333,9 @@ export class EnclaveWorker {
         }
       }
 
-      // Get trade count (safe - only returns count)
-      const count = await this.tradeRepo.countTradesByUserUid(userUid, undefined, ex);
-      totalTrades += count;
+      // Get trade count from sync status (trades are memory-only, not stored)
+      const syncStatus = await this.syncStatusRepo.getSyncStatus(userUid, ex);
+      totalTrades += syncStatus?.totalTrades || 0;
     }
 
     return {
@@ -535,8 +536,8 @@ export class EnclaveWorker {
     uptime: number;
   }> {
     try {
-      // Verify we can access the database
-      await this.tradeRepo.countTradesByUserUid('test');
+      // Verify database connectivity using snapshot repository
+      await this.snapshotDataRepo.countSnapshots();
 
       return {
         status: 'healthy',

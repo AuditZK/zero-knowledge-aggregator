@@ -1,5 +1,4 @@
 import { injectable, inject } from 'tsyringe';
-import { TradeRepository } from '../core/repositories/trade-repository';
 import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repository';
 import { ExchangeConnectionRepository } from '../core/repositories/exchange-connection-repository';
 import { UserRepository } from '../core/repositories/user-repository';
@@ -51,12 +50,12 @@ function roundToInterval(date: Date, intervalMinutes: number = 60): Date {
 @injectable()
 export class EquitySnapshotAggregator {
   constructor(
-    @inject(TradeRepository) private readonly tradeRepo: TradeRepository,
     @inject(SnapshotDataRepository) private readonly snapshotDataRepo: SnapshotDataRepository,
     @inject(ExchangeConnectionRepository) private readonly connectionRepo: ExchangeConnectionRepository,
     @inject(UserRepository) private readonly userRepo: UserRepository,
     @inject(UniversalConnectorCacheService) private readonly connectorCache: UniversalConnectorCacheService,
   ) {}
+  // SECURITY: No TradeRepository - trades are fetched from API and aggregated in memory only
 
   private matchesMarketType(symbol: string, marketType: string): boolean {
     const s = symbol.toUpperCase();
@@ -73,7 +72,7 @@ export class EquitySnapshotAggregator {
   async updateCurrentSnapshot(userUid: string, exchange: string): Promise<void> {
     try {
       // Step 1: Get user and connector
-      const { connector, syncInterval, currentSnapshot } = await this.getConnectorAndSnapshotTime(
+      const { connector, currentSnapshot } = await this.getConnectorAndSnapshotTime(
         userUid,
         exchange
       );
@@ -86,19 +85,23 @@ export class EquitySnapshotAggregator {
       const { balancesByMarket, globalEquity, globalMargin, filteredTypes } =
         await this.fetchBalancesByMarket(connector, exchange);
 
-      // Step 3: Fetch trades by market
-      const since = new Date(currentSnapshot.getTime() - syncInterval * 60 * 1000);
+      // Step 3: Fetch trades by market - ALWAYS from start of day (00:00 UTC)
+      // Daily snapshots need ALL trades from the day, not just since last sync
+      const startOfDay = new Date(Date.UTC(
+        currentSnapshot.getUTCFullYear(),
+        currentSnapshot.getUTCMonth(),
+        currentSnapshot.getUTCDate(),
+        0, 0, 0, 0
+      ));
       const { tradesByMarket, swapSymbols } = await this.fetchTradesByMarket(
-        userUid,
         exchange,
-        since,
-        currentSnapshot,
+        startOfDay,
         filteredTypes,
         connector
       );
 
       // Step 4: Calculate fees
-      const totalFundingFees = await this.calculateFundingFees(connector, swapSymbols, since);
+      const totalFundingFees = await this.calculateFundingFees(connector, swapSymbols, startOfDay);
 
       // Step 5: Build market breakdown
       const breakdown = this.buildMarketBreakdown(
@@ -231,58 +234,44 @@ export class EquitySnapshotAggregator {
 
   /**
    * Fetch trades grouped by market type
+   * For CCXT connectors: fetch directly from exchange API (memory only)
+   * For other connectors: empty (trade metrics from historical summaries)
+   * SECURITY: No database storage - trades stay in memory only
    */
   private async fetchTradesByMarket(
-    userUid: string,
     exchange: string,
     since: Date,
-    currentSnapshot: Date,
     filteredTypes: MarketType[],
     connector: ExtendedConnector
   ) {
     const tradesByMarket: Record<string, MarketTrade[]> = {};
     const swapSymbols = new Set<string>();
 
-    try {
-      const allTrades = await this.tradeRepo.findTradesByUser(userUid, {
-        exchange,
-        startDate: since,
-        endDate: currentSnapshot
-      });
+    // CCXT connectors (crypto exchanges): fetch trades directly from exchange API
+    const isCcxtConnector = hasMarketTypes(connector) && connector.getExecutedOrders;
 
-      for (const marketType of filteredTypes) {
-        const marketTrades = allTrades.filter(trade =>
-          this.matchesMarketType(trade.symbol, marketType)
-        );
-        tradesByMarket[marketType] = marketTrades.map(trade => ({
-          id: trade.id,
-          timestamp: trade.timestamp.getTime(),
-          symbol: trade.symbol,
-          side: trade.type,
-          price: trade.price,
-          amount: trade.quantity,
-          cost: trade.price * trade.quantity,
-          fee: trade.fees ? { cost: trade.fees, currency: 'USDT' } : undefined
-        }));
-
-        if (marketType === 'swap') {
-          marketTrades.forEach(trade => swapSymbols.add(trade.symbol));
-        }
-      }
-    } catch (error) {
-      // Fallback: fetch from connector API
+    if (isCcxtConnector) {
+      // Fetch trades from each market type via API
       for (const marketType of filteredTypes) {
         try {
-          const trades = connector.getExecutedOrders
-            ? await connector.getExecutedOrders(marketType, since)
-            : [];
+          const trades = await connector.getExecutedOrders!(marketType, since);
           tradesByMarket[marketType] = trades;
           if (marketType === 'swap') {
             trades.forEach((trade: MarketTrade) => swapSymbols.add(trade.symbol));
           }
+          logger.debug(`Fetched ${trades.length} trades from ${exchange} ${marketType} API since ${since.toISOString()}`);
         } catch (apiError) {
+          logger.warn(`Failed to fetch trades from ${exchange} ${marketType} API`, { error: apiError instanceof Error ? apiError.message : String(apiError) });
           tradesByMarket[marketType] = [];
         }
+      }
+    } else {
+      // IBKR and other connectors: no individual trade storage (alpha protection)
+      // Trade metrics come from historical summaries, not individual trades
+      // For current day, volume/fees will be 0 - only balance/equity matters
+      logger.debug(`${exchange}: Trade metrics from historical summaries only (no individual trade storage)`);
+      for (const marketType of filteredTypes) {
+        tradesByMarket[marketType] = [];
       }
     }
 
