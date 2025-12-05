@@ -21,6 +21,8 @@ import { EquitySnapshotAggregator } from '../services/equity-snapshot-aggregator
 import { SyncRateLimiterService } from '../services/sync-rate-limiter.service';
 import { DailySyncSchedulerService } from '../services/daily-sync-scheduler.service';
 import { SevSnpAttestationService } from '../services/sev-snp-attestation.service';
+import { KeyDerivationService } from '../services/key-derivation.service';
+import { KeyManagementService } from '../services/key-management.service';
 
 // External Services (handle credentials)
 import { IbkrFlexService } from '../external/ibkr-flex-service';
@@ -31,6 +33,7 @@ import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repos
 import { ExchangeConnectionRepository } from '../core/repositories/exchange-connection-repository';
 import { SyncStatusRepository } from '../core/repositories/sync-status-repository';
 import { UserRepository } from '../core/repositories/user-repository';
+import { DEKRepository } from '../repositories/dek-repository';
 
 // Enclave Worker
 import { EnclaveWorker } from '../enclave-worker';
@@ -65,18 +68,21 @@ export function setupEnclaveContainer(): void {
   container.registerSingleton(ExchangeConnectionRepository);
   container.registerSingleton(SyncStatusRepository);
   container.registerSingleton(UserRepository);
+  container.registerSingleton(DEKRepository);
 
   // Register External Services (these handle credentials)
   container.registerSingleton(IbkrFlexService);
   container.registerSingleton(AlpacaApiService);
 
   // Register Core Enclave Services
+  container.registerSingleton(SevSnpAttestationService);
+  container.registerSingleton(KeyDerivationService);
+  container.registerSingleton(KeyManagementService);
   container.registerSingleton(EncryptionService);
   container.registerSingleton(EquitySnapshotAggregator);
   container.registerSingleton(TradeSyncService);
   container.registerSingleton(SyncRateLimiterService);
   container.registerSingleton(DailySyncSchedulerService);
-  container.registerSingleton(SevSnpAttestationService);
 
   // Register Enclave Worker
   container.registerSingleton(EnclaveWorker);

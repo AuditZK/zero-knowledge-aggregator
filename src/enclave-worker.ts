@@ -437,12 +437,13 @@ export class EnclaveWorker {
 
   /**
    * Create a new user with exchange connection
-   * Auto-generates a unique UID for the user
+   * Uses the userUid provided by the Platform (required for sync)
    *
    * SECURITY: Credentials are encrypted before storage
    * Returns only the userUid (no sensitive data)
    */
   async createUserConnection(request: {
+    userUid: string;  // Platform provides the UUID
     exchange: string;
     label: string;
     apiKey: string;
@@ -454,22 +455,10 @@ export class EnclaveWorker {
     error?: string;
   }> {
     try {
-      // SECURITY: Generate deterministic UID from credentials hash
-      // This ensures same credentials = same UID (prevents duplicates)
-      const crypto = await import('crypto');
-      const credentialsString = `${request.exchange}:${request.apiKey}:${request.apiSecret}:${request.passphrase || ''}`;
-      const hash = crypto.createHash('sha256').update(credentialsString).digest('hex');
+      // Use the userUid provided by the Platform
+      const userUid = request.userUid;
 
-      // Format as RFC 4122 UUIDv4 (deterministic from hash)
-      // Set version bits (4xxx) and variant bits (8xxx/9xxx/axxx/bxxx)
-      const timeLow = hash.substring(0, 8);
-      const timeMid = hash.substring(8, 12);
-      const timeHiAndVersion = '4' + hash.substring(13, 16); // Force version 4
-      const clockSeqAndReserved = (parseInt(hash.substring(16, 18), 16) & 0x3F | 0x80).toString(16).padStart(2, '0') + hash.substring(18, 20); // Force variant bits
-      const node = hash.substring(20, 32);
-      const userUid = `${timeLow}-${timeMid}-${timeHiAndVersion}-${clockSeqAndReserved}-${node}`;
-
-      logger.info('Creating user with deterministic UID from credentials');
+      logger.info('Creating user with Platform-provided UID', { userUid });
 
       // Step 1: Create user (upsert - creates if not exists)
       await this.userRepo.createUser({ uid: userUid });

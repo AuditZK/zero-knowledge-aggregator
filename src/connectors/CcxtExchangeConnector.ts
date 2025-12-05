@@ -348,4 +348,62 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
       return allFunding;
     });
   }
+
+  /**
+   * Get balance from Earn/Staking products (flexible savings, staking, etc.)
+   * Supported exchanges: Binance, Bitget, OKX, Bybit
+   */
+  async getEarnBalance(): Promise<MarketBalanceData> {
+    return this.withErrorHandling('getEarnBalance', async () => {
+      let earnEquity = 0;
+
+      // Try different CCXT earn methods depending on exchange support
+      // Method 1: fetchBalance with type 'earn' or 'savings'
+      const earnTypes = ['earn', 'savings', 'funding'];
+
+      for (const earnType of earnTypes) {
+        try {
+          const balance = await this.exchange.fetchBalance({ type: earnType });
+
+          for (const [currency, value] of Object.entries(balance)) {
+            if (['info', 'free', 'used', 'total', 'debt', 'timestamp', 'datetime'].includes(currency)) {continue;}
+            const holding = value as any;
+            if (holding && holding.total && Number(holding.total) > 0) {
+              // For stablecoins, use direct value; for other assets, we'd need price conversion
+              if (['USDT', 'USDC', 'USD', 'BUSD', 'DAI'].includes(currency)) {
+                earnEquity += Number(holding.total) || 0;
+              }
+            }
+          }
+
+          if (earnEquity > 0) {
+            this.logger.info(`Earn balance (${earnType}): ${earnEquity.toFixed(2)} USD`);
+            return { equity: earnEquity, available_margin: 0 };
+          }
+        } catch (error) {
+          this.logger.debug(`${earnType} balance not available: ${extractErrorMessage(error)}`);
+        }
+      }
+
+      // Method 2: Try Binance-specific Simple Earn API
+      if (this.exchangeName.toLowerCase() === 'binance') {
+        try {
+          // Binance Simple Earn - Flexible Products
+          const earnProducts = await (this.exchange as any).sapiGetSimpleEarnFlexiblePosition();
+          if (earnProducts?.rows) {
+            for (const product of earnProducts.rows) {
+              if (['USDT', 'USDC', 'BUSD'].includes(product.asset)) {
+                earnEquity += parseFloat(product.totalAmount || 0);
+              }
+            }
+          }
+        } catch {
+          this.logger.debug('Binance Simple Earn API not available');
+        }
+      }
+
+      this.logger.info(`Total earn balance: ${earnEquity.toFixed(2)} USD`);
+      return { equity: earnEquity, available_margin: 0 };
+    });
+  }
 }

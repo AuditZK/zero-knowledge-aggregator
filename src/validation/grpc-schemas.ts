@@ -1,6 +1,13 @@
 import { z } from 'zod';
 
-const uuidSchema = z.string().uuid();
+// Accept Clerk user IDs (user_xxx), UUIDs, and CUIDs
+// Clerk format: user_[a-zA-Z0-9]{20,40}
+// UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+// CUID format: c[a-z0-9]{20,30}
+const userUidSchema = z.string().min(1).max(100).regex(
+  /^(user_[a-zA-Z0-9]{10,50}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|c[a-z0-9]{20,30})$/i,
+  'Invalid user UID format (expected Clerk ID, UUID, or CUID)'
+);
 const exchangeSchema = z.string().min(1).max(50).regex(/^[a-z0-9_-]+$/);
 const timestampSchema = z.string().regex(/^\d+$/).transform(val => parseInt(val, 10))
   .refine(val => val > 0 && val < Date.now() + 86400000);
@@ -13,7 +20,7 @@ const timestampSchema = z.string().regex(/^\d+$/).transform(val => parseInt(val,
  * - Crypto: Current snapshot only (DailySyncScheduler handles midnight UTC syncs)
  */
 export const SyncJobRequestSchema = z.object({
-  user_uid: uuidSchema,
+  user_uid: userUidSchema,
   exchange: exchangeSchema.optional(),
   /** @deprecated Sync type is now automatic based on exchange type */
   type: z.enum(['INCREMENTAL', 'HISTORICAL', 'FULL', 'incremental', 'historical', 'full'])
@@ -23,12 +30,12 @@ export const SyncJobRequestSchema = z.object({
 });
 
 export const AggregatedMetricsRequestSchema = z.object({
-  user_uid: uuidSchema,
+  user_uid: userUidSchema,
   exchange: exchangeSchema.optional()
 });
 
 export const SnapshotTimeSeriesRequestSchema = z.object({
-  user_uid: uuidSchema,
+  user_uid: userUidSchema,
   exchange: exchangeSchema.optional(),
   start_date: timestampSchema.optional(),
   end_date: timestampSchema.optional()
@@ -36,6 +43,7 @@ export const SnapshotTimeSeriesRequestSchema = z.object({
   .refine(data => !data.start_date || !data.end_date || (data.end_date - data.start_date) <= 5 * 365 * 24 * 60 * 60 * 1000, 'Max 5 years');
 
 export const CreateUserConnectionRequestSchema = z.object({
+  user_uid: userUidSchema,  // Platform provides the user UID (Clerk ID, UUID, or CUID)
   exchange: exchangeSchema,
   label: z.string().min(1).max(100),
   api_key: z.string().min(1).max(500),

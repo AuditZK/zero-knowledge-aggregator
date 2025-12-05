@@ -277,8 +277,13 @@ export class IbkrFlexService {
         lastCash: lastEntry?.cash
       });
 
-      return dataList.map((info: { $: Record<string, string> }) => {
+      return dataList.map((info: { $: Record<string, string> }, index: number) => {
         const attrs = info.$;
+
+        // DEBUG: Log all available attributes for first entry to identify field names
+        if (index === dataList.length - 1) {
+          logger.info('IBKR EquitySummary attributes (latest entry):', { attrs });
+        }
 
         const netLiquidation = parseFloat(
           attrs.total || attrs.netLiquidation || attrs.netLiquidationValue || attrs.equityWithLoanValue || attrs.equity || '0'

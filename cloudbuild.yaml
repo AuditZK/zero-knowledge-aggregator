@@ -1,0 +1,9 @@
+steps:
+- name: 'gcr.io/cloud-builders/gcloud'
+  args:
+    - 'workflows'
+    - 'deploy'
+    - 'enclave-aggregator-building' # Remplacez par le nom de votre workflow
+    - '--source=enclave\cloudbuild.yaml' # Remplacez par le chemin de votre fichier workflow
+    - '--location=europe-west1' # Ex: europe-west1
+    - '--service-account=your-service-account@your-project-id.iam.gserviceaccount.com' # Optionnel, si votre workflow a besoin d'un compte de service spécifique

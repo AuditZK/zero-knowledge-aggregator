@@ -102,9 +102,17 @@ export function isUnifiedAccountExchange(exchangeId: string): boolean {
 }
 
 /**
+ * Earn/Staking market snapshot (no trading, only equity and rewards)
+ */
+export interface EarnMarketSnapshot {
+  equity: number;
+  rewards?: number; // APY rewards earned
+}
+
+/**
  * Market types supported by crypto exchanges
  */
-export type MarketType = 'spot' | 'swap' | 'future' | 'options' | 'margin';
+export type MarketType = 'spot' | 'swap' | 'future' | 'options' | 'margin' | 'earn';
 
 /**
  * Get filtered market types for unified account exchanges

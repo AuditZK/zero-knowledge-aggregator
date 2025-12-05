@@ -15,17 +15,18 @@ interface PrismaError extends Error {
 export class ExchangeConnectionRepository {
   constructor(
     @inject('PrismaClient') private readonly prisma: PrismaClient,
+    @inject(EncryptionService) private readonly encryptionService: EncryptionService,
   ) {}
 
   async createConnection(credentials: ExchangeCredentials): Promise<ExchangeConnection> {
-    const encryptedApiKey = EncryptionService.encrypt(credentials.apiKey);
-    const encryptedApiSecret = EncryptionService.encrypt(credentials.apiSecret);
+    const encryptedApiKey = await this.encryptionService.encrypt(credentials.apiKey);
+    const encryptedApiSecret = await this.encryptionService.encrypt(credentials.apiSecret);
     const encryptedPassphrase = credentials.passphrase
-      ? EncryptionService.encrypt(credentials.passphrase)
+      ? await this.encryptionService.encrypt(credentials.passphrase)
       : null;
 
     // Create hash of credentials to detect duplicate accounts
-    const credentialsHash = EncryptionService.createCredentialsHash(
+    const credentialsHash = this.encryptionService.createCredentialsHash(
       credentials.apiKey,
       credentials.apiSecret,
       credentials.passphrase,
@@ -88,10 +89,10 @@ export class ExchangeConnectionRepository {
     }
 
     try {
-      const apiKey = EncryptionService.decrypt(connection.encryptedApiKey);
-      const apiSecret = EncryptionService.decrypt(connection.encryptedApiSecret);
+      const apiKey = await this.encryptionService.decrypt(connection.encryptedApiKey);
+      const apiSecret = await this.encryptionService.decrypt(connection.encryptedApiSecret);
       const passphrase = connection.encryptedPassphrase
-        ? EncryptionService.decrypt(connection.encryptedPassphrase)
+        ? await this.encryptionService.decrypt(connection.encryptedPassphrase)
         : undefined;
 
       return {
@@ -120,13 +121,13 @@ export class ExchangeConnectionRepository {
     }
 
     if (updates.apiKey) {
-      updateData.encryptedApiKey = EncryptionService.encrypt(updates.apiKey);
+      updateData.encryptedApiKey = await this.encryptionService.encrypt(updates.apiKey);
     }
     if (updates.apiSecret) {
-      updateData.encryptedApiSecret = EncryptionService.encrypt(updates.apiSecret);
+      updateData.encryptedApiSecret = await this.encryptionService.encrypt(updates.apiSecret);
     }
     if (updates.passphrase) {
-      updateData.encryptedPassphrase = EncryptionService.encrypt(updates.passphrase);
+      updateData.encryptedPassphrase = await this.encryptionService.encrypt(updates.passphrase);
     }
 
     // Update credentials hash if any credentials changed
@@ -136,13 +137,13 @@ export class ExchangeConnectionRepository {
       });
 
       if (connection) {
-        const apiKey = updates.apiKey || EncryptionService.decrypt(connection.encryptedApiKey);
-        const apiSecret = updates.apiSecret || EncryptionService.decrypt(connection.encryptedApiSecret);
+        const apiKey = updates.apiKey || await this.encryptionService.decrypt(connection.encryptedApiKey);
+        const apiSecret = updates.apiSecret || await this.encryptionService.decrypt(connection.encryptedApiSecret);
         const passphrase = updates.passphrase !== undefined
           ? updates.passphrase
-          : (connection.encryptedPassphrase ? EncryptionService.decrypt(connection.encryptedPassphrase) : undefined);
+          : (connection.encryptedPassphrase ? await this.encryptionService.decrypt(connection.encryptedPassphrase) : undefined);
 
-        updateData.credentialsHash = EncryptionService.createCredentialsHash(apiKey, apiSecret, passphrase);
+        updateData.credentialsHash = this.encryptionService.createCredentialsHash(apiKey, apiSecret, passphrase);
       }
     }
 

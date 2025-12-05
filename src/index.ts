@@ -41,10 +41,16 @@ const startEnclave = async () => {
       logger.warn('[ENCLAVE] WARNING: Attestation not verified');
       logger.warn(`[ENCLAVE] ${attestationResult.errorMessage}`);
 
-      if (process.env.NODE_ENV === 'production') {
-        // Attestation failure in production is fatal
+      if (process.env.NODE_ENV === 'production' && process.env.SKIP_ATTESTATION !== 'true') {
+        // Attestation failure in production is fatal unless explicitly skipped
         logger.error('[ENCLAVE] ABORTING: Cannot run in production without attestation');
+        logger.error('[ENCLAVE] Set SKIP_ATTESTATION=true to bypass (not recommended)');
         process.exit(1);
+      }
+
+      if (process.env.SKIP_ATTESTATION === 'true') {
+        logger.warn('[ENCLAVE] ⚠️  ATTESTATION BYPASSED - Running without hardware verification');
+        logger.warn('[ENCLAVE] This should ONLY be used for development/testing');
       }
     }
 
