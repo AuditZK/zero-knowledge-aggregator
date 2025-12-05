@@ -1,12 +1,14 @@
 steps:
 # Étape 1: Construire l'image Docker
+# Le chemin d'Artifact Registry doit refléter la région europe-west1
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '-t', 'us-central1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}', '.']
+  args: ['build', '-t', 'europe-west1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}', '.']
   id: BuildImage
 
 # Étape 2: Pousser l'image vers Artifact Registry
+# Le chemin d'Artifact Registry doit refléter la région europe-west1
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['push', 'us-central1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}']
+  args: ['push', 'europe-west1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}']
   id: PushImage
 
 # Étape 3: Déployer la nouvelle image sur la VM Compute Engine
@@ -16,18 +18,20 @@ steps:
     - '-c'
     - |
       # Authentifier Docker pour Artifact Registry sur la VM
-      gcloud compute ssh tee-milan-01 --zone=us-central1-a --command="gcloud auth configure-docker us-central1-docker.pkg.dev"
+      # Gcloud doit s'authentifier sur le registre europe-west1
+      gcloud compute ssh tee-milan-01 --zone=europe-west1-b --command="gcloud auth configure-docker europe-west1-docker.pkg.dev"
 
       # Arrêter et supprimer l'ancien conteneur (si existant)
-      gcloud compute ssh tee-milan-01 --zone=us-central1-a --command="docker stop aggregator-enclave || true && docker rm aggregator-enclave || true"
+      # La zone de la VM doit être en europe-west1, par exemple europe-west1-b
+      gcloud compute ssh tee-milan-01 --zone=europe-west1-b --command="docker stop aggregator-enclave || true && docker rm aggregator-enclave || true"
 
       # Tirer la nouvelle image
-      gcloud compute ssh tee-milan-01 --zone=us-central1-a --command="docker pull us-central1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}"
+      # L'image doit être tirée d'Artifact Registry en europe-west1
+      gcloud compute ssh tee-milan-01 --zone=europe-west1-b --command="docker pull europe-west1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}"
 
       # Exécuter le nouveau conteneur
-      # Assurez-vous que le port 80 est ouvert sur le pare-feu de votre VM si vous voulez y accéder de l'extérieur
-      # Le port 8080 est le port interne du conteneur, mappé sur le port 80 de la VM
-      gcloud compute ssh tee-milan-01 --zone=us-central1-a --command="docker run -d -p 80:8080 --name aggregator-enclave -e PORT=8080 us-central1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}"
+      # La zone de la VM doit être en europe-west1
+      gcloud compute ssh tee-milan-01 --zone=europe-west1-b --command="docker run -d -p 80:8080 --name aggregator-enclave -e PORT=8080 europe-west1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}"
   id: DeployToVM
 images:
-- 'us-central1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}'
+- 'europe-west1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}'
