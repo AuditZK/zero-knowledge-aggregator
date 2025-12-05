@@ -35,7 +35,8 @@ export class HttpLogServer {
 
   constructor() {
     this.app = express();
-    this.port = parseInt(process.env.HTTP_LOG_PORT || '50052');
+    // Use PORT (Cloud Run) or HTTP_LOG_PORT (Docker), default to 50052
+    this.port = parseInt(process.env.PORT || process.env.HTTP_LOG_PORT || '50052');
 
     this.setupRoutes();
   }
