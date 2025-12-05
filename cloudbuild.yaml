@@ -1,9 +1,32 @@
 steps:
-- name: 'gcr.io/cloud-builders/gcloud'
+# Étape 1: Construire l'image Docker
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-t', 'europe-west1-docker.pkg.dev/$PROJECT_ID/my-docker-repo/aggregator-enclave:${_GIT_TAG}', '.']
+  id: BuildImage
+
+# Étape 2: Pousser l'image vers Artifact Registry
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['push', 'europe-west1-docker.pkg.dev/$PROJECT_ID/my-docker-repo/aggregator-enclave:${_GIT_TAG}']
+  id: PushImage
+
+# Étape 3: Déployer la nouvelle image sur la VM Compute Engine
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: 'bash'
   args:
-    - 'workflows'
-    - 'deploy'
-    - 'enclave-aggregator-building' # Remplacez par le nom de votre workflow
-    - '--source=enclave\cloudbuild.yaml' # Remplacez par le chemin de votre fichier workflow
-    - '--location=europe-west1' # Ex: europe-west1
-    - '--service-account=your-service-account@your-project-id.iam.gserviceaccount.com' # Optionnel, si votre workflow a besoin d'un compte de service spécifique
+    - '-c'
+    - |
+      # Authentifier Docker pour Artifact Registry sur la VM
+      gcloud compute ssh your-vm-name --zone=your-vm-zone --command="gcloud auth configure-docker europe-west1-docker.pkg.dev"
+
+      # Arrêter et supprimer l'ancien conteneur (si existant)
+      gcloud compute ssh your-vm-name --zone=your-vm-zone --command="docker stop aggregator-enclave || true && docker rm aggregator-enclave || true"
+
+      # Tirer la nouvelle image
+      gcloud compute ssh your-vm-name --zone=your-vm-zone --command="docker pull europe-west1-docker.pkg.dev/$PROJECT_ID/my-docker-repo/aggregator-enclave:${_GIT_TAG}"
+
+      # Exécuter le nouveau conteneur
+      # Assurez-vous que le port 8080 est ouvert sur le pare-feu de votre VM si vous voulez y accéder de l'extérieur
+      gcloud compute ssh your-vm-name --zone=your-vm-zone --command="docker run -d -p 80:8080 --name aggregator-enclave -e PORT=8080 europe-west1-docker.pkg.dev/$PROJECT_ID/my-docker-repo/aggregator-enclave:${_GIT_TAG}"
+  id: DeployToVM
+images:
+- 'europe-west1-docker.pkg.dev/$PROJECT_ID/my-docker-repo/aggregator-enclave:${_GIT_TAG}'
