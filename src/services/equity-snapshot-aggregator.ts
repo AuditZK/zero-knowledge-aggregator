@@ -34,11 +34,13 @@ interface ExtendedConnector extends IExchangeConnector {
   getExecutedOrders?(marketType: string, since: Date): Promise<MarketTrade[]>;
   getFundingFees?(symbols: string[], since: Date): Promise<FundingFeeData[]>;
   getHistoricalSummaries?(since: Date): Promise<Array<{ date: string; breakdown: BreakdownByMarket }>>;
+  getEarnBalance?(): Promise<{ equity: number; available_margin?: number }>;
 }
 
 const hasMarketTypes = (connector: unknown): connector is IConnectorWithMarketTypes => typeof (connector as IConnectorWithMarketTypes).detectMarketTypes === 'function';
 const hasBalanceBreakdown = (connector: unknown): connector is IConnectorWithBalanceBreakdown => typeof (connector as IConnectorWithBalanceBreakdown).getBalanceBreakdown === 'function';
 const hasGetBalance = (connector: unknown): connector is IConnectorWithBalance => typeof (connector as IConnectorWithBalance).getBalance === 'function';
+const hasEarnBalance = (connector: unknown): connector is ExtendedConnector => typeof (connector as ExtendedConnector).getEarnBalance === 'function';
 
 function roundToInterval(date: Date, intervalMinutes: number = 60): Date {
   const rounded = new Date(date);
@@ -191,6 +193,20 @@ export class EquitySnapshotAggregator {
           }
         }
       }
+
+      // Fetch Earn/Staking balance separately (not included in standard market types)
+      if (hasEarnBalance(connector)) {
+        try {
+          const earnData = await connector.getEarnBalance!();
+          if (earnData.equity > 0) {
+            balancesByMarket['earn'] = { totalEquityUsd: earnData.equity, unrealizedPnl: 0 };
+            globalEquity += earnData.equity;
+            logger.info(`Earn balance: ${earnData.equity.toFixed(2)} USD`);
+          }
+        } catch (earnError) {
+          logger.debug('Earn balance not available', { error: earnError instanceof Error ? earnError.message : String(earnError) });
+        }
+      }
     } else if (hasBalanceBreakdown(connector)) {
       const breakdown = await connector.getBalanceBreakdown();
       if (breakdown.global) {
@@ -327,8 +343,8 @@ export class EquitySnapshotAggregator {
       allTrades.push(...trades);
     }
 
-    // Standard market types to always categorize
-    const standardMarkets: MarketType[] = ['spot', 'swap', 'options'];
+    // Standard market types to always categorize (crypto: spot, swap, earn; plus shared: options)
+    const standardMarkets: MarketType[] = ['spot', 'swap', 'earn', 'options'];
 
     let totalVolume = 0;
     let totalTrades = 0;

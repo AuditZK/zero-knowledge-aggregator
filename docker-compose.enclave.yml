@@ -1,0 +1,86 @@
+# Docker Compose - Enclave Stack
+# LOCAL: docker-compose -f enclave/docker-compose.enclave.yml up -d
+# PROD: Runs on separate AMD SEV-SNP server
+
+services:
+  # ==========================================
+  # PostgreSQL - Enclave Database
+  # ==========================================
+  postgres-enclave:
+    image: postgres:15-alpine
+    container_name: enclave_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: enclave_db
+      POSTGRES_USER: enclave_user
+      POSTGRES_PASSWORD: ${ENCLAVE_DB_PASSWORD:-enclavepass123}
+    volumes:
+      - postgres_enclave_data:/var/lib/postgresql/data
+    ports:
+      - "${ENCLAVE_DB_PORT:-5436}:5432"  # Local dev only, remove in prod
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U enclave_user -d enclave_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trackrecord-network
+
+  # ==========================================
+  # Enclave Service (gRPC + AMD SEV-SNP)
+  # ==========================================
+  enclave-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: enclave_service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      ENCLAVE_PORT: 50051
+      DATABASE_URL: postgresql://enclave_user:${ENCLAVE_DB_PASSWORD:-enclavepass123}@postgres-enclave:5432/enclave_db
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      JWT_SECRET: ${JWT_SECRET:-local-dev-jwt-secret-change-in-prod}
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      METRICS_ENABLED: "true"
+      METRICS_PORT: 9092
+      SKIP_ATTESTATION: ${SKIP_ATTESTATION:-true}
+      ENABLE_ENCLAVE_LOG_STREAMING: "true"
+    ports:
+      - "50051:50051"  # gRPC Server
+      - "50052:50052"  # HTTP Log Server (SSE)
+      - "9092:9092"    # Prometheus Metrics
+    volumes:
+      - ./certs:/etc/enclave:ro
+    depends_on:
+      postgres-enclave:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:9092/metrics', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - trackrecord-network
+
+volumes:
+  postgres_enclave_data:
+    driver: local
+
+networks:
+  trackrecord-network:
+    name: trackrecord-network
+    driver: bridge
+
+# ==========================================
+# USAGE
+# ==========================================
+# Local dev:
+#   docker-compose -f enclave/docker-compose.enclave.yml up -d
+#
+# Production (on SEV-SNP server):
+#   NODE_ENV=production SKIP_ATTESTATION=false docker-compose -f docker-compose.enclave.yml up -d
+#
+# Push schema:
+#   DATABASE_URL="postgresql://enclave_user:enclavepass123@localhost:5436/enclave_db" npx prisma db push

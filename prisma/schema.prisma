@@ -14,7 +14,7 @@ datasource db {
 model User {
   id                  String   @id @default(cuid())
   uid                 String   @unique // Microservice UID (anonyme, pas d'email/nom)
-  syncIntervalMinutes Int      @default(60) // Snapshot interval (5, 10, 15, 60 minutes, etc.)
+  syncIntervalMinutes Int      @default(1440) // Snapshot interval: 1440 = daily (24h)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
@@ -80,7 +80,7 @@ model ExchangeConnection {
   encryptedPassphrase  String?
   credentialsHash      String?
   isActive             Boolean  @default(true)
-  syncIntervalMinutes  Int      @default(60)  // Sync interval in minutes (60=hourly, 1440=daily)
+  syncIntervalMinutes  Int      @default(1440)  // Sync interval in minutes (1440=daily)
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
@@ -123,6 +123,34 @@ model SyncRateLimitLog {
   @@unique([userUid, exchange])
   @@index([lastSyncTime]) // For cleanup queries
   @@map("sync_rate_limit_logs")
+}
+
+// Data Encryption Keys (DEKs) - Hardware-wrapped encryption keys
+// SECURITY: Replaces environment variable key storage with AMD SEV-SNP derived keys
+// Architecture:
+//   1. Master Key = Derived from AMD SEV-SNP measurement (hardware-based, never stored)
+//   2. DEK = Random key encrypted with Master Key (stored here)
+//   3. User credentials = Encrypted with DEK
+//
+// This provides:
+//   - Zero secrets in environment variables
+//   - Automatic key rotation on code updates (measurement changes)
+//   - Enterprise-level security at €0 cost
+model DataEncryptionKey {
+  id              String   @id @default(cuid())
+  encryptedDEK    String   // DEK encrypted with master key (base64)
+  iv              String   // Initialization vector for AES-GCM (base64)
+  authTag         String   // Authentication tag for integrity verification (base64)
+  keyVersion      String   // Key version identifier (e.g., "v1")
+  masterKeyId     String   // Hash identifier of master key used for wrapping (not the key itself)
+  isActive        Boolean  @default(true) // Only one active DEK at a time
+  rotatedAt       DateTime? // When this DEK was rotated (if inactive)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([masterKeyId])
+  @@map("data_encryption_keys")
 }
 
 // Migrations tracking

@@ -126,11 +126,12 @@ message MarketMetrics {
 
 // Request to create a user with exchange connection
 message CreateUserConnectionRequest {
-  string exchange = 1;          // Exchange name (e.g., "binance", "coinbase")
-  string label = 2;              // User-friendly label (e.g., "Main Account")
-  string api_key = 3;            // API key (will be encrypted)
-  string api_secret = 4;         // API secret (will be encrypted)
-  string passphrase = 5;         // Optional passphrase (will be encrypted)
+  string user_uid = 1;           // User UID from Platform (required - ensures Platform/Enclave sync)
+  string exchange = 2;           // Exchange name (e.g., "binance", "coinbase")
+  string label = 3;              // User-friendly label (e.g., "Main Account")
+  string api_key = 4;            // API key (will be encrypted)
+  string api_secret = 5;         // API secret (will be encrypted)
+  string passphrase = 6;         // Optional passphrase (will be encrypted)
 }
 
 // Response from creating a user with exchange connection

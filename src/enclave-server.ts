@@ -349,6 +349,7 @@ export class EnclaveServer {
 
       // Normalize gRPC defaults: convert empty strings to undefined
       const request = {
+        user_uid: rawRequest.user_uid,  // Platform provides the UUID
         exchange: rawRequest.exchange,
         label: rawRequest.label,
         api_key: rawRequest.api_key,
@@ -376,6 +377,7 @@ export class EnclaveServer {
 
       // Create user and connection
       const result = await this.enclaveWorker.createUserConnection({
+        userUid: validated.user_uid,  // Platform-provided UUID
         exchange: validated.exchange,
         label: validated.label,
         apiKey: validated.api_key,

@@ -1,34 +1,34 @@
 ======================================================================
   TRACK RECORD ENCLAVE - AUDIT REPORT
 ======================================================================
-  Date: 2025-11-27 10:59
+  Date: 2025-11-29 13:54
 ======================================================================
 
 [RESUME]
 ----------------------------------------------------------------------
-  Total lignes:       15,830
-  Lignes de code:     11,898
-  Fichiers:               72
-  Dependances:            24
+  Total lignes:       14,865
+  Lignes de code:     11,468
+  Fichiers:               74
+  Dependances:            27
 
 [LIGNES PAR TYPE]
 ----------------------------------------------------------------------
-  TypeScript        8,241 lignes   6,715 code   37 fichiers
-  Markdown          3,434 lignes   2,130 code    6 fichiers
-  JSON              1,734 lignes   1,721 code    5 fichiers
-  .yml                534 lignes     244 code    5 fichiers
-  .txt                508 lignes     304 code    6 fichiers
+  TypeScript        8,317 lignes   6,772 code   37 fichiers
+  Markdown          2,789 lignes   1,689 code    5 fichiers
+  JSON              1,628 lignes   1,615 code    4 fichiers
+  .txt                453 lignes     305 code    6 fichiers
   .sh                 364 lignes     244 code    2 fichiers
-  .example            280 lignes      51 code    2 fichiers
+  .yml                353 lignes     210 code    5 fichiers
   .reproducible       169 lignes      64 code    1 fichiers
+  gRPC                157 lignes     109 code    1 fichiers
 
 [PLUS GROS FICHIERS]
 ----------------------------------------------------------------------
    1478 lignes  monitoring\grafana-dashboards\enclave-dashboard.json
    1129 lignes  SECURITY.md
-    645 lignes  .claude\CLAUDE.md
-    586 lignes  src\enclave-server.ts
-    559 lignes  src\enclave-worker.ts
+    588 lignes  src\enclave-server.ts
+    548 lignes  src\enclave-worker.ts
+    524 lignes  README.md
 
 [ALERTES SECURITE] (8 detectees)
 ----------------------------------------------------------------------
@@ -42,8 +42,8 @@
 
   Fichiers >400 lignes: 5
      - 745 lignes: SECURITY.md
-     - 441 lignes: .claude\CLAUDE.md
      - 1478 lignes: monitoring\grafana-dashboards\enclave-dashboard.json
+     - 466 lignes: src\enclave-server.ts
 
 [ESLINT]
 ----------------------------------------------------------------------
@@ -63,9 +63,15 @@
 
 [DEPENDANCES NON UTILISEES]
 ----------------------------------------------------------------------
-  Dependances inutilisees:            0
-  Dev dependances inutilisees:        0
+  Dependances inutilisees:            2
+  Dev dependances inutilisees:        1
   Dependances manquantes:             1
+
+  Dependances a supprimer:
+     - cors
+     - helmet
+
+  WARNING: 3 dependances inutilisees detectees
 
 [DEPENDANCES OBSOLETES]
 ----------------------------------------------------------------------
@@ -109,12 +115,12 @@
 
   Top fonctions complexes (cyclomatic complexity):
      - forEach: complexite 33
-     - parseAccountSummary: complexite 27
-     - getActiveSymbols: complexite 22
+     - parseAccountSummary: complexite 29
+     - fetchBalancesByMarket: complexite 23
 
   Top fonctions longues:
      - decrypt: 136 lignes
-     - forEach: 132 lignes
+     - forEach: 131 lignes
      - async: 115 lignes
 
 [GESTION D'ERREURS]
@@ -147,14 +153,14 @@
 
 [DOCUMENTATION]
 ----------------------------------------------------------------------
-  Total fonctions:           583
-  Documentees (JSDoc):       205
-  Couverture:              35.2%
+  Total fonctions:           594
+  Documentees (JSDoc):       207
+  Couverture:              34.8%
   WARNING: Couverture documentation faible
 
 [DUPLICATION DE CODE]
 ----------------------------------------------------------------------
-  Lignes dupliquees:         297
+  Lignes dupliquees:         301
   Taux de duplication:      4.4%
 
 [TESTS]
@@ -164,8 +170,8 @@
 
 [DEPENDANCES]
 ----------------------------------------------------------------------
-  Production:             13
-  Developpement:          11
+  Production:             15
+  Developpement:          12
 
   Principales: @alpacahq/alpaca-trade-api, @grpc/grpc-js, @grpc/proto-loader, @prisma/client, @types/xml2js
 

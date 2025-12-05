@@ -28,7 +28,8 @@ export class TradeSyncService {
     @inject(SyncStatusRepository) private readonly syncStatusRepo: SyncStatusRepository,
     @inject(UserRepository) private readonly userRepo: UserRepository,
     @inject(UniversalConnectorCacheService) private readonly connectorCache: UniversalConnectorCacheService,
-  ) {}
+    @inject(EncryptionService) private readonly encryptionService: EncryptionService,
+  ) { }
 
   private async ensureUser(userUid: string): Promise<void> {
     try {
@@ -211,7 +212,7 @@ export class TradeSyncService {
         };
       }
 
-      const credentialsHash = EncryptionService.createCredentialsHash(apiKey, apiSecret, passphrase);
+      const credentialsHash = this.encryptionService.createCredentialsHash(apiKey, apiSecret, passphrase);
       const sameCredentialsConnections = await this.exchangeConnectionRepo.getConnectionsByCredentialsHash(userUid, credentialsHash);
       if (sameCredentialsConnections.length > 0) {
         const existingLabels = sameCredentialsConnections.map(conn => conn.label).join(', ');

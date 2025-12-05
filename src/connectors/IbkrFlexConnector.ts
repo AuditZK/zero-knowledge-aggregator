@@ -71,7 +71,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
     });
   }
 
-  // IBKR asset categories for trade metrics: stocks, options, futures, cfd, forex, commodities
+  // IBKR asset categories for trade metrics: stocks, options, futures_commodities, cfd, forex
 
   // Trade metrics grouped by IBKR asset category
   private groupTradesByDate(trades: FlexTrade[]): Map<string, Record<string, { volume: number; count: number; fees: number }>> {
@@ -80,10 +80,9 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
     const createEmptyMetrics = () => ({
       stocks: { volume: 0, count: 0, fees: 0 },
       options: { volume: 0, count: 0, fees: 0 },
-      futures: { volume: 0, count: 0, fees: 0 },
+      futures_commodities: { volume: 0, count: 0, fees: 0 }, // FUT + CMDTY merged
       cfd: { volume: 0, count: 0, fees: 0 },
       forex: { volume: 0, count: 0, fees: 0 },
-      commodities: { volume: 0, count: 0, fees: 0 },
       total: { volume: 0, count: 0, fees: 0 }
     });
 
@@ -105,10 +104,9 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
       switch (category) {
         case 'STK': marketType = 'stocks'; break;
         case 'OPT': marketType = 'options'; break;
-        case 'FUT': case 'FOP': marketType = 'futures'; break;
+        case 'FUT': case 'FOP': case 'CMDTY': marketType = 'futures_commodities'; break;
         case 'CFD': marketType = 'cfd'; break;
         case 'CASH': marketType = 'forex'; break;
-        case 'CMDTY': marketType = 'commodities'; break;
         default: marketType = 'stocks'; // Default to stocks
       }
 
@@ -159,12 +157,12 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
         trading_fees: getMetrics('options').fees,
         funding_fees: 0
       },
-      futures: {
-        equity: 0, // IBKR doesn't separate futures equity in EquitySummary
+      futures_commodities: {
+        equity: summary.commodityValue, // IBKR commodityValue includes futures
         available_margin: 0,
-        volume: getMetrics('futures').volume,
-        trades: getMetrics('futures').count,
-        trading_fees: getMetrics('futures').fees,
+        volume: getMetrics('futures_commodities').volume,
+        trades: getMetrics('futures_commodities').count,
+        trading_fees: getMetrics('futures_commodities').fees,
         funding_fees: 0
       },
       cfd: {
@@ -181,14 +179,6 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
         volume: getMetrics('forex').volume,
         trades: getMetrics('forex').count,
         trading_fees: getMetrics('forex').fees,
-        funding_fees: 0
-      },
-      commodities: {
-        equity: summary.commodityValue,
-        available_margin: 0,
-        volume: getMetrics('commodities').volume,
-        trades: getMetrics('commodities').count,
-        trading_fees: getMetrics('commodities').fees,
         funding_fees: 0
       }
     };
