@@ -19,19 +19,19 @@ steps:
     - |
       # Authentifier Docker pour Artifact Registry sur la VM
       # Gcloud doit s'authentifier sur le registre europe-west1
-      gcloud compute ssh tee-milan-01 --zone=europe-west1-b --command="gcloud auth configure-docker europe-west1-docker.pkg.dev"
+      gcloud compute ssh tee-milan-01 --zone=us-central1-a --command="gcloud auth configure-docker europe-west1-docker.pkg.dev"
 
       # Arrêter et supprimer l'ancien conteneur (si existant)
-      # La zone de la VM doit être en europe-west1, par exemple europe-west1-b
-      gcloud compute ssh tee-milan-01 --zone=europe-west1-b --command="docker stop aggregator-enclave || true && docker rm aggregator-enclave || true"
+      # La zone de la VM doit être en europe-west1, par exemple us-central1-a
+      gcloud compute ssh tee-milan-01 --zone=us-central1-a --command="docker stop aggregator-enclave || true && docker rm aggregator-enclave || true"
 
       # Tirer la nouvelle image
       # L'image doit être tirée d'Artifact Registry en europe-west1
-      gcloud compute ssh tee-milan-01 --zone=europe-west1-b --command="docker pull europe-west1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}"
+      gcloud compute ssh tee-milan-01 --zone=us-central1-a --command="docker pull europe-west1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}"
 
       # Exécuter le nouveau conteneur
       # La zone de la VM doit être en europe-west1
-      gcloud compute ssh tee-milan-01 --zone=europe-west1-b --command="docker run -d -p 80:8080 --name aggregator-enclave -e PORT=8080 europe-west1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}"
+      gcloud compute ssh tee-milan-01 --zone=us-central1-a --command="docker run -d -p 80:8080 --name aggregator-enclave -e PORT=8080 europe-west1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}"
   id: DeployToVM
 images:
 - 'europe-west1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}'
