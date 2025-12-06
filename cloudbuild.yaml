@@ -35,3 +35,6 @@ steps:
   id: DeployToVM
 images:
 - 'europe-west1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}'
+
+substitutions:
+  _GIT_TAG: 'latest'
