@@ -8,12 +8,12 @@
 # ============================================================================
 # SNPGuest Builder Stage - Build AMD SEV-SNP attestation tool
 # ============================================================================
-FROM rust:1.75-alpine AS snpguest-builder
+FROM rust:1.82-alpine AS snpguest-builder
 
-RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static
+RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static perl make
 
-# Install snpguest 0.6.0 (compatible with rust 1.75)
-RUN cargo install snpguest@0.6.0 --root /usr/local
+# Install snpguest 0.6.0 with locked dependencies
+RUN cargo install snpguest@0.6.0 --root /usr/local --locked
 
 # ============================================================================
 # Node Builder Stage
