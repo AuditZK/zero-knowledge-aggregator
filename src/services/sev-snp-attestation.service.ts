@@ -96,19 +96,128 @@ export class SevSnpAttestationService {
   }
 
   private async getSevGuestAttestation(): Promise<SevSnpReport> {
-    const tools = ['/opt/amd/sev-guest/bin/get-report', '/usr/bin/snpguest'];
-    for (const tool of tools) {
-      if (fs.existsSync(tool)) {
-        try {
-          const { stdout } = await execAsync(`${tool} --format json`);
-          return JSON.parse(stdout) as SevSnpReport;
-        } catch (error: unknown) {
-          const errorMessage = extractErrorMessage(error);
-          logger.warn(`SEV guest tool ${tool} failed: ${errorMessage}`);
-        }
+    // Try snpguest first (installed in Docker image)
+    if (fs.existsSync('/usr/bin/snpguest')) {
+      try {
+        return await this.getSnpguestAttestation();
+      } catch (error: unknown) {
+        const errorMessage = extractErrorMessage(error);
+        logger.warn(`snpguest attestation failed: ${errorMessage}`);
       }
     }
+
+    // Try legacy AMD tool
+    if (fs.existsSync('/opt/amd/sev-guest/bin/get-report')) {
+      try {
+        const { stdout } = await execAsync('/opt/amd/sev-guest/bin/get-report --json');
+        return JSON.parse(stdout) as SevSnpReport;
+      } catch (error: unknown) {
+        const errorMessage = extractErrorMessage(error);
+        logger.warn(`AMD get-report failed: ${errorMessage}`);
+      }
+    }
+
     throw new Error('No SEV-SNP guest tools found');
+  }
+
+  private async getSnpguestAttestation(): Promise<SevSnpReport> {
+    const tmpDir = '/tmp/snp-attestation';
+    const reportPath = `${tmpDir}/report.bin`;
+    const requestPath = `${tmpDir}/request.bin`;
+    const certsDir = `${tmpDir}/certs`;
+
+    // Create temp directory
+    await execAsync(`mkdir -p ${tmpDir} ${certsDir}`);
+
+    try {
+      // Generate attestation report with random request data
+      await execAsync(`/usr/bin/snpguest report ${reportPath} ${requestPath} --random`);
+
+      // Fetch VCEK certificate from AMD KDS using the report
+      try {
+        await execAsync(`/usr/bin/snpguest fetch vcek pem milan ${certsDir} ${reportPath}`);
+      } catch (certError) {
+        logger.warn('Failed to fetch VCEK from AMD KDS, will use cached cert if available');
+      }
+
+      // Fetch CA chain
+      try {
+        await execAsync(`/usr/bin/snpguest fetch ca pem milan ${certsDir}`);
+      } catch (caError) {
+        logger.warn('Failed to fetch CA chain from AMD KDS');
+      }
+
+      // Verify the attestation report
+      try {
+        await execAsync(`/usr/bin/snpguest verify attestation ${certsDir} ${reportPath}`);
+        logger.info('snpguest verification successful');
+      } catch (verifyError) {
+        logger.warn('snpguest verify failed, continuing with report extraction');
+      }
+
+      // Display the report and parse the output
+      const { stdout } = await execAsync(`/usr/bin/snpguest display report ${reportPath}`);
+
+      // Parse snpguest display output
+      return this.parseSnpguestOutput(stdout, requestPath);
+    } finally {
+      // Cleanup temp files
+      try {
+        await execAsync(`rm -rf ${tmpDir}`);
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  }
+
+  private parseSnpguestOutput(output: string, requestPath: string): SevSnpReport {
+    const report: SevSnpReport = {
+      measurement: '',
+      signature: '',
+    };
+
+    // Parse key-value pairs from snpguest display output
+    const lines = output.split('\n');
+    for (const line of lines) {
+      const [key, ...valueParts] = line.split(':');
+      if (!key || valueParts.length === 0) continue;
+
+      const value = valueParts.join(':').trim();
+      const keyLower = key.trim().toLowerCase();
+
+      if (keyLower.includes('measurement') || keyLower.includes('launch_digest')) {
+        report.measurement = value;
+      } else if (keyLower.includes('report_data')) {
+        report.reportData = value;
+      } else if (keyLower.includes('signature')) {
+        report.signature = value;
+      } else if (keyLower.includes('version')) {
+        report.version = parseInt(value, 10) || 0;
+      } else if (keyLower.includes('guest_svn') || keyLower.includes('guestsvn')) {
+        report.guest_svn = parseInt(value, 10) || 0;
+      } else if (keyLower.includes('policy')) {
+        report.policy = parseInt(value, 16) || 0;
+      } else if (keyLower.includes('chip_id') || keyLower.includes('chipid')) {
+        report.chip_id = value;
+      } else if (keyLower.includes('platform_version') || keyLower.includes('tcb')) {
+        report.platformVersion = parseInt(value, 10) || 0;
+      }
+    }
+
+    // Read request data if available
+    try {
+      if (fs.existsSync(requestPath)) {
+        report.reportData = fs.readFileSync(requestPath).toString('hex');
+      }
+    } catch {
+      // Ignore read errors
+    }
+
+    if (!report.measurement) {
+      throw new Error('Failed to parse measurement from snpguest output');
+    }
+
+    return report;
   }
 
   private async getAzureAttestation(): Promise<SevSnpReport> {
