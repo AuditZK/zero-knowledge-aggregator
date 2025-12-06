@@ -1,10 +1,23 @@
 # ============================================================================
-# Track Record Enclave - Docker Image (Simulated Enclave)
+# Track Record Enclave - Docker Image (Production SEV-SNP)
 # ============================================================================
-# This Dockerfile simulates an AMD SEV-SNP enclave environment for development
-# In production, this would run inside a confidential VM with hardware isolation
+# This Dockerfile builds the enclave with AMD SEV-SNP attestation support
+# Requires deployment on a Confidential VM with SEV-SNP hardware
 # ============================================================================
 
+# ============================================================================
+# SNPGuest Builder Stage - Build AMD SEV-SNP attestation tool
+# ============================================================================
+FROM rust:1.75-alpine AS snpguest-builder
+
+RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static
+
+# Install snpguest 0.6.0 (compatible with rust 1.75)
+RUN cargo install snpguest@0.6.0 --root /usr/local
+
+# ============================================================================
+# Node Builder Stage
+# ============================================================================
 FROM node:20-alpine AS builder
 
 # Install build dependencies
@@ -44,6 +57,9 @@ RUN apk add --no-cache \
     openssl \
     ca-certificates \
     tini
+
+# Copy snpguest binary for SEV-SNP attestation
+COPY --from=snpguest-builder /usr/local/bin/snpguest /usr/bin/snpguest
 
 # Create non-root user for security
 RUN addgroup -g 1001 enclave && \

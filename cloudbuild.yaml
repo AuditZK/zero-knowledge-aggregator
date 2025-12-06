@@ -30,7 +30,7 @@ steps:
       gcloud compute ssh tee-milan-01 --zone=us-central1-a --command="docker pull europe-west1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}"
 
       # Exécuter le nouveau conteneur avec fichier .env, certificats TLS et device SEV-SNP
-      gcloud compute ssh tee-milan-01 --zone=us-central1-a --command="docker run -d -p 80:8080 -p 50051:50051 --name aggregator-enclave --env-file ~/.env-enclave -v /etc/enclave:/etc/enclave:ro --device=/dev/sev-guest europe-west1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}"
+      gcloud compute ssh tee-milan-01 --zone=us-central1-a --command="docker run -d -p 80:50052 -p 50051:50051 -p 9090:9090 --name aggregator-enclave --env-file /home/mouchlachjimmy/.env-enclave -v /etc/enclave:/etc/enclave:ro --device=/dev/sev-guest europe-west1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}"
   id: DeployToVM
 images:
 - 'europe-west1-docker.pkg.dev/project-16cc7195-5060-4b76-b26/my-docker-repo/aggregator-enclave:${_GIT_TAG}'
