@@ -1,4 +1,3 @@
-import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -14,6 +13,7 @@ export interface AttestationResult {
   measurement: string | null;
   reportData: string | null;
   platformVersion: string | null;
+  vcekVerified: boolean;
   errorMessage?: string;
 }
 
@@ -28,6 +28,7 @@ interface SevSnpReport {
   guest_svn?: number;
   guestSvn?: number;
   policy?: number;
+  vcekVerified?: boolean; // True if snpguest verify attestation succeeded
   [key: string]: unknown; // Allow additional properties
 }
 
@@ -46,20 +47,25 @@ export class SevSnpAttestationService {
       const report = await this.fetchAttestation();
       if (!report) {throw new Error('Failed to retrieve attestation report');}
 
-      // Signature verification is optional - the measurement from hardware is the key attestation
-      const signatureValid = await this.verifySignature(report);
-      if (!signatureValid) {
-        logger.warn('Signature verification skipped (VCEK not available) - measurement is still valid');
+      // vcekVerified is set by snpguest verify attestation command
+      const vcekVerified = report.vcekVerified === true;
+
+      if (vcekVerified) {
+        logger.info('AMD SEV-SNP attestation VERIFIED with VCEK certificate chain', {
+          measurement: report.measurement
+        });
+      } else {
+        logger.warn('AMD SEV-SNP attestation completed but VCEK verification failed - measurement is from hardware but not cryptographically verified');
       }
 
-      logger.info('AMD SEV-SNP attestation successful', { measurement: report.measurement });
       return {
-        verified: true,
+        verified: vcekVerified, // Only true if VCEK verification succeeded
         enclave: true,
         sevSnpEnabled: true,
         measurement: report.measurement,
         reportData: report.reportData ?? null,
-        platformVersion: report.platformVersion?.toString() || null
+        platformVersion: report.platformVersion?.toString() || null,
+        vcekVerified
       };
     } catch (error: unknown) {
       const errorMessage = extractErrorMessage(error);
@@ -154,19 +160,23 @@ export class SevSnpAttestationService {
         logger.warn('Failed to fetch CA chain from AMD KDS');
       }
 
-      // Verify the attestation report
+      // Verify the attestation report using VCEK certificate chain
+      let vcekVerified = false;
       try {
         await execAsync(`/usr/bin/snpguest verify attestation ${certsDir} ${reportPath}`);
-        logger.info('snpguest verification successful');
+        logger.info('snpguest VCEK verification successful - attestation cryptographically verified');
+        vcekVerified = true;
       } catch (verifyError) {
-        logger.warn('snpguest verify failed, continuing with report extraction');
+        logger.warn('snpguest verify failed - attestation NOT cryptographically verified');
       }
 
       // Display the report and parse the output
       const { stdout } = await execAsync(`/usr/bin/snpguest display report ${reportPath}`);
 
       // Parse snpguest display output
-      return this.parseSnpguestOutput(stdout, requestPath);
+      const report = this.parseSnpguestOutput(stdout, requestPath);
+      report.vcekVerified = vcekVerified;
+      return report;
     } finally {
       // Cleanup temp files
       try {
@@ -289,48 +299,6 @@ export class SevSnpAttestationService {
     return response.json() as Promise<SevSnpReport>;
   }
 
-  private async verifySignature(report: SevSnpReport): Promise<boolean> {
-    try {
-      const vcekPubKey = await this.getVcekPublicKey(report.chipId || report.chip_id || '');
-      const signatureBuffer = Buffer.from(report.signature, 'hex');
-
-      if (signatureBuffer.length !== 96) {
-        throw new Error('Invalid signature length');
-      }
-
-      const verify = crypto.createVerify('SHA384');
-      verify.update(this.serializeReport(report));
-      return verify.verify({ key: vcekPubKey, format: 'pem', type: 'spki' }, signatureBuffer);
-    } catch (error: unknown) {
-      const errorMessage = extractErrorMessage(error);
-      logger.error('Signature verification failed', { error: errorMessage });
-      return false;
-    }
-  }
-
-  private async getVcekPublicKey(chipId: string): Promise<string> {
-    try {
-      const response = await fetch(`https://kdsintf.amd.com/vcek/v1/${chipId}`);
-      if (!response.ok) {throw new Error(`AMD KDS request failed`);}
-      return response.text();
-    } catch (error: unknown) {
-      const cachedVcek = process.env.AMD_VCEK_CACHE_PATH || '/etc/enclave/vcek.pem';
-      if (fs.existsSync(cachedVcek)) {
-        return fs.readFileSync(cachedVcek, 'utf8');
-      }
-      throw new Error('VCEK not available');
-    }
-  }
-
-  private serializeReport(report: SevSnpReport): Buffer {
-    const buffer = Buffer.alloc(720);
-    let offset = 0;
-    buffer.writeUInt32LE(report.version || 0, offset); offset += 4;
-    buffer.writeUInt32LE(report.guest_svn || report.guestSvn || 0, offset); offset += 4;
-    buffer.writeBigUInt64LE(BigInt(report.policy || 0), offset); offset += 8;
-    return buffer;
-  }
-
   private async isAzure(): Promise<boolean> {
     try {
       const response = await fetch('http://169.254.169.254/metadata/instance?api-version=2021-02-01', {
@@ -385,6 +353,7 @@ export class SevSnpAttestationService {
       measurement: null,
       reportData: null,
       platformVersion: null,
+      vcekVerified: false,
       errorMessage
     };
   }
