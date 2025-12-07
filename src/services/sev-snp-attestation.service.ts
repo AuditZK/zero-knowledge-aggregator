@@ -176,35 +176,80 @@ export class SevSnpAttestationService {
       signature: '',
     };
 
-    // Parse key-value pairs from snpguest display output
+    // Parse snpguest display output - handles multiline hex values
     const lines = output.split('\n');
+    let currentField = '';
+    let hexBuffer: string[] = [];
+
+    const saveHexBuffer = () => {
+      if (currentField && hexBuffer.length > 0) {
+        const hexValue = hexBuffer.join('').replace(/\s+/g, '');
+        if (currentField === 'measurement') {
+          report.measurement = hexValue;
+        } else if (currentField === 'report_data') {
+          report.reportData = hexValue;
+        } else if (currentField === 'chip_id') {
+          report.chip_id = hexValue;
+        } else if (currentField === 'signature_r') {
+          report.signature = hexValue;
+        }
+      }
+      hexBuffer = [];
+    };
+
     for (const line of lines) {
-      const [key, ...valueParts] = line.split(':');
-      if (!key || valueParts.length === 0) continue;
+      const trimmedLine = line.trim();
 
-      const value = valueParts.join(':').trim();
-      const keyLower = key.trim().toLowerCase();
+      // Check if line is a hex dump (starts with hex bytes pattern)
+      const isHexLine = /^[0-9a-f]{2}\s+[0-9a-f]{2}/i.test(trimmedLine);
 
-      if (keyLower.includes('measurement') || keyLower.includes('launch_digest')) {
-        report.measurement = value;
-      } else if (keyLower.includes('report_data')) {
-        report.reportData = value;
-      } else if (keyLower.includes('signature')) {
-        report.signature = value;
-      } else if (keyLower.includes('version')) {
-        report.version = parseInt(value, 10) || 0;
-      } else if (keyLower.includes('guest_svn') || keyLower.includes('guestsvn')) {
-        report.guest_svn = parseInt(value, 10) || 0;
-      } else if (keyLower.includes('policy')) {
-        report.policy = parseInt(value, 16) || 0;
-      } else if (keyLower.includes('chip_id') || keyLower.includes('chipid')) {
-        report.chip_id = value;
-      } else if (keyLower.includes('platform_version') || keyLower.includes('tcb')) {
-        report.platformVersion = parseInt(value, 10) || 0;
+      if (isHexLine && currentField) {
+        hexBuffer.push(trimmedLine);
+        continue;
+      }
+
+      // Check for field headers
+      if (trimmedLine.startsWith('Version:')) {
+        saveHexBuffer();
+        currentField = '';
+        const value = trimmedLine.split(':')[1]?.trim();
+        if (value) report.version = parseInt(value, 10) || 0;
+      } else if (trimmedLine.startsWith('Guest SVN:')) {
+        saveHexBuffer();
+        currentField = '';
+        const value = trimmedLine.split(':')[1]?.trim();
+        if (value) report.guest_svn = parseInt(value, 10) || 0;
+      } else if (trimmedLine.startsWith('Guest Policy')) {
+        saveHexBuffer();
+        currentField = '';
+        const match = trimmedLine.match(/\(0x([0-9a-f]+)\)/i);
+        if (match) report.policy = parseInt(match[1], 16) || 0;
+      } else if (trimmedLine.startsWith('Measurement:')) {
+        saveHexBuffer();
+        currentField = 'measurement';
+      } else if (trimmedLine.startsWith('Report Data:')) {
+        saveHexBuffer();
+        currentField = 'report_data';
+      } else if (trimmedLine.startsWith('Chip ID:')) {
+        saveHexBuffer();
+        currentField = 'chip_id';
+      } else if (trimmedLine.startsWith('R:')) {
+        saveHexBuffer();
+        currentField = 'signature_r';
+      } else if (trimmedLine.startsWith('S:')) {
+        saveHexBuffer();
+        currentField = 'signature_s';
+      } else if (trimmedLine.includes(':') && !isHexLine) {
+        // New field, save previous hex buffer
+        saveHexBuffer();
+        currentField = '';
       }
     }
 
-    // Read request data if available
+    // Save any remaining hex buffer
+    saveHexBuffer();
+
+    // Read request data if available (overrides parsed report_data)
     try {
       if (fs.existsSync(requestPath)) {
         report.reportData = fs.readFileSync(requestPath).toString('hex');
