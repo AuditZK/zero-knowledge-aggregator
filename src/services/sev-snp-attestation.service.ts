@@ -222,8 +222,8 @@ export class SevSnpAttestationService {
       } else if (trimmedLine.startsWith('Guest Policy')) {
         saveHexBuffer();
         currentField = '';
-        const match = trimmedLine.match(/\(0x([0-9a-f]+)\)/i);
-        if (match) report.policy = parseInt(match[1], 16) || 0;
+        const match = /\(0x([0-9a-f]+)\)/i.exec(trimmedLine);
+        if (match && match[1]) report.policy = parseInt(match[1], 16) || 0;
       } else if (trimmedLine.startsWith('Measurement:')) {
         saveHexBuffer();
         currentField = 'measurement';
