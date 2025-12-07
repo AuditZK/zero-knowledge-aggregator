@@ -535,6 +535,10 @@ export class EnclaveWorker {
         uptime: process.uptime()
       };
     } catch (error) {
+      const errorMessage = extractErrorMessage(error);
+      logger.error('Health check failed - database connectivity issue', {
+        error: errorMessage
+      });
       return {
         status: 'unhealthy',
         enclave: true,
