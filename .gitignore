@@ -52,3 +52,8 @@ temp/
 *.key
 *.crt
 credentials/
+
+# Development & testing
+api-tests.http
+scripts/
+AUDIT_PROMPT.md
