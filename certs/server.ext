@@ -13,3 +13,4 @@ DNS.6 = enclave_worker_dev
 DNS.7 = enclave
 IP.1 = 127.0.0.1
 IP.2 = ::1
+IP.3 = 35.188.130.119
