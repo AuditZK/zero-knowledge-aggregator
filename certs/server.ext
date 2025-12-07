@@ -1,0 +1,15 @@
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+DNS.2 = enclave-service
+DNS.3 = enclave_service
+DNS.4 = trackrecord_enclave_local
+DNS.5 = host.docker.internal
+DNS.6 = enclave_worker_dev
+DNS.7 = enclave
+IP.1 = 127.0.0.1
+IP.2 = ::1

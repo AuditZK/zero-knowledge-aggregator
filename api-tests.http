@@ -1,0 +1,77 @@
+### Variables
+@baseUrl = http://35.188.130.119
+@grpcGateway = http://localhost:8080
+
+### ============================================
+### HTTP LOG SERVER (Port 50052)
+### ============================================
+
+### Health Check
+GET {{baseUrl}}/health
+
+### Attestation AMD SEV-SNP - Rapport complet
+GET {{baseUrl}}/attestation
+
+### Attestation Info - Plateforme
+GET {{baseUrl}}/attestation/info
+
+### Get Logs (polling)
+GET {{baseUrl}}/logs
+
+### Logs Stream SSE (temps réel)
+GET {{baseUrl}}/logs/stream
+
+### Clear Logs
+POST {{baseUrl}}/logs/clear
+
+### ============================================
+### gRPC-Gateway (si configuré - Port 8080)
+### ============================================
+
+### Health Check
+POST {{grpcGateway}}/enclave.EnclaveService/HealthCheck
+Content-Type: application/json
+
+{}
+
+### Create User Connection
+POST {{grpcGateway}}/enclave.EnclaveService/CreateUserConnection
+Content-Type: application/json
+
+{
+  "user_uid": "test-user-001",
+  "exchange": "binance",
+  "label": "Main Trading Account",
+  "api_key": "your_api_key",
+  "api_secret": "your_api_secret",
+  "passphrase": ""
+}
+
+### Process Sync Job
+POST {{grpcGateway}}/enclave.EnclaveService/ProcessSyncJob
+Content-Type: application/json
+
+{
+  "user_uid": "test-user-001",
+  "exchange": "binance"
+}
+
+### Get Aggregated Metrics
+POST {{grpcGateway}}/enclave.EnclaveService/GetAggregatedMetrics
+Content-Type: application/json
+
+{
+  "user_uid": "test-user-001",
+  "exchange": ""
+}
+
+### Get Snapshot Time Series
+POST {{grpcGateway}}/enclave.EnclaveService/GetSnapshotTimeSeries
+Content-Type: application/json
+
+{
+  "user_uid": "test-user-001",
+  "exchange": "",
+  "start_date": 1704067200000,
+  "end_date": 1706745600000
+}

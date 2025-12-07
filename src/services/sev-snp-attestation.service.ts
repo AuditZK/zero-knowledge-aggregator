@@ -137,15 +137,19 @@ export class SevSnpAttestationService {
       await execAsync(`/usr/bin/snpguest report ${reportPath} ${requestPath} --random`);
 
       // Fetch VCEK certificate from AMD KDS using the report
+      // snpguest 0.6.0 syntax: fetch vcek <encoding> <processor_model> <certs_dir> <att_report_path>
       try {
         await execAsync(`/usr/bin/snpguest fetch vcek pem milan ${certsDir} ${reportPath}`);
+        logger.info('Successfully fetched VCEK certificate from AMD KDS');
       } catch (certError) {
         logger.warn('Failed to fetch VCEK from AMD KDS, will use cached cert if available');
       }
 
-      // Fetch CA chain
+      // Fetch CA chain from AMD KDS
+      // snpguest 0.6.0 syntax: fetch ca <encoding> <processor_model> <certs_dir> --endorser <vcek|vlek>
       try {
-        await execAsync(`/usr/bin/snpguest fetch ca pem milan ${certsDir}`);
+        await execAsync(`/usr/bin/snpguest fetch ca pem milan ${certsDir} --endorser vcek`);
+        logger.info('Successfully fetched CA chain from AMD KDS');
       } catch (caError) {
         logger.warn('Failed to fetch CA chain from AMD KDS');
       }
