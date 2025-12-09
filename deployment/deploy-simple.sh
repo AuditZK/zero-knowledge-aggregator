@@ -7,7 +7,6 @@
 # Requirements:
 # - Ubuntu 22.04 LTS with AMD SEV-SNP support
 # - Docker and Docker Compose installed
-# - Azure Key Vault or similar for secrets
 #
 # Usage:
 #   ./deploy-simple.sh
@@ -81,35 +80,12 @@ echo -e "${GREEN}[4/7] Setting up environment variables...${NC}"
 if [ ! -f "$ENV_FILE" ]; then
   echo -e "${YELLOW}⚠ Creating production environment file...${NC}"
 
-  # Check if Azure CLI is available for Key Vault
-  if command -v az &> /dev/null; then
-    echo "Fetching secrets from Azure Key Vault..."
-    VAULT_NAME="${AZURE_KEYVAULT_NAME:-track-record-vault}"
-
-    ENCRYPTION_KEY=$(az keyvault secret show --vault-name "$VAULT_NAME" --name encryption-key --query value -o tsv 2>/dev/null || echo "")
-    JWT_SECRET=$(az keyvault secret show --vault-name "$VAULT_NAME" --name jwt-secret --query value -o tsv 2>/dev/null || echo "")
-
-    if [ -z "$ENCRYPTION_KEY" ]; then
-      echo -e "${RED}ERROR: Could not fetch ENCRYPTION_KEY from Azure Key Vault${NC}"
-      echo "Please set it manually in $ENV_FILE"
-      ENCRYPTION_KEY="CHANGE_ME_FROM_VAULT"
-    fi
-  else
-    echo -e "${YELLOW}⚠ Azure CLI not found, using placeholder values${NC}"
-    ENCRYPTION_KEY="CHANGE_ME_FROM_VAULT"
-    JWT_SECRET="CHANGE_ME_FROM_VAULT"
-  fi
-
   # Create .env.production from template
   sudo cp "$INSTALL_DIR/.env.production.example" "$ENV_FILE"
 
-  # Replace placeholder values
-  sudo sed -i "s|\${AZURE_KEYVAULT_ENCRYPTION_KEY}|$ENCRYPTION_KEY|g" "$ENV_FILE"
-  sudo sed -i "s|\${AZURE_KEYVAULT_JWT_SECRET}|$JWT_SECRET|g" "$ENV_FILE"
-
   sudo chmod 600 "$ENV_FILE"
   echo -e "${GREEN}✓ Environment file created at $ENV_FILE${NC}"
-  echo -e "${YELLOW}⚠ IMPORTANT: Review and update DATABASE_URL and other settings${NC}"
+  echo -e "${YELLOW}⚠ IMPORTANT: Edit $ENV_FILE and set DATABASE_URL, JWT_SECRET${NC}"
 else
   echo "Environment file already exists at $ENV_FILE"
 fi
@@ -200,7 +176,7 @@ echo "   ${BLUE}curl http://localhost:9090/metrics${NC}"
 echo ""
 echo -e "${RED}⚠ SECURITY REMINDERS:${NC}"
 echo "  - Replace self-signed certs with CA-signed certificates"
-echo "  - Verify ENCRYPTION_KEY was loaded from vault"
+echo "  - Verify AMD SEV-SNP hardware is available (encryption keys derived from hardware)"
 echo "  - Configure firewall to restrict port 50051 to internal network only"
 echo "  - Enable automatic security updates: sudo apt install unattended-upgrades"
 echo ""

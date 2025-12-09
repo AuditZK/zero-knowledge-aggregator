@@ -17,7 +17,6 @@
 # RUN:
 #   docker run --cap-add=IPC_LOCK --security-opt=no-new-privileges:true \
 #     -v /etc/enclave:/etc/enclave:ro \
-#     -e ENCRYPTION_KEY=<key> \
 #     track-record-enclave:latest
 #
 # ==============================================================================

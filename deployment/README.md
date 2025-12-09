@@ -19,8 +19,7 @@ Guide de déploiement simple pour production **sans orchestrateur complexe**.
 
 - VM Ubuntu 22.04 LTS avec AMD SEV-SNP
 - Docker et Docker Compose installés
-- Accès à Azure Key Vault (ou équivalent) pour les secrets
-- PostgreSQL managé (Azure Database, AWS RDS)
+- PostgreSQL (local ou managé)
 
 ### Installation en 3 étapes
 
@@ -36,7 +35,6 @@ sudo nano /etc/enclave/.env.production
 
 # Mettre les vraies valeurs :
 # - DATABASE_URL (PostgreSQL managé)
-# - ENCRYPTION_KEY (depuis Azure Key Vault)
 
 # 3. Démarrer
 sudo systemctl start enclave
@@ -175,33 +173,13 @@ sudo systemctl restart enclave
 
 ## 🔒 Secrets Management
 
-### Option 1 : Azure Key Vault (Recommandé)
-
-```bash
-# Installer Azure CLI
-curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-
-# Login
-az login
-
-# Récupérer les secrets
-ENCRYPTION_KEY=$(az keyvault secret show --vault-name track-record-vault --name encryption-key --query value -o tsv)
-JWT_SECRET=$(az keyvault secret show --vault-name track-record-vault --name jwt-secret --query value -o tsv)
-
-# Injecter dans .env.production
-echo "ENCRYPTION_KEY=$ENCRYPTION_KEY" | sudo tee -a /etc/enclave/.env.production
-echo "JWT_SECRET=$JWT_SECRET" | sudo tee -a /etc/enclave/.env.production
-```
-
-### Option 2 : Fichier .env.production sécurisé
-
 ```bash
 # Créer le fichier
 sudo nano /etc/enclave/.env.production
 
 # Contenu (exemple) :
-ENCRYPTION_KEY="your-64-char-hex-key"
-DATABASE_URL="postgresql://user:pass@db.postgres.database.azure.com:5432/aggregator_db?sslmode=require"
+DATABASE_URL="postgresql://user:pass@your-db-host:5432/aggregator_db?sslmode=require"
+JWT_SECRET="your-jwt-secret"
 
 # Sécuriser les permissions (IMPORTANT)
 sudo chmod 600 /etc/enclave/.env.production
@@ -212,34 +190,17 @@ sudo chown root:root /etc/enclave/.env.production
 
 ## 🗄️ Base de Données Production
 
-### Azure Database for PostgreSQL
+### PostgreSQL
 
 ```bash
-# Créer l'instance
-az postgres flexible-server create \
-  --name track-record-db \
-  --resource-group enclave-rg \
-  --location eastus \
-  --admin-user enclave_admin \
-  --admin-password "$(openssl rand -base64 32)" \
-  --sku-name Standard_D2s_v3 \
-  --storage-size 128 \
-  --version 15
-
-# Configurer le firewall (IP de la VM enclave uniquement)
-VM_IP=$(curl -s https://api.ipify.org)
-az postgres flexible-server firewall-rule create \
-  --resource-group enclave-rg \
-  --name track-record-db \
-  --rule-name allow-enclave \
-  --start-ip-address $VM_IP \
-  --end-ip-address $VM_IP
-
-# Connection string
-DATABASE_URL="postgresql://enclave_admin:PASSWORD@track-record-db.postgres.database.azure.com:5432/aggregator_db?sslmode=require"
+# Connection string (exemple)
+DATABASE_URL="postgresql://enclave_user:PASSWORD@your-db-host:5432/aggregator_db?sslmode=require"
 ```
 
-**Backups automatiques** : 30 jours de rétention (par défaut avec Azure Database)
+**Recommandations** :
+- Configurer le firewall pour n'autoriser que l'IP de la VM enclave
+- Activer les backups automatiques (30 jours de rétention minimum)
+- Utiliser SSL/TLS pour les connexions
 
 ---
 
@@ -337,40 +298,18 @@ sudo systemctl restart enclave
 
 ---
 
-## 💰 Estimation des Coûts (Azure)
+## 💰 Estimation des Coûts
 
 ### Configuration Minimale (MVP)
 
 | Composant | Type | Coût/mois |
 |-----------|------|-----------|
-| VM (DCasv5) | 2 vCPUs, 4GB RAM | ~$100 |
-| Azure Database for PostgreSQL | Standard_D2s_v3 | ~$50 |
+| VM AMD SEV-SNP | 2 vCPUs, 4GB RAM | ~$100 |
+| PostgreSQL | Managé ou self-hosted | ~$50 |
 | Stockage | 128GB SSD | ~$10 |
-| Network egress | ~10GB/mois | ~$1 |
-| **TOTAL** | | **~$161/mois** |
+| **TOTAL** | | **~$160/mois** |
 
-### Configuration HA (Docker Swarm)
-
-| Composant | Type | Coût/mois |
-|-----------|------|-----------|
-| 3x VMs (DCasv5) | 2 vCPUs, 4GB RAM | ~$300 |
-| Azure Database for PostgreSQL | Standard_D4s_v3 (HA) | ~$150 |
-| Load Balancer | Standard | ~$20 |
-| Stockage | 3x 128GB SSD | ~$30 |
-| **TOTAL** | | **~$500/mois** |
-
-### Configuration Kubernetes (AKS)
-
-| Composant | Type | Coût/mois |
-|-----------|------|-----------|
-| AKS Control Plane | Managed | ~$70 |
-| 3x Worker Nodes (DCasv5) | 2 vCPUs, 4GB RAM | ~$300 |
-| Azure Database for PostgreSQL | Standard_D4s_v3 (HA) | ~$150 |
-| Load Balancer | Standard | ~$20 |
-| Stockage | Persistent Volumes | ~$50 |
-| **TOTAL** | | **~$590/mois** |
-
-**Conclusion** : Docker Compose = **3.5x moins cher** que Kubernetes pour le même service.
+**Note** : Docker Compose suffit pour la majorité des cas d'usage.
 
 ---
 
@@ -411,9 +350,9 @@ Mais **demande-toi d'abord** : Est-ce vraiment nécessaire ?
 
 Avant de mettre en prod :
 
-- [ ] VM AMD SEV-SNP créée (Azure DCasv5 ou équivalent)
+- [ ] VM AMD SEV-SNP créée
 - [ ] PostgreSQL managé configuré (avec SSL)
-- [ ] `ENCRYPTION_KEY` injectée depuis Azure Key Vault
+- [ ] AMD SEV-SNP attestation vérifiée (clés de chiffrement dérivées du hardware)
 - [ ] TLS certificates CA-signés installés dans `/etc/enclave/certs/`
 - [ ] Firewall configuré (port 50051 interne uniquement)
 - [ ] systemd service activé (`systemctl enable enclave`)

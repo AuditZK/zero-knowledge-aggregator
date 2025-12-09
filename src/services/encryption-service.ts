@@ -8,16 +8,12 @@ const logger = getLogger('EncryptionService');
 /**
  * Encryption Service - Credential encryption/decryption
  *
- * SECURITY ARCHITECTURE (NEW):
- * - Encryption key derived from AMD SEV-SNP hardware measurement (NOT env var)
+ * SECURITY ARCHITECTURE:
+ * - Encryption key derived from AMD SEV-SNP hardware measurement
  * - Key automatically rotates on code updates (measurement changes)
  * - Enterprise-level security at €0 cost
  * - No secrets in environment variables
- *
- * MIGRATION SUPPORT:
- * - Backward compatible with old env var encrypted data (fallback mode)
- * - New encryptions use hardware-derived keys only
- * - Migration script available for re-encrypting old credentials
+ * - NO FALLBACK: AMD SEV-SNP hardware is REQUIRED
  */
 @injectable()
 export class EncryptionService {
@@ -32,12 +28,12 @@ export class EncryptionService {
   /**
    * Gets encryption key from AMD SEV-SNP hardware derivation
    *
-   * NEW: Replaces environment variable key storage
    * - Derives master key from enclave measurement
    * - Unwraps Data Encryption Key (DEK) from database
    * - DEK is used for credential encryption/decryption
    *
    * @returns Current active DEK
+   * @throws Error if AMD SEV-SNP hardware is not available
    */
   private async getKey(): Promise<Buffer> {
     try {
@@ -47,16 +43,7 @@ export class EncryptionService {
     } catch (error: unknown) {
       const errorMessage = extractErrorMessage(error);
       logger.error('Failed to get encryption key from hardware derivation', { error: errorMessage });
-
-      // FALLBACK MODE: Use env var key (for backward compatibility during migration)
-      // This allows existing encrypted credentials to still be decrypted
-      // TODO: Remove this fallback after migration is complete
-      if (process.env.ENCRYPTION_KEY) {
-        logger.warn('Falling back to environment variable key - INSECURE, migration required');
-        return crypto.createHash('sha256').update(process.env.ENCRYPTION_KEY).digest();
-      }
-
-      throw new Error(`Cannot get encryption key: ${errorMessage}`);
+      throw new Error(`Cannot get encryption key - AMD SEV-SNP required: ${errorMessage}`);
     }
   }
 
@@ -93,12 +80,9 @@ export class EncryptionService {
   /**
    * Decrypts text using AES-256-GCM with hardware-derived key
    *
-   * BACKWARD COMPATIBILITY:
-   * - First attempts with hardware-derived key
-   * - Falls back to env var key if hardware key fails (migration support)
-   *
    * @param encryptedData Hex-encoded encrypted data (iv + tag + ciphertext)
    * @returns Decrypted plaintext
+   * @throws Error if AMD SEV-SNP hardware is not available
    */
   async decrypt(encryptedData: string): Promise<string> {
     try {

@@ -62,7 +62,7 @@ This document describes the **zero-cost, enterprise-level** encryption key manag
    - Master key only **wraps** (encrypts) the DEK
    - Allows seamless migration on code updates (unwrap with old master key, re-wrap with new)
 
-3. **Zero Secrets in Environment**: No ENCRYPTION_KEY in .env
+3. **Zero Secrets in Environment**
    - Master key derived from hardware (never stored)
    - DEK stored encrypted (useless without master key)
    - Complete elimination of plaintext secrets
@@ -114,7 +114,7 @@ docker logs enclave_worker_dev | grep "DEK system initialized"
 # Should see: "DEK system initialized successfully"
 ```
 
-✅ **Done!** The system is ready to use. No ENCRYPTION_KEY needed in .env.
+✅ **Done!** The system is ready to use.
 
 ---
 
@@ -163,10 +163,6 @@ ts-node scripts/migrate-to-hardware-keys.ts
 ```bash
 # Test application works
 curl http://localhost:50051/health
-
-# Remove old ENCRYPTION_KEY from .env
-nano .env
-# Delete or comment out: ENCRYPTION_KEY="..."
 
 # Restart enclave
 docker-compose -f docker-compose.local.yml restart enclave

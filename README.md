@@ -3,7 +3,7 @@
 **Trusted Computing Base for Confidential Trading Data Aggregation**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![TCB](https://img.shields.io/badge/TCB-5,454%20LOC-green.svg)]()
+[![TCB](https://img.shields.io/badge/TCB-~6,400%20LOC-green.svg)]()
 [![Node.js](https://img.shields.io/badge/Node.js-20.x-339933.svg)]()
 [![AMD SEV-SNP](https://img.shields.io/badge/AMD-SEV--SNP-red.svg)]()
 
@@ -212,10 +212,10 @@ External Exchange APIs (Binance, IBKR, Alpaca)
 | **DailySyncSchedulerService** | 1 | 220 | Autonomous cron scheduler (00:00 UTC) |
 | **SyncRateLimiterService** | 1 | 202 | Rate limiting & audit trail |
 | **Repositories** | 6 | 760 | Database access layer |
-| **EnclaveWorker + Server** | 2 | 100 | gRPC server and entry point |
-| **Total** | **19** | **5,454** | Minimized attack surface |
+| **EnclaveWorker + Server** | 2 | 900 | gRPC server and entry point |
+| **Total** | **40** | **~6,400** | Minimized attack surface |
 
-**Rationale for TCB size**: By isolating only the code that MUST handle credentials and create snapshots, we reduce the attack surface from ~12,000 LOC (full platform) to 5,454 LOC (enclave only). This makes security audits tractable and reduces the probability of vulnerabilities. The autonomous scheduler and rate limiter are included in the TCB to prove snapshot integrity via hardware attestation.
+**Rationale for TCB size**: By isolating only the code that MUST handle credentials and create snapshots, we reduce the attack surface from ~12,000 LOC (full platform) to ~6,400 LOC (enclave only). This makes security audits tractable and reduces the probability of vulnerabilities. The autonomous scheduler and rate limiter are included in the TCB to prove snapshot integrity via hardware attestation.
 
 ### Dependencies
 

@@ -39,7 +39,6 @@ services:
       NODE_ENV: ${NODE_ENV:-development}
       ENCLAVE_PORT: 50051
       DATABASE_URL: postgresql://enclave_user:${ENCLAVE_DB_PASSWORD:-enclavepass123}@postgres-enclave:5432/enclave_db
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
       JWT_SECRET: ${JWT_SECRET:-local-dev-jwt-secret-change-in-prod}
       LOG_LEVEL: ${LOG_LEVEL:-debug}
       METRICS_ENABLED: "true"
