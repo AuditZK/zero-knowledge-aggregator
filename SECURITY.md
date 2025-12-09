@@ -28,7 +28,7 @@ This document describes the security architecture, mechanisms, and guarantees of
 The Track Record Enclave implements a **zero-knowledge architecture** for processing sensitive trading data. The system is designed with the following core security principles:
 
 1. **Hardware Root of Trust**: AMD SEV-SNP provides memory encryption and attestation
-2. **Minimal Trust Boundary**: Only 5,454 LOC in the Trusted Computing Base (TCB)
+2. **Minimal Trust Boundary**: Only ~6,400 LOC in the Trusted Computing Base (TCB)
 3. **Data Minimization**: Individual trades never leave the enclave
 4. **Defense in Depth**: Multiple layers of security controls
 5. **Auditability**: All security mechanisms are auditable and reproducible
@@ -199,22 +199,29 @@ Location: [src/services/encryption-service.ts](src/services/encryption-service.t
 - ✅ Authenticated encryption prevents tampering
 - ✅ NIST approved (SP 800-38D)
 
-#### Key Derivation
+#### Key Derivation (AMD SEV-SNP Hardware)
 
 ```typescript
-// Master key from environment variable
-const encryptionKey = process.env.ENCRYPTION_KEY; // 32+ characters
+// Master key derived from AMD SEV-SNP hardware measurement
+// NO secrets in environment variables
+const attestation = await attestationService.getAttestationReport();
+const measurement = attestation.measurement; // SHA-384 hash of enclave code
 
-// Derive consistent 32-byte key using SHA-256
-const key = crypto.createHash('sha256')
-  .update(encryptionKey)
-  .digest(); // 32 bytes
+// Derive master key using HKDF-SHA256
+const masterKey = crypto.hkdfSync(
+  'sha256',
+  measurementBuffer,     // From AMD hardware
+  salt,                  // Platform version
+  'track-record-enclave-dek',
+  32                     // 256 bits
+);
 ```
 
 **Security:**
-- Master key stored ONLY in environment variables (never in code)
-- SHA-256 ensures consistent 256-bit key length
-- Key never logged or persisted to disk
+- Master key derived from AMD SEV-SNP hardware measurement (NOT environment variables)
+- Key changes automatically when enclave code is updated
+- Key never stored - derived on-demand from hardware
+- NO FALLBACK: AMD SEV-SNP hardware is REQUIRED
 
 #### Encryption Format
 
@@ -483,11 +490,6 @@ process.on('SIGINT', cleanup);
 process.on('beforeExit', cleanup);
 
 function cleanup() {
-  // Wipe encryption keys from environment
-  if (process.env.ENCRYPTION_KEY) {
-    wipeString(process.env.ENCRYPTION_KEY);
-    delete process.env.ENCRYPTION_KEY;
-  }
   // Wipe JWT secrets
   if (process.env.JWT_SECRET) {
     wipeString(process.env.JWT_SECRET);

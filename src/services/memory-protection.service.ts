@@ -108,10 +108,6 @@ export class MemoryProtectionService {
   private static registerCleanupHandlers(): void {
     const cleanup = () => {
       logger.info('[MEMORY_PROTECTION] Cleaning up secrets...');
-      if (process.env.ENCRYPTION_KEY) {
-        this.wipeString(process.env.ENCRYPTION_KEY);
-        delete process.env.ENCRYPTION_KEY;
-      }
       if (process.env.JWT_SECRET) {
         this.wipeString(process.env.JWT_SECRET);
         delete process.env.JWT_SECRET;

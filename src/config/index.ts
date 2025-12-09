@@ -10,7 +10,6 @@ const logger = getLogger('Config');
 const requiredEnvVars = [
   'DATABASE_URL',
   'JWT_SECRET',
-  'ENCRYPTION_KEY',
 ];
 
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);

@@ -32,7 +32,7 @@ Vous êtes un **auditeur senior en sécurité applicative** spécialisé dans le
 - **Scheduler** : node-cron (autonomous daily sync)
 
 ### Trusted Computing Base (TCB)
-- **Taille** : 5,454 lignes de code (surface d'attaque minimisée)
+- **Taille** : ~6,400 lignes de code (40 fichiers TypeScript, surface d'attaque minimisée)
 - **Scope** :
   - Services de chiffrement et déchiffrement credentials
   - Connecteurs exchange (CCXT, IBKR, Alpaca)

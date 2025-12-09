@@ -116,9 +116,6 @@ docker service scale enclave_enclave=3
 
 **Setup (minimal) :**
 ```bash
-# Azure (AKS)
-az aks create --name enclave-cluster --node-count 2 --generate-ssh-keys
-
 # Deploy
 kubectl apply -f k8s/deployment.yaml
 kubectl apply -f k8s/service.yaml
@@ -231,7 +228,7 @@ Le fichier `docker-compose.prod.yml` que j'ai créé **fonctionne aussi avec Swa
 ### Infrastructure
 ```
 ┌─────────────────────────────────────┐
-│  Azure VM (DCasv5-series)           │
+│  VM AMD SEV-SNP                     │
 │  - AMD SEV-SNP enabled              │
 │  - Ubuntu 22.04 LTS                 │
 │  - 2 vCPUs, 4GB RAM                 │
@@ -252,8 +249,8 @@ Le fichier `docker-compose.prod.yml` que j'ai créé **fonctionne aussi avec Swa
             │
             ↓ (internal network)
 ┌─────────────────────────────────────┐
-│  Azure Database for PostgreSQL      │
-│  - Managed service                  │
+│  PostgreSQL                         │
+│  - Managed or self-hosted           │
 │  - Automated backups                │
 │  - Coût: ~$50/mois                  │
 └─────────────────────────────────────┘
@@ -272,7 +269,7 @@ sudo ./deployment/deploy-simple.sh
 
 # 2. Configurer les secrets
 sudo nano /etc/enclave/.env.production
-# → Mettre DATABASE_URL, ENCRYPTION_KEY
+# → Mettre DATABASE_URL, JWT_SECRET
 
 # 3. Démarrer
 sudo systemctl start enclave
