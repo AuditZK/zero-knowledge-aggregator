@@ -8,9 +8,18 @@
 # ============================================================================
 # SNPGuest Builder Stage - Build AMD SEV-SNP attestation tool
 # ============================================================================
+# NOTE: Rust compilation is memory-intensive. Options:
+#   1. Use Cloud Build: gcloud builds submit --tag gcr.io/PROJECT/enclave:latest .
+#   2. Increase VM RAM temporarily to 8GB+
+#   3. Build with CARGO_BUILD_JOBS=1 (slower but uses less RAM)
+# ============================================================================
 FROM rust:1.82-alpine AS snpguest-builder
 
 RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static perl make
+
+# Limit parallelism to reduce memory usage (1 job = ~1GB RAM)
+ENV CARGO_BUILD_JOBS=1
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 # Install snpguest 0.6.0 with locked dependencies
 RUN cargo install snpguest@0.6.0 --root /usr/local --locked
