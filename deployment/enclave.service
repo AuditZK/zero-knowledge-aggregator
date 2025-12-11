@@ -1,0 +1,21 @@
+[Unit]
+Description=Track Record Enclave Service
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/mouchlachjimmy/zero-knowledge-aggregator
+
+# Fetch secrets from GCP Secret Manager and start Docker
+ExecStart=/bin/bash -c '\
+    export DATABASE_URL=$(gcloud secrets versions access latest --secret=enclave-database-url) && \
+    export JWT_SECRET=$(gcloud secrets versions access latest --secret=enclave-jwt-secret) && \
+    docker compose -f docker-compose.enclave.yml up -d'
+
+ExecStop=/usr/bin/docker compose -f /home/mouchlachjimmy/zero-knowledge-aggregator/docker-compose.enclave.yml down
+
+[Install]
+WantedBy=multi-user.target
