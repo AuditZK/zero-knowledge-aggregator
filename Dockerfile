@@ -106,7 +106,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 EXPOSE 50051 50052 9090
 
 # Switch to non-root user
-USER enclave
+# NOTE: Commented out for SEV-SNP - root access required for /dev/sev-guest
+# Hardware isolation provides security boundary, not user isolation
+# USER enclave
 
 # Use tini as init system (proper signal handling)
 ENTRYPOINT ["/sbin/tini", "--"]
