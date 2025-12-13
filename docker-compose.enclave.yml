@@ -1,6 +1,6 @@
 # Docker Compose - Enclave Stack (Production)
-# Uses Neon PostgreSQL (cloud) - no local database needed
-# PROD: Runs on AMD SEV-SNP Confidential VM
+# Writes to postgres-enclave on VPS (not cloud DB)
+# PROD: Runs on AMD SEV-SNP Confidential VM (GCP)
 
 services:
   # ==========================================
@@ -15,8 +15,10 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       ENCLAVE_PORT: 50051
+      # Database: postgres-enclave on VPS (source de vérité)
       DATABASE_URL: ${DATABASE_URL}
       JWT_SECRET: ${JWT_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       METRICS_ENABLED: "true"
       METRICS_PORT: 9092
@@ -28,6 +30,9 @@ services:
       - "9092:9092"    # Prometheus Metrics
     volumes:
       - ./certs:/etc/enclave:ro
+    devices:
+      - /dev/sev-guest:/dev/sev-guest
+    privileged: true
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:9092/metrics', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
       interval: 30s
@@ -36,10 +41,30 @@ services:
       start_period: 40s
 
 # ==========================================
+# ARCHITECTURE
+# ==========================================
+# Enclave (GCP TEE) → postgres-enclave (VPS:5436) → Gateway/Analytics
+#
+# Data flow:
+# 1. Enclave fetches trades from exchanges (in memory)
+# 2. Enclave aggregates to daily snapshots
+# 3. Enclave writes to postgres-enclave on VPS
+# 4. Gateway reads from postgres-enclave, syncs to Neon (Frontend)
+# 5. Analytics reads from postgres-enclave, calculates metrics
+#
+# Security:
+# - Credentials encrypted (AES-256-GCM) in postgres-enclave
+# - Credentials NEVER in Neon (Frontend DB)
+# - postgres-enclave protected by firewall (only Enclave IP allowed)
+
+# ==========================================
 # USAGE
 # ==========================================
 # Production (on SEV-SNP server):
-#   DATABASE_URL="postgresql://..." JWT_SECRET="..." docker compose -f docker-compose.enclave.yml up -d
+#   DATABASE_URL="postgresql://enclave_user:xxx@VPS_IP:5436/enclave_db" \
+#   JWT_SECRET="..." \
+#   ENCRYPTION_KEY="..." \
+#   docker compose -f docker-compose.enclave.yml up -d
 #
-# Push schema to Neon:
-#   DATABASE_URL="postgresql://neondb_owner:...@ep-xxx.neon.tech/neondb?sslmode=require" npx prisma db push
+# Push schema to VPS postgres-enclave:
+#   DATABASE_URL="postgresql://enclave_user:xxx@VPS_IP:5436/enclave_db" npx prisma db push
