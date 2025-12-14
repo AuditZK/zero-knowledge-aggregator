@@ -11,7 +11,7 @@ const app = express();
 app.use(express.json());
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'enclave-rest' });
 });
 
@@ -36,14 +36,14 @@ app.post('/api/v1/credentials/connect', async (req, res) => {
 
     if (!validation.success) {
       logger.warn('[REST] Invalid request', {
-        errors: validation.error.errors,
+        errors: validation.error.issues,
         body: req.body
       });
 
       return res.status(400).json({
         success: false,
         error: 'Invalid request',
-        details: validation.error.errors
+        details: validation.error.issues
       });
     }
 
@@ -70,7 +70,7 @@ app.post('/api/v1/credentials/connect', async (req, res) => {
       exchange: data.exchange
     });
 
-    res.json({
+    return res.json({
       success: true,
       user_uid: data.user_uid,
       exchange: data.exchange,
@@ -80,7 +80,7 @@ app.post('/api/v1/credentials/connect', async (req, res) => {
   } catch (error: any) {
     logger.error('[REST] Connection creation failed:', error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error.message || 'Failed to create connection'
     });
