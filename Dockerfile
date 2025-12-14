@@ -94,6 +94,7 @@ COPY --from=builder --chown=enclave:enclave /app/node_modules/@prisma ./node_mod
 # Environment variables (defaults - override in docker-compose.yml)
 ENV NODE_ENV=production
 ENV ENCLAVE_PORT=50051
+ENV REST_PORT=3050
 ENV HTTP_LOG_PORT=50052
 ENV METRICS_PORT=9090
 ENV METRICS_ENABLED=true
@@ -103,7 +104,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD node -e "const port = process.env.PORT || process.env.HTTP_LOG_PORT || '50052'; require('http').get('http://localhost:' + port + '/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
 
 # Expose ports
-EXPOSE 50051 50052 9090
+EXPOSE 50051 3050 50052 9090
 
 # Switch to non-root user
 # NOTE: Commented out for SEV-SNP - root access required for /dev/sev-guest
