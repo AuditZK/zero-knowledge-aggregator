@@ -85,6 +85,17 @@ const startEnclave = async () => {
     logger.info('[ENCLAVE] Starting gRPC server...');
     const enclaveServer = await startEnclaveServer();
 
+    // Start REST server (auditable user credential submission)
+    logger.info('[ENCLAVE] Starting REST server for auditable credential submission...');
+    const { startRestServer } = await import('./rest-server');
+    const restPort = parseInt(process.env.REST_PORT || '3050', 10);
+    const restServer = startRestServer(restPort);
+    logger.info('[ENCLAVE] REST server started', {
+      port: restPort,
+      endpoint: 'POST /api/v1/credentials/connect',
+      protocol: 'JSON over HTTP (auditable)'
+    });
+
     // Start HTTP log server (for SSE streaming enclave logs)
     logger.info('[ENCLAVE] Starting HTTP log server for SSE streaming...');
     const { startHttpLogServer } = await import('./http-log-server');
@@ -137,8 +148,9 @@ const startEnclave = async () => {
     });
 
     logger.info('[ENCLAVE] Enclave Worker ready to process sync jobs', {
-      protocol: 'gRPC',
-      port: process.env.ENCLAVE_PORT || 50051,
+      grpcPort: process.env.ENCLAVE_PORT || 50051,
+      restPort: restPort,
+      protocols: 'gRPC (Gateway) + REST (User-Auditable)',
       tls: 'MANDATORY (mutual TLS)',
       attestation: attestationResult.verified ? 'VERIFIED' : 'DEV MODE',
       measurement: attestationResult.measurement || 'N/A',
@@ -160,6 +172,14 @@ const startEnclave = async () => {
 
         // Stop HTTP log server
         await httpLogServer.stop();
+
+        // Stop REST server
+        await new Promise<void>((resolve, reject) => {
+          restServer.close((err) => {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
 
         // Stop Prometheus metrics server
         if (process.env.METRICS_ENABLED === 'true') {
