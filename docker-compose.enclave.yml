@@ -15,6 +15,7 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       ENCLAVE_PORT: 50051
+      REST_PORT: 3050
       # Database: postgres-enclave on VPS (source de vérité)
       DATABASE_URL: ${DATABASE_URL}
       JWT_SECRET: ${JWT_SECRET}
@@ -27,6 +28,7 @@ services:
     ports:
       - "50051:50051"  # gRPC Server
       - "50052:50052"  # HTTP Log Server (SSE)
+      - "3050:3050"    # REST API (Auditable credential submission)
       - "9092:9092"    # Prometheus Metrics
     volumes:
       - ./certs:/etc/enclave:ro
