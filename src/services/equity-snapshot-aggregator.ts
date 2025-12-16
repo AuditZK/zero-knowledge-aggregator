@@ -225,7 +225,12 @@ export class EquitySnapshotAggregator {
             realizedPnl: marketData.realizedPnl,
             availableBalance: marketData.available_margin || marketData.availableBalance,
             usedMargin: marketData.usedMargin,
-            positions: marketData.positions
+            positions: marketData.positions,
+            // FIX: Extract trading activity metrics from IBKR breakdown
+            volume: marketData.volume,
+            trades: marketData.trades,
+            tradingFees: marketData.trading_fees || marketData.tradingFees,
+            fundingFees: marketData.funding_fees || marketData.fundingFees
           };
         }
       }
@@ -355,16 +360,17 @@ export class EquitySnapshotAggregator {
       // Filter trades for this market type
       const marketTrades = allTrades.filter(t => this.matchesMarketType(t.symbol, marketType));
 
+      // Use balance data if available for this market type
+      const balance = balancesByMarket[marketType];
+
+      // FIX: For IBKR and connectors with getBalanceBreakdown, use data from balance instead of empty trades
       // Volume = trade cost (price * amount). Fallback to manual calculation if cost not set.
-      const volume = marketTrades.reduce((sum, t) => {
+      const volume = balance?.volume ?? marketTrades.reduce((sum, t) => {
         const tradeCost = t.cost || (t.price && t.amount ? t.price * t.amount : 0);
         return sum + tradeCost;
       }, 0);
-      const fees = marketTrades.reduce((sum, t) => sum + (t.fee?.cost || 0), 0);
-      const trades = marketTrades.length;
-
-      // Use balance data if available for this market type
-      const balance = balancesByMarket[marketType];
+      const fees = balance?.tradingFees ?? balance?.trading_fees ?? marketTrades.reduce((sum, t) => sum + (t.fee?.cost || 0), 0);
+      const trades = balance?.trades ?? marketTrades.length;
 
       // Use snake_case format for JSON (matches gRPC expected format)
       const fundingForMarket = marketType === 'swap' ? totalFundingFees : 0;
@@ -389,6 +395,35 @@ export class EquitySnapshotAggregator {
       totalVolume += volume;
       totalTrades += trades;
       totalTradingFees += fees;
+    }
+
+    // FIX: Also process IBKR-specific market types (stocks, futures_commodities, cfd, forex)
+    // that are in balancesByMarket but not in standardMarkets
+    for (const [marketType, balance] of Object.entries(balancesByMarket)) {
+      if (marketType !== 'global' && !standardMarkets.includes(marketType as MarketType)) {
+        const volume = balance.volume || 0;
+        const trades = balance.trades || 0;
+        const fees = balance.tradingFees || balance.trading_fees || 0;
+
+        const marketData: MarketBalanceBreakdown = {
+          totalEquityUsd: balance.totalEquityUsd || 0,
+          unrealizedPnl: balance.unrealizedPnl || 0,
+          realizedPnl: balance.realizedPnl,
+          availableBalance: balance.availableBalance,
+          usedMargin: balance.usedMargin,
+          positions: balance.positions,
+          equity: balance.totalEquityUsd || balance.equity || 0,
+          available_margin: balance.availableBalance || balance.available_margin || 0,
+          volume,
+          trades,
+          ...this.createDualCaseMetrics(fees, 0) // No funding fees for stocks/futures/cfd/forex
+        };
+
+        (breakdown as Record<string, MarketBalanceBreakdown>)[marketType] = marketData;
+        totalVolume += volume;
+        totalTrades += trades;
+        totalTradingFees += fees;
+      }
     }
 
     breakdown.global = {
