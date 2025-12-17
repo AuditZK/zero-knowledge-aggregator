@@ -18,6 +18,7 @@ import { PrismaClient } from '@prisma/client';
 import { EncryptionService } from '../services/encryption-service';
 import { TradeSyncService } from '../services/trade-sync-service';
 import { EquitySnapshotAggregator } from '../services/equity-snapshot-aggregator';
+import { PerformanceMetricsService } from '../services/performance-metrics.service';
 import { SyncRateLimiterService } from '../services/sync-rate-limiter.service';
 import { DailySyncSchedulerService } from '../services/daily-sync-scheduler.service';
 import { SevSnpAttestationService } from '../services/sev-snp-attestation.service';
@@ -80,6 +81,7 @@ export function setupEnclaveContainer(): void {
   container.registerSingleton(KeyManagementService);
   container.registerSingleton(EncryptionService);
   container.registerSingleton(EquitySnapshotAggregator);
+  container.registerSingleton(PerformanceMetricsService);
   container.registerSingleton(TradeSyncService);
   container.registerSingleton(SyncRateLimiterService);
   container.registerSingleton(DailySyncSchedulerService);

@@ -1,6 +1,7 @@
 import { injectable, inject } from 'tsyringe';
 import { TradeSyncService } from './services/trade-sync-service';
 import { EquitySnapshotAggregator } from './services/equity-snapshot-aggregator';
+import { PerformanceMetricsService } from './services/performance-metrics.service';
 import { SnapshotDataRepository } from './core/repositories/snapshot-data-repository';
 import { ExchangeConnectionRepository } from './core/repositories/exchange-connection-repository';
 import { SyncStatusRepository } from './core/repositories/sync-status-repository';
@@ -49,6 +50,7 @@ export class EnclaveWorker {
   constructor(
     @inject(TradeSyncService) private readonly tradeSyncService: TradeSyncService,
     @inject(EquitySnapshotAggregator) private readonly equitySnapshotAggregator: EquitySnapshotAggregator,
+    @inject(PerformanceMetricsService) private readonly performanceMetricsService: PerformanceMetricsService,
     @inject(SnapshotDataRepository) private readonly snapshotDataRepo: SnapshotDataRepository,
     @inject(ExchangeConnectionRepository) private readonly exchangeConnectionRepo: ExchangeConnectionRepository,
     @inject(SyncStatusRepository) private readonly syncStatusRepo: SyncStatusRepository,
@@ -511,6 +513,84 @@ export class EnclaveWorker {
       return {
         success: false,
         error: errorMessage || 'Failed to create user connection'
+      };
+    }
+  }
+
+  /**
+   * Get performance metrics for a user
+   *
+   * SECURITY: Returns only statistical metrics (Sharpe, volatility, drawdown)
+   * NO individual trade data is included
+   *
+   * @param userUid User UID
+   * @param exchange Optional exchange filter
+   * @param startDate Optional start date filter
+   * @param endDate Optional end date filter
+   */
+  async getPerformanceMetrics(
+    userUid: string,
+    exchange?: string,
+    startDate?: Date,
+    endDate?: Date
+  ): Promise<{
+    success: boolean;
+    metrics?: {
+      sharpeRatio: number | null;
+      sortinoRatio: number | null;
+      calmarRatio: number | null;
+      volatility: number | null;
+      downsideDeviation: number | null;
+      maxDrawdown: number | null;
+      maxDrawdownDuration: number | null;
+      currentDrawdown: number | null;
+      winRate: number | null;
+      profitFactor: number | null;
+      avgWin: number | null;
+      avgLoss: number | null;
+      periodStart: Date;
+      periodEnd: Date;
+      dataPoints: number;
+    };
+    error?: string;
+  }> {
+    try {
+      logger.info('Getting performance metrics', {
+        userUid,
+        exchange,
+        startDate: startDate?.toISOString(),
+        endDate: endDate?.toISOString()
+      });
+
+      const metrics = await this.performanceMetricsService.calculateMetrics(
+        userUid,
+        exchange,
+        startDate,
+        endDate
+      );
+
+      if (!metrics) {
+        return {
+          success: false,
+          error: 'Insufficient data for metrics calculation (need at least 2 days of snapshots)'
+        };
+      }
+
+      return {
+        success: true,
+        metrics
+      };
+    } catch (error: unknown) {
+      const errorMessage = extractErrorMessage(error);
+      logger.error('Failed to get performance metrics', {
+        userUid,
+        exchange,
+        error: errorMessage
+      });
+
+      return {
+        success: false,
+        error: errorMessage
       };
     }
   }
