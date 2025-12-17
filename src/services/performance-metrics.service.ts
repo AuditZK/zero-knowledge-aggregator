@@ -142,6 +142,8 @@ export class PerformanceMetricsService {
 
     for (const snapshot of snapshots) {
       const dateKey = new Date(snapshot.timestamp).toISOString().split('T')[0];
+      if (!dateKey) continue; // Skip invalid dates
+
       if (!byDate.has(dateKey)) {
         byDate.set(dateKey, []);
       }
@@ -155,13 +157,18 @@ export class PerformanceMetricsService {
     const sortedDates = Array.from(byDate.keys()).sort();
 
     for (const dateKey of sortedDates) {
-      const daySnapshots = byDate.get(dateKey)!.sort((a, b) =>
+      const daySnapshots = byDate.get(dateKey);
+      if (!daySnapshots || daySnapshots.length === 0) continue;
+
+      daySnapshots.sort((a, b) =>
         new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
       );
 
       // Open = first snapshot, Close = last snapshot
       const openSnap = daySnapshots[0];
       const closeSnap = daySnapshots[daySnapshots.length - 1];
+
+      if (!openSnap || !closeSnap) continue;
 
       // Extract metrics from breakdown
       const equities = daySnapshots.map(s => s.totalEquity);
@@ -214,6 +221,10 @@ export class PerformanceMetricsService {
    * Compute all performance metrics from daily data
    */
   private computeMetrics(dailyData: DailyDataPoint[]): PerformanceMetrics {
+    if (dailyData.length === 0) {
+      throw new Error('Cannot compute metrics from empty daily data');
+    }
+
     // Extract daily returns (skip first day which has 0 return)
     const dailyReturns = dailyData.slice(1).map(d => d.dailyReturnPct);
 
@@ -267,6 +278,9 @@ export class PerformanceMetricsService {
     const avgWin = gains.length > 0 ? totalGains / gains.length : 0;
     const avgLoss = losses.length > 0 ? totalLosses / losses.length : 0;
 
+    const firstDay = dailyData[0];
+    const lastDay = dailyData[dailyData.length - 1];
+
     return {
       sharpeRatio,
       sortinoRatio,
@@ -280,8 +294,8 @@ export class PerformanceMetricsService {
       profitFactor,
       avgWin,
       avgLoss,
-      periodStart: dailyData[0].date,
-      periodEnd: dailyData[dailyData.length - 1].date,
+      periodStart: firstDay.date,
+      periodEnd: lastDay.date,
       dataPoints: dailyData.length
     };
   }
@@ -306,7 +320,10 @@ export class PerformanceMetricsService {
   private calculateMaxDrawdown(dailyData: DailyDataPoint[]): number {
     if (dailyData.length === 0) return 0;
 
-    let peak = Math.max(dailyData[0].openEquity, dailyData[0].highEquity);
+    const firstDay = dailyData[0];
+    if (!firstDay) return 0;
+
+    let peak = Math.max(firstDay.openEquity, firstDay.highEquity);
     let maxDrawdown = 0;
 
     for (const day of dailyData) {
@@ -352,8 +369,13 @@ export class PerformanceMetricsService {
       return { maxDrawdownDuration: 0, currentDrawdown: 0 };
     }
 
-    let peak = dailyData[0].closeEquity;
-    let peakDate = dailyData[0].date;
+    const firstDay = dailyData[0];
+    if (!firstDay) {
+      return { maxDrawdownDuration: 0, currentDrawdown: 0 };
+    }
+
+    let peak = firstDay.closeEquity;
+    let peakDate = firstDay.date;
     let maxDrawdownDuration = 0;
     let currentDrawdownStart: Date | null = null;
 
@@ -381,6 +403,10 @@ export class PerformanceMetricsService {
 
     // Check if we're still in a drawdown at the end
     const lastDay = dailyData[dailyData.length - 1];
+    if (!lastDay) {
+      return { maxDrawdownDuration, currentDrawdown: 0 };
+    }
+
     const currentDrawdown = peak > 0
       ? ((peak - lastDay.closeEquity) / peak) * 100
       : 0;
