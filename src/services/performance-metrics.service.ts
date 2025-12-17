@@ -281,6 +281,10 @@ export class PerformanceMetricsService {
     const firstDay = dailyData[0];
     const lastDay = dailyData[dailyData.length - 1];
 
+    if (!firstDay || !lastDay) {
+      throw new Error('Invalid daily data: missing first or last day');
+    }
+
     return {
       sharpeRatio,
       sortinoRatio,
