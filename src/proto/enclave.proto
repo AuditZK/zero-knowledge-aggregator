@@ -17,6 +17,9 @@ service EnclaveService {
   // Create a user with exchange connection (auto-generates UID)
   rpc CreateUserConnection(CreateUserConnectionRequest) returns (CreateUserConnectionResponse);
 
+  // Get performance metrics (Sharpe, volatility, drawdown, etc.)
+  rpc GetPerformanceMetrics(PerformanceMetricsRequest) returns (PerformanceMetricsResponse);
+
   // Health check for the enclave
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
@@ -154,4 +157,44 @@ message HealthCheckResponse {
   bool enclave = 2;
   string version = 3;
   double uptime = 4;
+}
+
+// Request for performance metrics
+message PerformanceMetricsRequest {
+  string user_uid = 1;
+  string exchange = 2; // Optional - filter by exchange
+  int64 start_date = 3; // Unix timestamp (milliseconds), optional
+  int64 end_date = 4;   // Unix timestamp (milliseconds), optional
+}
+
+// Response with performance metrics
+message PerformanceMetricsResponse {
+  // Risk-adjusted returns
+  double sharpe_ratio = 1;
+  double sortino_ratio = 2;
+  double calmar_ratio = 3;
+
+  // Volatility metrics
+  double volatility = 4; // Annualized
+  double downside_deviation = 5;
+
+  // Drawdown metrics
+  double max_drawdown = 6; // Percentage
+  int32 max_drawdown_duration = 7; // Days
+  double current_drawdown = 8;
+
+  // Win/Loss metrics
+  double win_rate = 9; // Percentage
+  double profit_factor = 10;
+  double avg_win = 11;
+  double avg_loss = 12;
+
+  // Period info
+  int64 period_start = 13; // Unix timestamp
+  int64 period_end = 14;   // Unix timestamp
+  int32 data_points = 15;
+
+  // Error handling
+  bool success = 16;
+  string error = 17;
 }

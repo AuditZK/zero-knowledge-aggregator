@@ -58,6 +58,7 @@ export class EnclaveServer {
       ProcessSyncJob: this.processSyncJob.bind(this),
       GetAggregatedMetrics: this.getAggregatedMetrics.bind(this),
       GetSnapshotTimeSeries: this.getSnapshotTimeSeries.bind(this),
+      GetPerformanceMetrics: this.getPerformanceMetrics.bind(this),
       CreateUserConnection: this.createUserConnection.bind(this),
       HealthCheck: this.healthCheck.bind(this)
     });
@@ -398,6 +399,105 @@ export class EnclaveServer {
       const errorStack = error instanceof Error ? error.stack : undefined;
 
       logger.error('CreateUserConnection failed', {
+        error: errorMessage,
+        stack: errorStack
+      });
+
+      callback({
+        code: grpc.status.INTERNAL,
+        message: errorMessage
+      }, null);
+    }
+  }
+
+  /**
+   * Handle GetPerformanceMetrics RPC
+   *
+   * SECURITY: Returns only statistical metrics (Sharpe, volatility, drawdown)
+   * NO individual trade data is included
+   */
+  private async getPerformanceMetrics(
+    call: grpc.ServerUnaryCall<any, any>,
+    callback: grpc.sendUnaryData<any>
+  ): Promise<void> {
+    try {
+      const rawRequest = call.request;
+
+      // Normalize gRPC defaults: convert empty strings and 0 to undefined
+      const request = {
+        user_uid: rawRequest.user_uid,
+        exchange: rawRequest.exchange === '' ? undefined : rawRequest.exchange,
+        start_date: rawRequest.start_date === 0 ? undefined : rawRequest.start_date,
+        end_date: rawRequest.end_date === 0 ? undefined : rawRequest.end_date
+      };
+
+      logger.info('Getting performance metrics', {
+        user_uid: request.user_uid,
+        exchange: request.exchange,
+        start_date: request.start_date,
+        end_date: request.end_date
+      });
+
+      // Get performance metrics from enclave worker
+      const result = await this.enclaveWorker.getPerformanceMetrics(
+        request.user_uid,
+        request.exchange,
+        request.start_date ? new Date(request.start_date) : undefined,
+        request.end_date ? new Date(request.end_date) : undefined
+      );
+
+      if (!result.success) {
+        callback(null, {
+          success: false,
+          error: result.error || 'Failed to calculate metrics',
+          sharpe_ratio: 0,
+          sortino_ratio: 0,
+          calmar_ratio: 0,
+          volatility: 0,
+          downside_deviation: 0,
+          max_drawdown: 0,
+          max_drawdown_duration: 0,
+          current_drawdown: 0,
+          win_rate: 0,
+          profit_factor: 0,
+          avg_win: 0,
+          avg_loss: 0,
+          period_start: 0,
+          period_end: 0,
+          data_points: 0
+        });
+        return;
+      }
+
+      const metrics = result.metrics!;
+
+      // Convert to gRPC format
+      const response = {
+        success: true,
+        sharpe_ratio: metrics.sharpeRatio || 0,
+        sortino_ratio: metrics.sortinoRatio || 0,
+        calmar_ratio: metrics.calmarRatio || 0,
+        volatility: metrics.volatility || 0,
+        downside_deviation: metrics.downsideDeviation || 0,
+        max_drawdown: metrics.maxDrawdown || 0,
+        max_drawdown_duration: metrics.maxDrawdownDuration || 0,
+        current_drawdown: metrics.currentDrawdown || 0,
+        win_rate: metrics.winRate || 0,
+        profit_factor: metrics.profitFactor || 0,
+        avg_win: metrics.avgWin || 0,
+        avg_loss: metrics.avgLoss || 0,
+        period_start: metrics.periodStart.getTime(),
+        period_end: metrics.periodEnd.getTime(),
+        data_points: metrics.dataPoints,
+        error: ''
+      };
+
+      callback(null, response);
+    } catch (error: unknown) {
+      const errorMessage = extractErrorMessage(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+
+      logger.error('GetPerformanceMetrics failed', {
         error: errorMessage,
         stack: errorStack
       });
