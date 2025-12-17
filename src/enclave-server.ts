@@ -423,12 +423,13 @@ export class EnclaveServer {
     try {
       const rawRequest = call.request;
 
-      // Normalize gRPC defaults: convert empty strings and 0 to undefined
+      // Normalize gRPC defaults: convert empty strings and 0/"0" to undefined
+      // Note: gRPC with longs:String returns "0" as string, not number
       const request = {
         user_uid: rawRequest.user_uid,
         exchange: rawRequest.exchange === '' ? undefined : rawRequest.exchange,
-        start_date: rawRequest.start_date === 0 ? undefined : rawRequest.start_date,
-        end_date: rawRequest.end_date === 0 ? undefined : rawRequest.end_date
+        start_date: !rawRequest.start_date || rawRequest.start_date == 0 ? undefined : rawRequest.start_date,
+        end_date: !rawRequest.end_date || rawRequest.end_date == 0 ? undefined : rawRequest.end_date
       };
 
       logger.info('Getting performance metrics', {
