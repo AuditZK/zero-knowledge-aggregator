@@ -548,9 +548,20 @@ export class EnclaveServer {
    */
   async start(): Promise<void> {
     return new Promise((resolve, reject) => {
-      // SECURITY: TLS is MANDATORY for enclave security
-      // No fallback to insecure mode allowed
-      const credentials = this.createServerCredentials();
+      // SECURITY: TLS is MANDATORY for enclave security in production
+      // Allow insecure mode ONLY for development/testing via GRPC_INSECURE env var
+      const useInsecure = process.env.GRPC_INSECURE === 'true';
+
+      let credentials: grpc.ServerCredentials;
+
+      if (useInsecure) {
+        logger.warn('Starting gRPC server in INSECURE mode (development only)', {
+          reason: 'GRPC_INSECURE=true'
+        });
+        credentials = grpc.ServerCredentials.createInsecure();
+      } else {
+        credentials = this.createServerCredentials();
+      }
 
       this.server.bindAsync(
         `0.0.0.0:${this.port}`,
@@ -566,7 +577,8 @@ export class EnclaveServer {
           }
 
           this.server.start();
-          logger.info(`Enclave gRPC server started on port ${port} with TLS`);
+          const tlsStatus = useInsecure ? 'INSECURE (dev only)' : 'with TLS';
+          logger.info(`Enclave gRPC server started on port ${port} ${tlsStatus}`);
 
           // Log enclave attestation info if available
           this.logAttestationInfo();
