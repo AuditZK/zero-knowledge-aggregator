@@ -1,4 +1,7 @@
+// Load .env FIRST before anything else
+import './env';
 import 'reflect-metadata';
+
 import { setupEnclaveContainer, verifyEnclaveIsolation } from './config/enclave-container';
 import { startEnclaveServer } from './enclave-server';
 import { getPrismaClient } from './config/prisma';
