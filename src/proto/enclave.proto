@@ -22,6 +22,12 @@ service EnclaveService {
 
   // Health check for the enclave
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+
+  // Generate a cryptographically signed report
+  rpc GenerateSignedReport(ReportRequest) returns (SignedReportResponse);
+
+  // Verify a report signature
+  rpc VerifyReportSignature(VerifySignatureRequest) returns (VerifySignatureResponse);
 }
 
 // Request to process a synchronization job
@@ -197,4 +203,121 @@ message PerformanceMetricsResponse {
   // Error handling
   bool success = 16;
   string error = 17;
+}
+
+// ============================================================================
+// Signed Report Messages
+// ============================================================================
+
+// Request to generate a cryptographically signed report
+message ReportRequest {
+  string user_uid = 1;
+  string start_date = 2;        // YYYY-MM-DD (optional, defaults to first snapshot)
+  string end_date = 3;          // YYYY-MM-DD (optional, defaults to last snapshot)
+  string benchmark = 4;         // "SPY" | "BTC-USD" | "" (optional)
+  bool include_risk_metrics = 5;
+  bool include_drawdown = 6;
+  string report_name = 7;
+  string base_currency = 8;     // USD, EUR, etc. (default: USD)
+}
+
+// Response with cryptographically signed report
+message SignedReportResponse {
+  bool success = 1;
+  string error = 2;
+
+  // Report metadata
+  string report_id = 10;
+  string user_uid = 11;
+  string report_name = 12;
+  string generated_at = 13;     // ISO 8601
+  string period_start = 14;     // ISO 8601
+  string period_end = 15;       // ISO 8601
+  string base_currency = 16;
+  string benchmark = 17;
+  int32 data_points = 18;
+
+  // Core metrics
+  double total_return = 20;
+  double annualized_return = 21;
+  double volatility = 22;
+  double sharpe_ratio = 23;
+  double sortino_ratio = 24;
+  double max_drawdown = 25;
+  double calmar_ratio = 26;
+
+  // Risk metrics (optional, if include_risk_metrics=true)
+  double var_95 = 30;
+  double var_99 = 31;
+  double expected_shortfall = 32;
+  double skewness = 33;
+  double kurtosis = 34;
+
+  // Benchmark metrics (optional, if benchmark provided)
+  double alpha = 40;
+  double beta = 41;
+  double information_ratio = 42;
+  double tracking_error = 43;
+  double correlation = 44;
+
+  // Drawdown data (optional, if include_drawdown=true)
+  int32 max_drawdown_duration = 50;
+  double current_drawdown = 51;
+  repeated DrawdownPeriodData drawdown_periods = 52;
+
+  // Chart data
+  repeated DailyReturnData daily_returns = 60;
+  repeated MonthlyReturnData monthly_returns = 61;
+
+  // Cryptographic signature
+  string signature = 70;          // Base64 encoded ECDSA signature
+  string public_key = 71;         // Base64 encoded public key for verification
+  string signature_algorithm = 72; // e.g., "ECDSA-P256-SHA256"
+  string report_hash = 73;        // SHA-256 hash of report data
+
+  // Enclave attestation
+  string enclave_version = 80;
+  string attestation_id = 81;     // SEV-SNP attestation ID (if available)
+  string enclave_mode = 82;       // "production" | "development"
+}
+
+// Daily return data for charts
+message DailyReturnData {
+  string date = 1;              // YYYY-MM-DD
+  double net_return = 2;        // Daily return in %
+  double benchmark_return = 3;  // Benchmark return in %
+  double outperformance = 4;    // Portfolio - Benchmark
+  double cumulative_return = 5; // Cumulative return factor
+  double nav = 6;               // Net Asset Value
+}
+
+// Monthly return data for tables
+message MonthlyReturnData {
+  string date = 1;              // YYYY-MM
+  double net_return = 2;        // Monthly return in %
+  double benchmark_return = 3;  // Benchmark return in %
+  double outperformance = 4;    // Portfolio - Benchmark
+  double aum = 5;               // Assets Under Management
+}
+
+// Drawdown period data
+message DrawdownPeriodData {
+  string start_date = 1;
+  string end_date = 2;
+  double depth = 3;             // Max drawdown during period (%)
+  int32 duration = 4;           // Days
+  bool recovered = 5;
+}
+
+// Request to verify a report signature
+message VerifySignatureRequest {
+  string report_hash = 1;
+  string signature = 2;
+  string public_key = 3;
+}
+
+// Response from signature verification
+message VerifySignatureResponse {
+  bool valid = 1;
+  string error = 2;
 }
