@@ -5,6 +5,9 @@ import fs from 'fs';
 import { container } from 'tsyringe';
 import { EnclaveWorker } from './enclave-worker';
 import { getLogger, extractErrorMessage } from './utils/secure-enclave-logger';
+import { ReportGeneratorService } from './services/report-generator.service';
+import { ReportSigningService } from './services/report-signing.service';
+import { ReportRequest, VerifySignatureRequest } from './types/report.types';
 
 const logger = getLogger('EnclaveServer');
 import {
@@ -44,25 +47,34 @@ const enclaveProto = grpc.loadPackageDefinition(packageDefinition) as any;
 export class EnclaveServer {
   private server: grpc.Server;
   private enclaveWorker: EnclaveWorker;
+  private reportGeneratorService: ReportGeneratorService;
+  private reportSigningService: ReportSigningService;
   private port: number;
 
   constructor() {
     this.server = new grpc.Server();
     this.port = parseInt(process.env.ENCLAVE_PORT || '50051');
 
-    // Get EnclaveWorker instance from DI container
+    // Get service instances from DI container
     this.enclaveWorker = container.resolve(EnclaveWorker);
+    this.reportGeneratorService = container.resolve(ReportGeneratorService);
+    this.reportSigningService = container.resolve(ReportSigningService);
 
     // Add service implementation
     this.server.addService(enclaveProto.enclave.EnclaveService.service, {
       ProcessSyncJob: this.processSyncJob.bind(this),
       GetAggregatedMetrics: this.getAggregatedMetrics.bind(this),
       GetSnapshotTimeSeries: this.getSnapshotTimeSeries.bind(this),
+      GetPerformanceMetrics: this.getPerformanceMetrics.bind(this),
       CreateUserConnection: this.createUserConnection.bind(this),
-      HealthCheck: this.healthCheck.bind(this)
+      HealthCheck: this.healthCheck.bind(this),
+      GenerateSignedReport: this.generateSignedReport.bind(this),
+      VerifyReportSignature: this.verifyReportSignature.bind(this)
     });
 
-    logger.info('Enclave gRPC server initialized');
+    logger.info('Enclave gRPC server initialized', {
+      publicKeyFingerprint: this.reportSigningService.getPublicKeyFingerprint()
+    });
   }
 
   /**
@@ -410,6 +422,106 @@ export class EnclaveServer {
   }
 
   /**
+   * Handle GetPerformanceMetrics RPC
+   *
+   * SECURITY: Returns only statistical metrics (Sharpe, volatility, drawdown)
+   * NO individual trade data is included
+   */
+  private async getPerformanceMetrics(
+    call: grpc.ServerUnaryCall<any, any>,
+    callback: grpc.sendUnaryData<any>
+  ): Promise<void> {
+    try {
+      const rawRequest = call.request;
+
+      // Normalize gRPC defaults: convert empty strings and 0/"0" to undefined
+      // Note: gRPC with longs:String returns "0" as string, not number
+      const request = {
+        user_uid: rawRequest.user_uid,
+        exchange: rawRequest.exchange === '' ? undefined : rawRequest.exchange,
+        start_date: !rawRequest.start_date || rawRequest.start_date == 0 ? undefined : rawRequest.start_date,
+        end_date: !rawRequest.end_date || rawRequest.end_date == 0 ? undefined : rawRequest.end_date
+      };
+
+      logger.info('Getting performance metrics', {
+        user_uid: request.user_uid,
+        exchange: request.exchange,
+        start_date: request.start_date,
+        end_date: request.end_date
+      });
+
+      // Get performance metrics from enclave worker
+      const result = await this.enclaveWorker.getPerformanceMetrics(
+        request.user_uid,
+        request.exchange,
+        request.start_date ? new Date(request.start_date) : undefined,
+        request.end_date ? new Date(request.end_date) : undefined
+      );
+
+      if (!result.success) {
+        callback(null, {
+          success: false,
+          error: result.error || 'Failed to calculate metrics',
+          sharpe_ratio: 0,
+          sortino_ratio: 0,
+          calmar_ratio: 0,
+          volatility: 0,
+          downside_deviation: 0,
+          max_drawdown: 0,
+          max_drawdown_duration: 0,
+          current_drawdown: 0,
+          win_rate: 0,
+          profit_factor: 0,
+          avg_win: 0,
+          avg_loss: 0,
+          period_start: 0,
+          period_end: 0,
+          data_points: 0
+        });
+        return;
+      }
+
+      const metrics = result.metrics!;
+
+      // Convert to gRPC format
+      const response = {
+        success: true,
+        sharpe_ratio: metrics.sharpeRatio || 0,
+        sortino_ratio: metrics.sortinoRatio || 0,
+        calmar_ratio: metrics.calmarRatio || 0,
+        volatility: metrics.volatility || 0,
+        downside_deviation: metrics.downsideDeviation || 0,
+        max_drawdown: metrics.maxDrawdown || 0,
+        max_drawdown_duration: metrics.maxDrawdownDuration || 0,
+        current_drawdown: metrics.currentDrawdown || 0,
+        win_rate: metrics.winRate || 0,
+        profit_factor: metrics.profitFactor || 0,
+        avg_win: metrics.avgWin || 0,
+        avg_loss: metrics.avgLoss || 0,
+        period_start: metrics.periodStart.getTime(),
+        period_end: metrics.periodEnd.getTime(),
+        data_points: metrics.dataPoints,
+        error: ''
+      };
+
+      callback(null, response);
+    } catch (error: unknown) {
+      const errorMessage = extractErrorMessage(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+
+      logger.error('GetPerformanceMetrics failed', {
+        error: errorMessage,
+        stack: errorStack
+      });
+
+      callback({
+        code: grpc.status.INTERNAL,
+        message: errorMessage
+      }, null);
+    }
+  }
+
+  /**
    * Handle HealthCheck RPC
    */
   private async healthCheck(
@@ -444,13 +556,236 @@ export class EnclaveServer {
   }
 
   /**
+   * Handle GenerateSignedReport RPC
+   *
+   * SECURITY: Generates a cryptographically signed report with all metrics
+   * calculated inside the enclave. The signature proves the report originated
+   * from this enclave instance.
+   */
+  private async generateSignedReport(
+    call: grpc.ServerUnaryCall<any, any>,
+    callback: grpc.sendUnaryData<any>
+  ): Promise<void> {
+    try {
+      const rawRequest = call.request;
+
+      // Normalize gRPC defaults: convert empty strings to undefined
+      const request: ReportRequest = {
+        userUid: rawRequest.user_uid,
+        startDate: rawRequest.start_date === '' ? undefined : rawRequest.start_date,
+        endDate: rawRequest.end_date === '' ? undefined : rawRequest.end_date,
+        benchmark: rawRequest.benchmark === '' ? undefined : rawRequest.benchmark as 'SPY' | 'BTC-USD',
+        includeRiskMetrics: rawRequest.include_risk_metrics || false,
+        includeDrawdown: rawRequest.include_drawdown || false,
+        reportName: rawRequest.report_name === '' ? undefined : rawRequest.report_name,
+        baseCurrency: rawRequest.base_currency === '' ? 'USD' : rawRequest.base_currency
+      };
+
+      // Validate user_uid is present
+      if (!request.userUid) {
+        callback({
+          code: grpc.status.INVALID_ARGUMENT,
+          message: 'user_uid is required'
+        }, null);
+        return;
+      }
+
+      logger.info('Generating signed report', {
+        user_uid: request.userUid,
+        benchmark: request.benchmark,
+        include_risk_metrics: request.includeRiskMetrics,
+        include_drawdown: request.includeDrawdown
+      });
+
+      // Generate the signed report
+      const result = await this.reportGeneratorService.generateSignedReport(request);
+
+      if (!result.success || !result.signedReport) {
+        callback(null, {
+          success: false,
+          error: result.error || 'Failed to generate report'
+        });
+        return;
+      }
+
+      const signedReport = result.signedReport;
+      const report = signedReport.report;
+      const metrics = report.metrics;
+
+      // Convert to gRPC format
+      const response = {
+        success: true,
+        error: '',
+
+        // Report metadata
+        report_id: report.reportId,
+        user_uid: report.userUid,
+        report_name: report.reportName,
+        generated_at: report.generatedAt.toISOString(),
+        period_start: report.periodStart.toISOString(),
+        period_end: report.periodEnd.toISOString(),
+        base_currency: report.baseCurrency,
+        benchmark: report.benchmark || '',
+        data_points: report.dataPoints,
+
+        // Core metrics
+        total_return: metrics.totalReturn,
+        annualized_return: metrics.annualizedReturn,
+        volatility: metrics.volatility,
+        sharpe_ratio: metrics.sharpeRatio,
+        sortino_ratio: metrics.sortinoRatio,
+        max_drawdown: metrics.maxDrawdown,
+        calmar_ratio: metrics.calmarRatio,
+
+        // Risk metrics (optional)
+        var_95: metrics.riskMetrics?.var95 || 0,
+        var_99: metrics.riskMetrics?.var99 || 0,
+        expected_shortfall: metrics.riskMetrics?.expectedShortfall || 0,
+        skewness: metrics.riskMetrics?.skewness || 0,
+        kurtosis: metrics.riskMetrics?.kurtosis || 0,
+
+        // Benchmark metrics (optional)
+        alpha: metrics.benchmarkMetrics?.alpha || 0,
+        beta: metrics.benchmarkMetrics?.beta || 0,
+        information_ratio: metrics.benchmarkMetrics?.informationRatio || 0,
+        tracking_error: metrics.benchmarkMetrics?.trackingError || 0,
+        correlation: metrics.benchmarkMetrics?.correlation || 0,
+
+        // Drawdown data (optional)
+        max_drawdown_duration: metrics.drawdownData?.maxDrawdownDuration || 0,
+        current_drawdown: metrics.drawdownData?.currentDrawdown || 0,
+        drawdown_periods: metrics.drawdownData?.drawdownPeriods?.map(p => ({
+          start_date: p.startDate,
+          end_date: p.endDate,
+          depth: p.depth,
+          duration: p.duration,
+          recovered: p.recovered
+        })) || [],
+
+        // Chart data
+        daily_returns: report.dailyReturns.map(d => ({
+          date: d.date,
+          net_return: d.netReturn,
+          benchmark_return: d.benchmarkReturn,
+          outperformance: d.outperformance,
+          cumulative_return: d.cumulativeReturn,
+          nav: d.nav
+        })),
+        monthly_returns: report.monthlyReturns.map(m => ({
+          date: m.date,
+          net_return: m.netReturn,
+          benchmark_return: m.benchmarkReturn,
+          outperformance: m.outperformance,
+          aum: m.aum
+        })),
+
+        // Cryptographic signature
+        signature: signedReport.signature,
+        public_key: signedReport.publicKey,
+        signature_algorithm: signedReport.signatureAlgorithm,
+        report_hash: signedReport.reportHash,
+
+        // Enclave attestation
+        enclave_version: signedReport.enclaveVersion,
+        attestation_id: signedReport.attestationId || '',
+        enclave_mode: signedReport.enclaveMode
+      };
+
+      logger.info('Signed report generated successfully', {
+        report_id: report.reportId,
+        data_points: report.dataPoints,
+        signature_length: signedReport.signature.length
+      });
+
+      callback(null, response);
+    } catch (error: unknown) {
+      const errorMessage = extractErrorMessage(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+
+      logger.error('GenerateSignedReport failed', {
+        error: errorMessage,
+        stack: errorStack
+      });
+
+      callback({
+        code: grpc.status.INTERNAL,
+        message: errorMessage
+      }, null);
+    }
+  }
+
+  /**
+   * Handle VerifyReportSignature RPC
+   *
+   * Verifies that a report signature is valid using the provided public key.
+   * This allows external parties to verify report authenticity.
+   */
+  private async verifyReportSignature(
+    call: grpc.ServerUnaryCall<any, any>,
+    callback: grpc.sendUnaryData<any>
+  ): Promise<void> {
+    try {
+      const rawRequest = call.request;
+
+      const request: VerifySignatureRequest = {
+        reportHash: rawRequest.report_hash,
+        signature: rawRequest.signature,
+        publicKey: rawRequest.public_key
+      };
+
+      // Validate required fields
+      if (!request.reportHash || !request.signature || !request.publicKey) {
+        callback({
+          code: grpc.status.INVALID_ARGUMENT,
+          message: 'report_hash, signature, and public_key are all required'
+        }, null);
+        return;
+      }
+
+      logger.info('Verifying report signature', {
+        hash_prefix: request.reportHash.substring(0, 16) + '...'
+      });
+
+      // Verify the signature
+      const result = this.reportSigningService.verifySignature(request);
+
+      callback(null, {
+        valid: result.valid,
+        error: result.error || ''
+      });
+    } catch (error: unknown) {
+      const errorMessage = extractErrorMessage(error);
+
+      logger.error('VerifyReportSignature failed', {
+        error: errorMessage
+      });
+
+      callback({
+        code: grpc.status.INTERNAL,
+        message: errorMessage
+      }, null);
+    }
+  }
+
+  /**
    * Start the gRPC server
    */
   async start(): Promise<void> {
     return new Promise((resolve, reject) => {
-      // SECURITY: TLS is MANDATORY for enclave security
-      // No fallback to insecure mode allowed
-      const credentials = this.createServerCredentials();
+      // SECURITY: TLS is MANDATORY for enclave security in production
+      // Allow insecure mode ONLY for development/testing via GRPC_INSECURE env var
+      const useInsecure = process.env.GRPC_INSECURE === 'true';
+
+      let credentials: grpc.ServerCredentials;
+
+      if (useInsecure) {
+        logger.warn('Starting gRPC server in INSECURE mode (development only)', {
+          reason: 'GRPC_INSECURE=true'
+        });
+        credentials = grpc.ServerCredentials.createInsecure();
+      } else {
+        credentials = this.createServerCredentials();
+      }
 
       this.server.bindAsync(
         `0.0.0.0:${this.port}`,
@@ -466,7 +801,8 @@ export class EnclaveServer {
           }
 
           this.server.start();
-          logger.info(`Enclave gRPC server started on port ${port} with TLS`);
+          const tlsStatus = useInsecure ? 'INSECURE (dev only)' : 'with TLS';
+          logger.info(`Enclave gRPC server started on port ${port} ${tlsStatus}`);
 
           // Log enclave attestation info if available
           this.logAttestationInfo();
