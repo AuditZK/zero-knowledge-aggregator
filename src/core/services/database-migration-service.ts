@@ -4,6 +4,71 @@ import { getLogger } from '../../utils/secure-enclave-logger';
 
 const logger = getLogger('DatabaseMigrationService');
 
+/**
+ * SECURITY: Whitelist of allowed table names to prevent SQL injection
+ * Only these tables can be modified by migrations
+ */
+const ALLOWED_TABLES = new Set([
+  'migrations',
+  'users',
+  'exchange_connections',
+  'sync_statuses',
+  'trades',
+  'positions',
+  'hourly_returns',
+  'snapshot_data',
+  'data_encryption_keys',
+  'sync_rate_limit_logs',
+]);
+
+/**
+ * SECURITY: Whitelist of allowed column names to prevent SQL injection
+ */
+const ALLOWED_COLUMNS = new Set([
+  'id', 'user_uid', 'userUid', 'exchange', 'label', 'symbol', 'side', 'type',
+  'quantity', 'price', 'fees', 'fee_asset', 'feeAsset', 'timestamp', 'status',
+  'matched_quantity', 'matchedQuantity', 'exchange_trade_id', 'exchangeTradeId',
+  'created_at', 'createdAt', 'updated_at', 'updatedAt', 'credentials_hash',
+  'encrypted_api_key', 'encrypted_api_secret', 'encrypted_passphrase',
+  'is_active', 'isActive', 'last_sync_time', 'total_trades', 'error_message',
+  'is_historical_complete', 'size', 'entry_price', 'entryPrice', 'mark_price',
+  'markPrice', 'pnl', 'realized_pnl', 'realizedPnl', 'unrealized_pnl',
+  'unrealizedPnl', 'percentage', 'net_profit', 'netProfit', 'closed_at',
+  'hour', 'volume', 'total_quantity', 'totalQuantity', 'trades', 'return_pct',
+  'returnPct', 'return_usd', 'returnUsd', 'total_fees', 'totalFees', 'matches',
+  'name', 'applied_at',
+]);
+
+/**
+ * Validates that a table name is in the allowed whitelist
+ * @throws Error if table name is not allowed
+ */
+function validateTableName(tableName: string): void {
+  // Allow _old suffix for migration tables
+  const baseTableName = tableName.replace('_old', '');
+  if (!ALLOWED_TABLES.has(baseTableName)) {
+    throw new Error(`SECURITY: Table name "${tableName}" is not in the allowed whitelist`);
+  }
+  // Additional safety: ensure no SQL injection characters
+  if (!/^[a-z_]+$/.test(tableName)) {
+    throw new Error(`SECURITY: Invalid table name format "${tableName}"`);
+  }
+}
+
+/**
+ * Validates that a column name is in the allowed whitelist
+ * @throws Error if column name is not allowed
+ */
+function validateColumnName(columnName: string): void {
+  if (!ALLOWED_COLUMNS.has(columnName)) {
+    throw new Error(`SECURITY: Column name "${columnName}" is not in the allowed whitelist`);
+  }
+  // Additional safety: ensure no SQL injection characters
+  if (!/^[a-zA-Z_]+$/.test(columnName)) {
+    throw new Error(`SECURITY: Invalid column name format "${columnName}"`);
+  }
+}
+
 @injectable()
 export class DatabaseMigrationService {
   constructor(@inject('PrismaClient') private readonly prisma: PrismaClient) {}
@@ -70,7 +135,18 @@ export class DatabaseMigrationService {
   }
 
   private async addColumn(tableName: string, columnName: string, columnType: string): Promise<void> {
-    try { await this.prisma.$executeRawUnsafe(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`); }
+    // SECURITY: Validate inputs against whitelist before SQL execution
+    validateTableName(tableName);
+    validateColumnName(columnName);
+
+    // Validate column type format (only alphanumeric, spaces, parentheses, and common SQL keywords)
+    if (!/^[A-Z0-9() ,'_]+$/i.test(columnType)) {
+      throw new Error(`SECURITY: Invalid column type format "${columnType}"`);
+    }
+
+    try {
+      await this.prisma.$executeRawUnsafe(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`);
+    }
     catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       if (!errorMessage.includes('duplicate column name')) {
@@ -81,12 +157,19 @@ export class DatabaseMigrationService {
   }
 
   async columnExists(tableName: string, columnName: string): Promise<boolean> {
-    const rows = await this.prisma.$queryRawUnsafe<any[]>(`PRAGMA table_info(${tableName})`);
+    // SECURITY: Validate table and column names against whitelist
+    validateTableName(tableName);
+    validateColumnName(columnName);
+
+    const rows = await this.prisma.$queryRawUnsafe<{name: string}[]>(`PRAGMA table_info(${tableName})`);
     return rows.some(row => row.name === columnName);
   }
 
-  async getTableInfo(tableName: string): Promise<any[]> {
-    return await this.prisma.$queryRawUnsafe<any[]>(`PRAGMA table_info(${tableName})`);
+  async getTableInfo(tableName: string): Promise<{name: string; type: string}[]> {
+    // SECURITY: Validate table name against whitelist
+    validateTableName(tableName);
+
+    return await this.prisma.$queryRawUnsafe<{name: string; type: string}[]>(`PRAGMA table_info(${tableName})`);
   }
 
   private async fixColumnNaming(): Promise<void> {
@@ -107,6 +190,7 @@ export class DatabaseMigrationService {
   }
 
   private async recreatePositionsTable(): Promise<void> {
+    // SECURITY: All table names are hardcoded and validated
     await this.runSequentialQueries([
       'ALTER TABLE positions RENAME TO positions_old;',
       `CREATE TABLE positions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_uid TEXT NOT NULL, exchange TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT CHECK (side IN ('long', 'short')) NOT NULL, size DECIMAL(20,8) NOT NULL, entry_price DECIMAL(20,8), mark_price DECIMAL(20,8), pnl DECIMAL(20,8) DEFAULT 0, realized_pnl DECIMAL(20,8), unrealized_pnl DECIMAL(20,8), percentage DECIMAL(10,4), net_profit DECIMAL(20,8), status TEXT CHECK (status IN ('open', 'closed')) DEFAULT 'open', timestamp TIMESTAMP NOT NULL, closed_at TIMESTAMP DEFAULT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_uid) REFERENCES users(uid) ON DELETE CASCADE);`,
@@ -115,20 +199,22 @@ export class DatabaseMigrationService {
       'CREATE INDEX IF NOT EXISTS idx_positions_user_exchange ON positions(user_uid, exchange);',
       'CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);',
       'DROP TABLE positions_old;'
-    ]);
+    ], 'positions');
   }
 
   private async recreateHourlyReturnsTable(): Promise<void> {
+    // SECURITY: All table names are hardcoded and validated
     await this.runSequentialQueries([
       'ALTER TABLE hourly_returns RENAME TO hourly_returns_old;',
       `CREATE TABLE hourly_returns (id INTEGER PRIMARY KEY AUTOINCREMENT, user_uid TEXT NOT NULL, hour TEXT NOT NULL, exchange TEXT NOT NULL, volume DECIMAL(20,8) DEFAULT 0, total_quantity DECIMAL(20,8) DEFAULT 0, trades INTEGER DEFAULT 0, return_pct DECIMAL(10,6) DEFAULT 0, return_usd DECIMAL(20,8) DEFAULT 0, total_fees DECIMAL(20,8) DEFAULT 0, realized_pnl DECIMAL(20,8) DEFAULT 0, unrealized_pnl DECIMAL(20,8) DEFAULT 0, matches INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_uid) REFERENCES users(uid) ON DELETE CASCADE, UNIQUE(user_uid, hour, exchange));`,
       `INSERT INTO hourly_returns (user_uid, hour, exchange, volume, total_quantity, trades, return_pct, return_usd, total_fees, realized_pnl, unrealized_pnl, matches, created_at, updated_at) SELECT userUid, hour, exchange, volume, totalQuantity, trades, returnPct, returnUsd, totalFees, realizedPnL, unrealizedPnL, matches, created_at, updated_at FROM hourly_returns_old;`,
       'CREATE INDEX IF NOT EXISTS idx_hourly_returns_user_hour ON hourly_returns(user_uid, hour);',
       'DROP TABLE hourly_returns_old;'
-    ]);
+    ], 'hourly_returns');
   }
 
   private async recreateTradesTable(): Promise<void> {
+    // SECURITY: All table names are hardcoded and validated
     await this.runSequentialQueries([
       'ALTER TABLE trades RENAME TO trades_old;',
       `CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, user_uid TEXT NOT NULL, exchange TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT CHECK (side IN ('buy', 'sell')) NOT NULL, type TEXT CHECK (type IN ('buy', 'sell')) NOT NULL, quantity DECIMAL(20,8) NOT NULL, price DECIMAL(20,8) NOT NULL, fees DECIMAL(20,8) DEFAULT 0, fee_asset TEXT, timestamp TIMESTAMP NOT NULL, status TEXT CHECK (status IN ('pending', 'matched', 'partially_matched')) DEFAULT 'pending', matched_quantity DECIMAL(20,8) DEFAULT 0, exchange_trade_id TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_uid) REFERENCES users(uid) ON DELETE CASCADE);`,
@@ -136,13 +222,27 @@ export class DatabaseMigrationService {
       'CREATE INDEX IF NOT EXISTS idx_trades_user_timestamp ON trades(user_uid, timestamp);',
       'CREATE INDEX IF NOT EXISTS idx_trades_user_exchange ON trades(user_uid, exchange);',
       'DROP TABLE trades_old;'
-    ]);
+    ], 'trades');
   }
 
-  private async runSequentialQueries(queries: string[]): Promise<void> {
+  /**
+   * Execute a list of pre-validated SQL queries sequentially
+   * SECURITY: All queries come from hardcoded templates. The tableName is validated.
+   */
+  private async runSequentialQueries(queries: string[], tableName?: string): Promise<void> {
+    // SECURITY: Validate table name if provided
+    if (tableName) {
+      validateTableName(tableName);
+    }
+
     for (const query of queries) {
-      try { await this.prisma.$executeRawUnsafe(query); }
-      catch (err) { logger.error(`Error executing query: ${query}`); throw err; }
+      try {
+        await this.prisma.$executeRawUnsafe(query);
+      }
+      catch (err) {
+        logger.error(`Error executing query: ${query}`);
+        throw err;
+      }
     }
   }
 
@@ -150,8 +250,10 @@ export class DatabaseMigrationService {
     const migrationName = 'fix_id_columns_to_autoincrement';
     try {
       if (await this.isMigrationApplied(migrationName)) {return;}
+      // SECURITY: All table names are hardcoded from whitelist
       const tables = ['exchange_connections', 'sync_statuses', 'trades', 'positions', 'hourly_returns'];
       for (const tableName of tables) {
+        validateTableName(tableName); // Extra validation
         const needsFix = await this.checkIdColumnType(tableName);
         if (needsFix) {await this.recreateTableWithAutoIncrementId(tableName);}
       }
@@ -163,12 +265,18 @@ export class DatabaseMigrationService {
   }
 
   private async checkIdColumnType(tableName: string): Promise<boolean> {
-    const columns = await this.prisma.$queryRawUnsafe<any[]>(`PRAGMA table_info(${tableName})`);
+    // SECURITY: Validate table name against whitelist
+    validateTableName(tableName);
+
+    const columns = await this.prisma.$queryRawUnsafe<{name: string; type: string}[]>(`PRAGMA table_info(${tableName})`);
     const idColumn = columns.find(col => col.name === 'id');
     return !idColumn || idColumn.type === 'TEXT';
   }
 
   private async recreateTableWithAutoIncrementId(tableName: string): Promise<void> {
+    // SECURITY: Validate table name against whitelist
+    validateTableName(tableName);
+
     const queries = [
       `ALTER TABLE ${tableName} RENAME TO ${tableName}_old;`,
       this.getAutoIncrementTableSQL(tableName),
@@ -176,10 +284,11 @@ export class DatabaseMigrationService {
       ...this.getIndexesSQL(tableName),
       `DROP TABLE ${tableName}_old;`
     ];
-    await this.runSequentialQueries(queries);
+    await this.runSequentialQueries(queries, tableName);
   }
 
   private getAutoIncrementTableSQL(tableName: string): string {
+    // SECURITY: Only returns SQL for whitelisted tables
     const tables: Record<string, string> = {
       'exchange_connections': `CREATE TABLE exchange_connections (id INTEGER PRIMARY KEY AUTOINCREMENT, user_uid TEXT NOT NULL, exchange TEXT NOT NULL, label TEXT, encrypted_api_key TEXT NOT NULL, encrypted_api_secret TEXT NOT NULL, encrypted_passphrase TEXT, credentials_hash TEXT, is_active BOOLEAN DEFAULT TRUE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_uid) REFERENCES users(uid) ON DELETE CASCADE, UNIQUE(user_uid, exchange, label))`,
       'sync_statuses': `CREATE TABLE sync_statuses (id INTEGER PRIMARY KEY AUTOINCREMENT, user_uid TEXT NOT NULL, exchange TEXT NOT NULL, last_sync_time TIMESTAMP, status TEXT CHECK (status IN ('pending', 'running', 'completed', 'error')) DEFAULT 'pending', total_trades INTEGER DEFAULT 0, error_message TEXT, is_historical_complete BOOLEAN DEFAULT FALSE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_uid) REFERENCES users(uid) ON DELETE CASCADE, UNIQUE(user_uid, exchange))`,
@@ -187,11 +296,12 @@ export class DatabaseMigrationService {
       'positions': `CREATE TABLE positions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_uid TEXT NOT NULL, exchange TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT CHECK (side IN ('long', 'short')) NOT NULL, size DECIMAL(20,8) NOT NULL, entry_price DECIMAL(20,8), mark_price DECIMAL(20,8), pnl DECIMAL(20,8) DEFAULT 0, realized_pnl DECIMAL(20,8), unrealized_pnl DECIMAL(20,8), percentage DECIMAL(10,4), net_profit DECIMAL(20,8), status TEXT CHECK (status IN ('open', 'closed')) DEFAULT 'open', timestamp TIMESTAMP NOT NULL, closed_at TIMESTAMP DEFAULT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_uid) REFERENCES users(uid) ON DELETE CASCADE)`,
       'hourly_returns': `CREATE TABLE hourly_returns (id INTEGER PRIMARY KEY AUTOINCREMENT, user_uid TEXT NOT NULL, hour TEXT NOT NULL, exchange TEXT NOT NULL, volume DECIMAL(20,8) DEFAULT 0, total_quantity DECIMAL(20,8) DEFAULT 0, trades INTEGER DEFAULT 0, return_pct DECIMAL(10,6) DEFAULT 0, return_usd DECIMAL(20,8) DEFAULT 0, total_fees DECIMAL(20,8) DEFAULT 0, realized_pnl DECIMAL(20,8) DEFAULT 0, unrealized_pnl DECIMAL(20,8) DEFAULT 0, matches INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_uid) REFERENCES users(uid) ON DELETE CASCADE, UNIQUE(user_uid, hour, exchange))`
     };
-    if (!tables[tableName]) {throw new Error(`Unknown table: ${tableName}`);}
+    if (!tables[tableName]) {throw new Error(`SECURITY: Unknown table "${tableName}" - not in whitelist`);}
     return tables[tableName];
   }
 
   private getDataCopySQL(tableName: string): string {
+    // SECURITY: Only returns SQL for whitelisted tables
     const copies: Record<string, string> = {
       'exchange_connections': `INSERT INTO exchange_connections (user_uid, exchange, label, encrypted_api_key, encrypted_api_secret, encrypted_passphrase, credentials_hash, is_active, created_at, updated_at) SELECT user_uid, exchange, label, encrypted_api_key, encrypted_api_secret, encrypted_passphrase, credentials_hash, is_active, created_at, updated_at FROM exchange_connections_old`,
       'sync_statuses': `INSERT INTO sync_statuses (user_uid, exchange, last_sync_time, status, total_trades, error_message, is_historical_complete, created_at, updated_at) SELECT user_uid, exchange, last_sync_time, status, total_trades, error_message, is_historical_complete, created_at, updated_at FROM sync_statuses_old`,
@@ -199,11 +309,12 @@ export class DatabaseMigrationService {
       'positions': `INSERT INTO positions (user_uid, exchange, symbol, side, size, entry_price, mark_price, pnl, realized_pnl, unrealized_pnl, percentage, net_profit, status, timestamp, closed_at, created_at, updated_at) SELECT user_uid, exchange, symbol, side, size, entry_price, mark_price, pnl, realized_pnl, unrealized_pnl, percentage, net_profit, status, timestamp, closed_at, created_at, updated_at FROM positions_old`,
       'hourly_returns': `INSERT INTO hourly_returns (user_uid, hour, exchange, volume, total_quantity, trades, return_pct, return_usd, total_fees, realized_pnl, unrealized_pnl, matches, created_at, updated_at) SELECT user_uid, hour, exchange, volume, total_quantity, trades, return_pct, return_usd, total_fees, realized_pnl, unrealized_pnl, matches, created_at, updated_at FROM hourly_returns_old`
     };
-    if (!copies[tableName]) {throw new Error(`Unknown table: ${tableName}`);}
+    if (!copies[tableName]) {throw new Error(`SECURITY: Unknown table "${tableName}" - not in whitelist`);}
     return copies[tableName];
   }
 
   private getIndexesSQL(tableName: string): string[] {
+    // SECURITY: Only returns SQL for whitelisted tables
     const indexes: Record<string, string[]> = {
       'exchange_connections': [],
       'sync_statuses': ['CREATE INDEX IF NOT EXISTS idx_sync_statuses_user_exchange ON sync_statuses(user_uid, exchange);'],

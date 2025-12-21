@@ -140,4 +140,97 @@ export class MemoryProtectionService {
     }
     return recs;
   }
+
+  /**
+   * SECURITY: Securely wipe an object containing sensitive strings
+   * Replaces all string properties with empty strings
+   */
+  static wipeObject<T extends Record<string, unknown>>(obj: T): void {
+    if (!obj || typeof obj !== 'object') {return;}
+
+    for (const key of Object.keys(obj)) {
+      const value = obj[key];
+      if (typeof value === 'string' && value.length > 0) {
+        // Overwrite string in memory (best effort - JS strings are immutable)
+        (obj as Record<string, unknown>)[key] = '';
+      }
+    }
+    logger.debug('[MEMORY_PROTECTION] Wiped object properties');
+  }
+}
+
+/**
+ * SECURITY: Wrapper for credentials that auto-cleans on dispose
+ *
+ * Usage:
+ * ```
+ * const secureCredentials = new SecureCredentials(credentials);
+ * try {
+ *   await useCredentials(secureCredentials.get());
+ * } finally {
+ *   secureCredentials.dispose();
+ * }
+ * ```
+ *
+ * Or with the helper:
+ * ```
+ * await SecureCredentials.use(credentials, async (creds) => {
+ *   await useCredentials(creds);
+ * });
+ * ```
+ */
+export class SecureCredentials<T extends Record<string, unknown>> {
+  private credentials: T | null;
+  private disposed = false;
+
+  constructor(credentials: T) {
+    this.credentials = credentials;
+  }
+
+  /**
+   * Get the credentials (throws if already disposed)
+   */
+  get(): T {
+    if (this.disposed || !this.credentials) {
+      throw new Error('SECURITY: Credentials have been disposed');
+    }
+    return this.credentials;
+  }
+
+  /**
+   * Securely dispose of credentials by wiping them from memory
+   */
+  dispose(): void {
+    if (this.disposed || !this.credentials) {return;}
+
+    MemoryProtectionService.wipeObject(this.credentials);
+    this.credentials = null;
+    this.disposed = true;
+  }
+
+  /**
+   * Check if credentials are still available
+   */
+  isDisposed(): boolean {
+    return this.disposed;
+  }
+
+  /**
+   * SECURITY: Helper method for safe credential usage with automatic cleanup
+   *
+   * @param credentials - The credentials to use
+   * @param operation - Async operation that uses the credentials
+   * @returns Result of the operation
+   */
+  static async use<T extends Record<string, unknown>, R>(
+    credentials: T,
+    operation: (creds: T) => Promise<R>
+  ): Promise<R> {
+    const secure = new SecureCredentials(credentials);
+    try {
+      return await operation(secure.get());
+    } finally {
+      secure.dispose();
+    }
+  }
 }

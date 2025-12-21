@@ -36,8 +36,41 @@ const startEnclave = async () => {
     setupEnclaveContainer();
     logger.info('[ENCLAVE] DI container initialized');
 
-    // Verify enclave isolation with AMD SEV-SNP attestation
-    logger.info('[ENCLAVE] Performing hardware attestation...');
+    // Generate TLS credentials BEFORE attestation (so fingerprint can be included)
+    logger.info('[ENCLAVE] Generating TLS credentials in enclave memory...');
+    const { container: diContainer } = await import('tsyringe');
+    const { TlsKeyGeneratorService } = await import('./services/tls-key-generator.service');
+    const tlsService = diContainer.resolve(TlsKeyGeneratorService);
+    const tlsCredentials = await tlsService.getCredentials();
+
+    // Convert fingerprint to Buffer for attestation binding
+    const fingerprintHex = tlsCredentials.fingerprint.replace(/:/g, '');
+    const fingerprintBuffer = Buffer.from(fingerprintHex, 'hex');
+
+    // Bind TLS fingerprint to attestation service
+    const { SevSnpAttestationService } = await import('./services/sev-snp-attestation.service');
+    const attestationService = diContainer.resolve(SevSnpAttestationService);
+    attestationService.setTlsFingerprint(fingerprintBuffer);
+
+    logger.info('[ENCLAVE] TLS fingerprint bound to attestation', {
+      fingerprint: tlsCredentials.fingerprint.slice(0, 23) + '...',
+      security: 'Attestation will include TLS cert hash - MITM protection'
+    });
+
+    // Initialize E2E encryption service
+    logger.info('[ENCLAVE] Initializing E2E encryption (application-level)...');
+    const { E2EEncryptionService } = await import('./services/e2e-encryption.service');
+    const e2eService = diContainer.resolve(E2EEncryptionService);
+    await e2eService.initialize();
+
+    logger.info('[ENCLAVE] E2E encryption initialized', {
+      algorithm: 'ECIES (ECDH + AES-256-GCM)',
+      publicKeyFingerprint: e2eService.getPublicKeyFingerprint().slice(0, 16) + '...',
+      security: 'Double encryption layer - TLS + E2E protects against VPS MITM'
+    });
+
+    // Verify enclave isolation with AMD SEV-SNP attestation (now includes TLS fingerprint)
+    logger.info('[ENCLAVE] Performing hardware attestation with TLS binding...');
     const attestationResult = await verifyEnclaveIsolation();
 
     if (!attestationResult.verified) {
@@ -89,15 +122,11 @@ const startEnclave = async () => {
     const enclaveServer = await startEnclaveServer();
 
     // Start REST server (auditable user credential submission)
-    logger.info('[ENCLAVE] Starting REST server for auditable credential submission...');
+    logger.info('[ENCLAVE] Starting HTTPS REST server...');
     const { startRestServer } = await import('./rest-server');
     const restPort = parseInt(process.env.REST_PORT || '3050', 10);
-    const restServer = startRestServer(restPort);
-    logger.info('[ENCLAVE] REST server started', {
-      port: restPort,
-      endpoint: 'POST /api/v1/credentials/connect',
-      protocol: 'JSON over HTTP (auditable)'
-    });
+    const restServer = await startRestServer(restPort);
+    // Logs are handled by startRestServer
 
     // Start HTTP log server (for SSE streaming enclave logs)
     logger.info('[ENCLAVE] Starting HTTP log server for SSE streaming...');
@@ -109,9 +138,6 @@ const startEnclave = async () => {
     registerSSEBroadcast((log) => httpLogServer.broadcastLog(log));
 
     logger.info('[ENCLAVE] HTTP log server started with SSE streaming');
-
-    // Import DI container for services
-    const { container: diContainer } = await import('tsyringe');
 
     // Start Prometheus metrics server (production monitoring)
     if (process.env.METRICS_ENABLED === 'true') {
