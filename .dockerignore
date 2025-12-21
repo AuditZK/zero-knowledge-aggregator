@@ -28,15 +28,10 @@ coverage/
 .nyc_output/
 
 # Documentation
-README.md
-DEVELOPMENT.md
-SECURITY.md
-ATTESTATION.md
 *.md
-!package.json
-AUDIT_REPORT.txt
-AUDIT_PROMPT.md
-DEPLOY_ENCLAVE_VPS.md
+!README.md
+!SECURITY.md
+docs/
 
 # Deployment files
 deployment/
