@@ -53,7 +53,17 @@ temp/
 *.crt
 credentials/
 
+# Certificate metadata (never commit)
+certs/*.srl
+certs/*.csr
+certs/*.ext
+
+# CI/CD with sensitive info (never commit)
+cloudbuild.yaml
+
+# Client helper with hardcoded IPs (never commit)
+client-encrypt-helper.js
+
 # Development & testing
 api-tests.http
-scripts/
 AUDIT_PROMPT.md
