@@ -9,8 +9,15 @@
 set -e
 
 PROJECT_ID=$(gcloud config get-value project)
-VM_NAME="tee-milan-01"
-ZONE="us-central1-a"
+VM_NAME="${VM_NAME:-<YOUR_VM_NAME>}"
+ZONE="${ZONE:-<YOUR_ZONE>}"
+
+# Validate configuration
+if [[ "$VM_NAME" == "<YOUR_VM_NAME>" || "$ZONE" == "<YOUR_ZONE>" ]]; then
+    echo "ERROR: Please set VM_NAME and ZONE environment variables"
+    echo "Example: VM_NAME=my-enclave-vm ZONE=us-central1-a ./setup-gcp-secrets.sh"
+    exit 1
+fi
 
 echo "=== GCP Secret Manager Setup for Enclave ==="
 echo "Project: $PROJECT_ID"
@@ -73,7 +80,7 @@ echo "  - enclave-jwt-secret"
 echo ""
 echo "Next steps on the VM ($VM_NAME):"
 echo "  1. Copy the systemd service:"
-echo "     sudo cp deployment/enclave.service /etc/systemd/system/"
+echo "     sudo cp deployment/systemd/enclave.service /etc/systemd/system/"
 echo "     sudo systemctl daemon-reload"
 echo "     sudo systemctl enable enclave"
 echo ""
