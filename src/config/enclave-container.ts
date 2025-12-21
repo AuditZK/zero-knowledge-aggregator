@@ -26,6 +26,8 @@ import { KeyDerivationService } from '../services/key-derivation.service';
 import { KeyManagementService } from '../services/key-management.service';
 import { ReportSigningService } from '../services/report-signing.service';
 import { ReportGeneratorService } from '../services/report-generator.service';
+import { TlsKeyGeneratorService } from '../services/tls-key-generator.service';
+import { E2EEncryptionService } from '../services/e2e-encryption.service';
 
 // External Services (handle credentials)
 import { IbkrFlexService } from '../external/ibkr-flex-service';
@@ -91,6 +93,10 @@ export function setupEnclaveContainer(): void {
   // Register Report Services (signed reports with ECDSA)
   container.registerSingleton(ReportSigningService);
   container.registerSingleton(ReportGeneratorService);
+
+  // Register TLS and E2E Encryption Services
+  container.registerSingleton(TlsKeyGeneratorService);
+  container.registerSingleton(E2EEncryptionService);
 
   // Register Enclave Worker
   container.registerSingleton(EnclaveWorker);

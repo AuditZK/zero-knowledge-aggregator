@@ -37,7 +37,23 @@ export class SevSnpAttestationService {
   private readonly AZURE_IMDS_ENDPOINT = 'http://169.254.169.254/metadata/attested/document';
   private readonly GCP_METADATA_ENDPOINT = 'http://metadata.google.internal/computeMetadata/v1/instance/confidential-computing/attestation-report';
 
-  async getAttestationReport(_reportData?: Buffer): Promise<AttestationResult> {
+  private tlsFingerprint: Buffer | null = null;
+
+  /**
+   * Set TLS certificate fingerprint to bind to attestation
+   * This binds the TLS certificate to the attestation report via reportData field
+   */
+  setTlsFingerprint(fingerprint: Buffer): void {
+    if (fingerprint.length !== 32) {
+      throw new Error('TLS fingerprint must be 32 bytes (SHA-256)');
+    }
+    this.tlsFingerprint = fingerprint;
+    logger.info('TLS fingerprint bound to attestation service', {
+      fingerprintHex: fingerprint.toString('hex').slice(0, 16) + '...'
+    });
+  }
+
+  async getAttestationReport(): Promise<AttestationResult> {
     if (!this.isSevSnpAvailable()) {
       logger.warn('AMD SEV-SNP not available on this system');
       return this.createFailureResult('SEV-SNP hardware not available');
@@ -58,12 +74,20 @@ export class SevSnpAttestationService {
         logger.warn('AMD SEV-SNP attestation completed but VCEK verification failed - measurement is from hardware but not cryptographically verified');
       }
 
+      // reportData now contains TLS fingerprint (if set) - it's SIGNED by AMD
+      // Extract first 32 bytes (SHA-256 fingerprint) from 64-byte reportData
+      let reportDataHex = report.reportData ?? null;
+      if (reportDataHex && this.tlsFingerprint) {
+        // Return only the fingerprint part (first 64 hex chars = 32 bytes)
+        reportDataHex = reportDataHex.slice(0, 64);
+      }
+
       return {
         verified: vcekVerified, // Only true if VCEK verification succeeded
         enclave: true,
         sevSnpEnabled: true,
         measurement: report.measurement,
-        reportData: report.reportData ?? null,
+        reportData: reportDataHex,
         platformVersion: report.platformVersion?.toString() || null,
         vcekVerified
       };
@@ -139,8 +163,19 @@ export class SevSnpAttestationService {
     await execAsync(`mkdir -p ${tmpDir} ${certsDir}`);
 
     try {
-      // Generate attestation report with random request data
-      await execAsync(`/usr/bin/snpguest report ${reportPath} ${requestPath} --random`);
+      // Generate attestation report with TLS fingerprint as request data (for TLS binding)
+      // If TLS fingerprint is set, use it; otherwise use random data
+      if (this.tlsFingerprint) {
+        // Write TLS fingerprint (32 bytes) padded to 64 bytes as request data
+        const paddedFingerprint = Buffer.alloc(64, 0);
+        this.tlsFingerprint.copy(paddedFingerprint, 0);
+        fs.writeFileSync(requestPath, paddedFingerprint);
+        await execAsync(`/usr/bin/snpguest report ${reportPath} ${requestPath}`);
+        logger.info('Generated attestation with TLS fingerprint binding');
+      } else {
+        await execAsync(`/usr/bin/snpguest report ${reportPath} ${requestPath} --random`);
+        logger.warn('Generated attestation with random data (no TLS binding)');
+      }
 
       // Fetch VCEK certificate from AMD KDS using the report
       // snpguest 0.6.0 syntax: fetch vcek <encoding> <processor_model> <certs_dir> <att_report_path>

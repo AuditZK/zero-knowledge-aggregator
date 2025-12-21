@@ -52,6 +52,7 @@ Look for:
 
 ### 6. Test REST Server from Inside Container
 ```bash
+# NOTE: HTTP is OK for localhost tests (same container, no network exposure)
 docker exec enclave_service curl -X POST http://localhost:3050/api/v1/credentials/connect \
   -H "Content-Type: application/json" \
   -d '{"user_uid": "test", "exchange": "binance", "api_key": "test", "api_secret": "test"}'
@@ -61,6 +62,7 @@ Expected: JSON response (even if validation fails, proves server is running)
 
 ### 7. Test from VPS Host
 ```bash
+# NOTE: HTTP OK for localhost, but external clients MUST use HTTPS
 curl -X POST http://localhost:3050/api/v1/credentials/connect \
   -H "Content-Type: application/json" \
   -d '{"user_uid": "test", "exchange": "binance", "api_key": "test", "api_secret": "test"}'
@@ -99,12 +101,18 @@ gcloud compute instances add-tags tee-milan-01 --tags=enclave-vm --zone=europe-w
 7. Click "Create"
 
 ### 9. Test from External Network
+
+**IMPORTANT**: External clients MUST use HTTPS (TLS terminates in enclave)
+
 ```bash
-# From your local machine (Windows PowerShell)
-curl -X POST http://34.77.144.221:3050/api/v1/credentials/connect `
-  -H "Content-Type: application/json" `
-  -d '{"user_uid": "test", "exchange": "binance", "api_key": "test", "api_secret": "test"}'
+# Test HTTPS connection (may need -k for self-signed cert in testing)
+curl -X POST https://34.77.144.221:3050/api/v1/credentials/connect \
+  -H "Content-Type: application/json" \
+  -d '{"user_uid": "test", "exchange": "binance", "api_key": "test", "api_secret": "test"}' \
+  -k
 ```
+
+**For production**: Verify attestation first (see [ZERO_KNOWLEDGE_GUIDE.md](ZERO_KNOWLEDGE_GUIDE.md))
 
 ### 10. Verify Environment Variables
 
@@ -163,4 +171,4 @@ cd /root/zero-knowledge-aggregator && \
 ✅ Container running: `docker ps` shows enclave_service with ports 3050, 50051, 50052, 9092
 ✅ REST server logs: `[ENCLAVE] REST server started { port: 3050 }`
 ✅ Firewall rule: Google Cloud firewall allows TCP port 3050
-✅ External access: `curl http://34.77.144.221:3050/health` returns `{"status":"ok","service":"enclave-rest"}`
+✅ External access: `curl -k https://34.77.144.221:3050/health` returns `{"status":"ok","service":"enclave-rest","tls":true}`

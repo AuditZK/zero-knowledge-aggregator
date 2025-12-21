@@ -3,6 +3,7 @@ import { PrismaClient, ExchangeConnection as PrismaExchangeConnection, Prisma } 
 import { ExchangeConnection, ExchangeCredentials } from '../../types';
 import { EncryptionService } from '../../services/encryption-service';
 import { getLogger } from '../../utils/secure-enclave-logger';
+import { MemoryProtectionService } from '../../services/memory-protection.service';
 
 const logger = getLogger('ExchangeConnectionRepository');
 
@@ -110,6 +111,46 @@ export class ExchangeConnectionRepository {
     }
   }
 
+  /**
+   * SECURITY: Get credentials and use them with automatic memory cleanup
+   *
+   * This method ensures credentials are wiped from memory after use,
+   * preventing potential memory dump attacks in non-SEV-SNP environments.
+   *
+   * @param connectionId - The connection ID to fetch credentials for
+   * @param operation - Async operation that uses the credentials
+   * @returns Result of the operation, or null if credentials not found
+   *
+   * @example
+   * ```
+   * const result = await repo.useDecryptedCredentials(connId, async (creds) => {
+   *   const exchange = new ccxt[creds.exchange]({
+   *     apiKey: creds.apiKey,
+   *     secret: creds.apiSecret,
+   *   });
+   *   return await exchange.fetchBalance();
+   * });
+   * ```
+   */
+  async useDecryptedCredentials<R>(
+    connectionId: string,
+    operation: (credentials: ExchangeCredentials) => Promise<R>
+  ): Promise<R | null> {
+    const credentials = await this.getDecryptedCredentials(connectionId);
+
+    if (!credentials) {
+      return null;
+    }
+
+    try {
+      return await operation(credentials);
+    } finally {
+      // SECURITY: Wipe credentials from memory after use
+      MemoryProtectionService.wipeObject(credentials as unknown as Record<string, unknown>);
+      logger.debug('Credentials wiped after use');
+    }
+  }
+
   async updateConnection(id: string, updates: Partial<ExchangeCredentials>): Promise<ExchangeConnection> {
     const updateData: Prisma.ExchangeConnectionUpdateInput = {};
 
@@ -137,13 +178,24 @@ export class ExchangeConnectionRepository {
       });
 
       if (connection) {
-        const apiKey = updates.apiKey || await this.encryptionService.decrypt(connection.encryptedApiKey);
-        const apiSecret = updates.apiSecret || await this.encryptionService.decrypt(connection.encryptedApiSecret);
-        const passphrase = updates.passphrase !== undefined
-          ? updates.passphrase
-          : (connection.encryptedPassphrase ? await this.encryptionService.decrypt(connection.encryptedPassphrase) : undefined);
+        // SECURITY: Track decrypted credentials for cleanup
+        let apiKey: string | undefined;
+        let apiSecret: string | undefined;
+        let passphrase: string | undefined;
 
-        updateData.credentialsHash = this.encryptionService.createCredentialsHash(apiKey, apiSecret, passphrase);
+        try {
+          apiKey = updates.apiKey || await this.encryptionService.decrypt(connection.encryptedApiKey);
+          apiSecret = updates.apiSecret || await this.encryptionService.decrypt(connection.encryptedApiSecret);
+          passphrase = updates.passphrase !== undefined
+            ? updates.passphrase
+            : (connection.encryptedPassphrase ? await this.encryptionService.decrypt(connection.encryptedPassphrase) : undefined);
+
+          updateData.credentialsHash = this.encryptionService.createCredentialsHash(apiKey, apiSecret, passphrase);
+        } finally {
+          // SECURITY: Wipe decrypted credentials from memory
+          const credsToWipe = { apiKey, apiSecret, passphrase };
+          MemoryProtectionService.wipeObject(credsToWipe);
+        }
       }
     }
 
