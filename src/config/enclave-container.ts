@@ -18,11 +18,14 @@ import { PrismaClient } from '@prisma/client';
 import { EncryptionService } from '../services/encryption-service';
 import { TradeSyncService } from '../services/trade-sync-service';
 import { EquitySnapshotAggregator } from '../services/equity-snapshot-aggregator';
+import { PerformanceMetricsService } from '../services/performance-metrics.service';
 import { SyncRateLimiterService } from '../services/sync-rate-limiter.service';
 import { DailySyncSchedulerService } from '../services/daily-sync-scheduler.service';
 import { SevSnpAttestationService } from '../services/sev-snp-attestation.service';
 import { KeyDerivationService } from '../services/key-derivation.service';
 import { KeyManagementService } from '../services/key-management.service';
+import { ReportSigningService } from '../services/report-signing.service';
+import { ReportGeneratorService } from '../services/report-generator.service';
 
 // External Services (handle credentials)
 import { IbkrFlexService } from '../external/ibkr-flex-service';
@@ -80,16 +83,21 @@ export function setupEnclaveContainer(): void {
   container.registerSingleton(KeyManagementService);
   container.registerSingleton(EncryptionService);
   container.registerSingleton(EquitySnapshotAggregator);
+  container.registerSingleton(PerformanceMetricsService);
   container.registerSingleton(TradeSyncService);
   container.registerSingleton(SyncRateLimiterService);
   container.registerSingleton(DailySyncSchedulerService);
+
+  // Register Report Services (signed reports with ECDSA)
+  container.registerSingleton(ReportSigningService);
+  container.registerSingleton(ReportGeneratorService);
 
   // Register Enclave Worker
   container.registerSingleton(EnclaveWorker);
 
   logger.info('Dependency injection container configured', {
     access_level: 'SENSITIVE',
-    capabilities: ['snapshots', 'credentials', 'encryption'],
+    capabilities: ['snapshots', 'credentials', 'encryption', 'signed_reports'],
     security: 'trades_memory_only'
   });
 }
