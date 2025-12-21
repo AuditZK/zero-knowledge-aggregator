@@ -74,7 +74,7 @@ cd zero-knowledge-aggregator
 
 ```bash
 # Fetch attestation report
-curl -k https://136.119.67.234:3050/api/v1/attestation | jq . > attestation.json
+curl -k https://<YOUR_ENCLAVE_IP>:3050/api/v1/attestation | jq . > attestation.json
 
 # Inspect attestation
 cat attestation.json
@@ -103,7 +103,7 @@ jq -r '.e2eEncryption.publicKey' attestation.json > enclave_e2e_public.pem
 
 ```bash
 # Extract TLS certificate during handshake
-echo | openssl s_client -connect 136.119.67.234:3050 -showcerts 2>/dev/null | \
+echo | openssl s_client -connect <YOUR_ENCLAVE_IP>:3050 -showcerts 2>/dev/null | \
   openssl x509 -outform PEM > tls_cert.pem
 
 # Calculate SHA-256 of certificate
@@ -147,7 +147,7 @@ node client-encrypt-helper.js \
 
 ```bash
 # Copy the JSON output from step 4 and send it
-curl -X POST https://136.119.67.234:3050/api/v1/credentials/connect \
+curl -X POST https://<YOUR_ENCLAVE_IP>:3050/api/v1/credentials/connect \
   -H "Content-Type: application/json" \
   -d '{
     "user_uid": "YOUR_SERVICE_UID",
@@ -178,7 +178,7 @@ If you trust the TLS layer and have verified attestation:
 # 1. Verify attestation (Steps 1-3 from Method 1)
 
 # 2. Send credentials in plaintext (protected by TLS)
-curl -X POST https://136.119.67.234:3050/api/v1/credentials/connect \
+curl -X POST https://<YOUR_ENCLAVE_IP>:3050/api/v1/credentials/connect \
   -H "Content-Type: application/json" \
   -d '{
     "user_uid": "YOUR_SERVICE_UID",
@@ -262,7 +262,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import os
 
-ENCLAVE_URL = "https://136.119.67.234:3050"
+ENCLAVE_URL = "https://<YOUR_ENCLAVE_IP>:3050"
 
 # 1. Fetch attestation
 resp = requests.get(f"{ENCLAVE_URL}/api/v1/attestation", verify=False)
@@ -334,7 +334,7 @@ print(resp.json())
 
 ```bash
 # Check if enclave is reachable
-curl -k https://136.119.67.234:3050/health
+curl -k https://<YOUR_ENCLAVE_IP>:3050/health
 ```
 
 ### TLS certificate mismatch
