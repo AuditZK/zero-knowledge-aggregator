@@ -35,6 +35,11 @@ ATTESTATION.md
 *.md
 !package.json
 AUDIT_REPORT.txt
+AUDIT_PROMPT.md
+DEPLOY_ENCLAVE_VPS.md
+
+# Deployment files
+deployment/
 
 # CI/CD
 .github/
