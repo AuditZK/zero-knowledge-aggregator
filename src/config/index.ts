@@ -3,7 +3,7 @@ import { ServerConfig, DatabaseConfig } from '../types';
 import { getLogger } from '../utils/secure-enclave-logger';
 
 // Override system env vars with .env file values (local config takes priority)
-dotenv.config({ override: true });
+dotenv.config();
 
 const logger = getLogger('Config');
 
