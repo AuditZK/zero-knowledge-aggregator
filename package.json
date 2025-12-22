@@ -49,6 +49,7 @@
     "ccxt": "^4.5.22",
     "cors": "^2.8.5",
     "express": "^5.1.0",
+    "express-rate-limit": "^8.2.1",
     "helmet": "^8.0.0",
     "node-cron": "^4.2.1",
     "reflect-metadata": "^0.2.2",
