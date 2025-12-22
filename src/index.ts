@@ -77,16 +77,20 @@ const startEnclave = async () => {
       logger.warn('[ENCLAVE] WARNING: Attestation not verified');
       logger.warn(`[ENCLAVE] ${attestationResult.errorMessage}`);
 
-      if (process.env.NODE_ENV === 'production' && process.env.SKIP_ATTESTATION !== 'true') {
-        // Attestation failure in production is fatal unless explicitly skipped
-        logger.error('[ENCLAVE] ABORTING: Cannot run in production without attestation');
-        logger.error('[ENCLAVE] Set SKIP_ATTESTATION=true to bypass (not recommended)');
+      if (process.env.NODE_ENV === 'production') {
+        // Attestation failure in production is ALWAYS fatal - no bypass allowed (SOC 2 requirement)
+        logger.error('[ENCLAVE] FATAL: Cannot run in production without hardware attestation');
+        logger.error('[ENCLAVE] Hardware SEV-SNP attestation is mandatory for production deployment');
         process.exit(1);
       }
 
+      // Only allow bypass in development/test environments
       if (process.env.SKIP_ATTESTATION === 'true') {
-        logger.warn('[ENCLAVE] ⚠️  ATTESTATION BYPASSED - Running without hardware verification');
-        logger.warn('[ENCLAVE] This should ONLY be used for development/testing');
+        logger.warn('[ENCLAVE] ⚠️  ATTESTATION BYPASSED - Development/test mode only');
+        logger.warn('[ENCLAVE] This is NOT allowed in production (NODE_ENV=production)');
+      } else {
+        // Non-production without explicit bypass - warn but continue
+        logger.warn('[ENCLAVE] Running without attestation in non-production mode');
       }
     }
 

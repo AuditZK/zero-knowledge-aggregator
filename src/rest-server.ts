@@ -1,6 +1,7 @@
 import express from 'express';
 import * as https from 'https';
 import * as fs from 'fs';
+import rateLimit from 'express-rate-limit';
 import { container } from 'tsyringe';
 import { EnclaveWorker } from './enclave-worker';
 import { CreateUserConnectionRequestSchema } from './validation/grpc-schemas';
@@ -14,6 +15,32 @@ const app = express();
 
 // Middleware
 app.use(express.json());
+
+/**
+ * SOC 2 SECURITY: Rate limiting for credential submission endpoint
+ * Prevents brute-force attacks and credential stuffing
+ * - 5 requests per 15 minutes per IP
+ * - Strict limit because credential submission is security-sensitive
+ */
+const credentialsRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // 5 requests per window per IP
+  standardHeaders: true, // Return rate limit info in RateLimit-* headers
+  legacyHeaders: false, // Disable X-RateLimit-* headers
+  skipSuccessfulRequests: false, // Count all requests, not just failed ones
+  handler: (req, res) => {
+    logger.warn('[REST] Rate limit exceeded for credentials endpoint', {
+      ip: req.ip,
+      user_uid: req.body?.user_uid,
+      exchange: req.body?.exchange
+    });
+    res.status(429).json({
+      success: false,
+      error: 'Too many credential submission attempts. Please try again later.',
+      retryAfter: '15 minutes'
+    });
+  }
+});
 
 // Health check endpoint
 app.get('/health', (_req, res) => {
@@ -105,23 +132,15 @@ app.get('/api/v1/attestation', async (_req, res) => {
 
 /**
  * POST /api/v1/credentials/connect
- * Submit credentials to the enclave
+ * Submit E2E encrypted credentials to the enclave
  *
- * Supports TWO modes:
+ * SOC 2 SECURITY: Only E2E encrypted mode is supported (plaintext removed)
  *
- * 1. PLAINTEXT MODE (backward compatible, protected by TLS only):
+ * Request format:
  * {
  *   "user_uid": "...",
  *   "exchange": "binance",
- *   "api_key": "...",
- *   "api_secret": "...",
- *   "passphrase": "..." (optional)
- * }
- *
- * 2. E2E ENCRYPTED MODE (maximum security, protected by TLS + E2E):
- * {
- *   "user_uid": "...",
- *   "exchange": "binance",
+ *   "label": "My Account" (optional),
  *   "encrypted": {
  *     "ephemeralPublicKey": "-----BEGIN PUBLIC KEY-----...",
  *     "iv": "hex...",
@@ -130,48 +149,79 @@ app.get('/api/v1/attestation', async (_req, res) => {
  *   }
  * }
  *
- * E2E mode encrypts credentials client-side with enclave's public key,
- * making VPS MITM attacks impossible even if TLS is compromised.
+ * The encrypted.ciphertext should contain JSON: { api_key, api_secret, passphrase? }
+ * encrypted with the enclave's E2E public key from /api/v1/attestation
+ *
+ * This ensures VPS MITM attacks are impossible even if TLS is compromised.
  */
-app.post('/api/v1/credentials/connect', async (req, res) => {
+app.post('/api/v1/credentials/connect', credentialsRateLimiter, async (req, res) => {
   try {
-    let apiKey: string;
-    let apiSecret: string;
-    let passphrase: string | undefined;
-
-    // Check if request uses E2E encryption
-    if (req.body.encrypted) {
-      logger.info('[REST] Processing E2E encrypted credential submission', {
+    // SOC 2 SECURITY: Require E2E encryption - plaintext mode removed
+    if (!req.body.encrypted) {
+      logger.warn('[REST] Rejected plaintext credential submission attempt', {
         user_uid: req.body.user_uid,
         exchange: req.body.exchange,
-        security: 'E2E encrypted - VPS MITM impossible'
+        ip: req.ip
       });
 
-      // Decrypt credentials
-      const e2eService = container.resolve(E2EEncryptionService);
-      const decryptedJson = e2eService.decrypt(req.body.encrypted);
-      const decryptedData = JSON.parse(decryptedJson);
+      return res.status(400).json({
+        success: false,
+        error: 'E2E encryption required. Plaintext credentials are not accepted.',
+        hint: 'Fetch /api/v1/attestation to get the E2E public key, then encrypt credentials client-side before submission.'
+      });
+    }
 
-      apiKey = decryptedData.api_key;
-      apiSecret = decryptedData.api_secret;
-      passphrase = decryptedData.passphrase;
+    logger.info('[REST] Processing E2E encrypted credential submission', {
+      user_uid: req.body.user_uid,
+      exchange: req.body.exchange,
+      security: 'E2E encrypted - VPS MITM impossible'
+    });
 
-      logger.info('[REST] E2E decryption successful', {
+    // Decrypt credentials inside enclave
+    const e2eService = container.resolve(E2EEncryptionService);
+    let decryptedJson: string;
+    try {
+      decryptedJson = e2eService.decrypt(req.body.encrypted);
+    } catch (decryptError) {
+      logger.warn('[REST] E2E decryption failed - invalid encrypted payload', {
         user_uid: req.body.user_uid,
         exchange: req.body.exchange
       });
-    } else {
-      // Plaintext mode (backward compatible)
-      logger.warn('[REST] Processing PLAINTEXT credential submission', {
-        user_uid: req.body.user_uid,
-        exchange: req.body.exchange,
-        security: 'TLS only - vulnerable to VPS MITM if attestation not verified'
+      return res.status(400).json({
+        success: false,
+        error: 'Failed to decrypt credentials. Ensure you are using the correct E2E public key from /api/v1/attestation.'
       });
-
-      apiKey = req.body.api_key;
-      apiSecret = req.body.api_secret;
-      passphrase = req.body.passphrase;
     }
+
+    let decryptedData: { api_key: string; api_secret: string; passphrase?: string };
+    try {
+      decryptedData = JSON.parse(decryptedJson);
+    } catch {
+      logger.warn('[REST] E2E decrypted payload is not valid JSON', {
+        user_uid: req.body.user_uid,
+        exchange: req.body.exchange
+      });
+      return res.status(400).json({
+        success: false,
+        error: 'Decrypted payload is not valid JSON. Expected: { api_key, api_secret, passphrase? }'
+      });
+    }
+
+    const apiKey = decryptedData.api_key;
+    const apiSecret = decryptedData.api_secret;
+    const passphrase = decryptedData.passphrase;
+
+    if (!apiKey || !apiSecret) {
+      return res.status(400).json({
+        success: false,
+        error: 'Decrypted payload missing required fields: api_key and api_secret'
+      });
+    }
+
+    logger.info('[REST] E2E decryption successful', {
+      user_uid: req.body.user_uid,
+      exchange: req.body.exchange
+    });
 
     // Validate with existing schema
     const validation = CreateUserConnectionRequestSchema.safeParse({
