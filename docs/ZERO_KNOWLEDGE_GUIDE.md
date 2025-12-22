@@ -66,7 +66,7 @@ This guide is for users who want **absolute security** and complete transparency
 ### Step 1: Clone the enclave repository
 
 ```bash
-git clone https://github.com/Jimmy7892/zero-knowledge-aggregator.git
+git clone https://github.com/AuditZK/zero-knowledge-aggregator.git
 cd zero-knowledge-aggregator
 ```
 
@@ -359,7 +359,7 @@ curl -k https://<YOUR_ENCLAVE_IP>:3050/health
 - [AMD SEV-SNP Whitepaper](https://www.amd.com/content/dam/amd/en/documents/epyc-business-docs/white-papers/SEV-SNP-strengthening-vm-isolation-with-integrity-protection-and-more.pdf)
 - [ECIES Specification](https://en.wikipedia.org/wiki/Integrated_Encryption_Scheme)
 - [Track Record Security Overview](/tee-security)
-- [Enclave Source Code](https://github.com/Jimmy7892/zero-knowledge-aggregator)
+- [Enclave Source Code](https://github.com/AuditZK/zero-knowledge-aggregator)
 
 ---
 
