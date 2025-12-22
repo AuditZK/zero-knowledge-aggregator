@@ -120,7 +120,7 @@ export class E2EEncryptionService {
       // 4. Decrypt with AES-256-GCM
       const decipher = crypto.createDecipheriv(
         'aes-256-gcm',
-        aesKey,
+        Buffer.from(aesKey),
         Buffer.from(encryptedData.iv, 'hex')
       );
 
@@ -181,7 +181,7 @@ export class E2EEncryptionService {
 
     // Encrypt with AES-256-GCM
     const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', aesKey, iv);
+    const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(aesKey), iv);
 
     let ciphertext = cipher.update(plaintext, 'utf8', 'hex');
     ciphertext += cipher.final('hex');
