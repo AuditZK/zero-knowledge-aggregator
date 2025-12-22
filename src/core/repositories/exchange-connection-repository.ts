@@ -1,0 +1,332 @@
+import { injectable, inject } from 'tsyringe';
+import { PrismaClient, ExchangeConnection as PrismaExchangeConnection, Prisma } from '@prisma/client';
+import { ExchangeConnection, ExchangeCredentials } from '../../types';
+import { EncryptionService } from '../../services/encryption-service';
+import { getLogger } from '../../utils/secure-enclave-logger';
+import { MemoryProtectionService } from '../../services/memory-protection.service';
+
+const logger = getLogger('ExchangeConnectionRepository');
+
+// Prisma error type for unique constraint violations
+interface PrismaError extends Error {
+  code?: string;
+}
+
+@injectable()
+export class ExchangeConnectionRepository {
+  constructor(
+    @inject('PrismaClient') private readonly prisma: PrismaClient,
+    @inject(EncryptionService) private readonly encryptionService: EncryptionService,
+  ) {}
+
+  async createConnection(credentials: ExchangeCredentials): Promise<ExchangeConnection> {
+    const encryptedApiKey = await this.encryptionService.encrypt(credentials.apiKey);
+    const encryptedApiSecret = await this.encryptionService.encrypt(credentials.apiSecret);
+    const encryptedPassphrase = credentials.passphrase
+      ? await this.encryptionService.encrypt(credentials.passphrase)
+      : null;
+
+    // Create hash of credentials to detect duplicate accounts
+    const credentialsHash = this.encryptionService.createCredentialsHash(
+      credentials.apiKey,
+      credentials.apiSecret,
+      credentials.passphrase,
+    );
+
+    try {
+      const connection = await this.prisma.exchangeConnection.create({
+        data: {
+          userUid: credentials.userUid,
+          exchange: credentials.exchange,
+          label: credentials.label,
+          encryptedApiKey,
+          encryptedApiSecret,
+          encryptedPassphrase,
+          credentialsHash,
+          isActive: credentials.isActive ?? true,
+        },
+      });
+
+      return this.mapPrismaConnectionToConnection(connection);
+    } catch (error) {
+      // Handle unique constraint violation (P2002)
+      const prismaError = error as PrismaError;
+      if (prismaError.code === 'P2002') {
+        throw new Error(`Exchange ${credentials.exchange} is already connected`);
+      }
+      throw error;
+    }
+  }
+
+  async getConnectionById(id: string): Promise<ExchangeConnection | null> {
+    const connection = await this.prisma.exchangeConnection.findUnique({
+      where: { id },
+    });
+
+    return connection ? this.mapPrismaConnectionToConnection(connection) : null;
+  }
+
+  async getConnectionsByUser(userUid: string, activeOnly: boolean = false): Promise<ExchangeConnection[]> {
+    const where: Prisma.ExchangeConnectionWhereInput = { userUid };
+    if (activeOnly) {
+      where.isActive = true;
+    }
+
+    const connections = await this.prisma.exchangeConnection.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return connections.map(this.mapPrismaConnectionToConnection);
+  }
+
+  async getDecryptedCredentials(connectionId: string): Promise<ExchangeCredentials | null> {
+    const connection = await this.prisma.exchangeConnection.findUnique({
+      where: { id: connectionId, isActive: true },
+    });
+
+    if (!connection) {
+      return null;
+    }
+
+    try {
+      const apiKey = await this.encryptionService.decrypt(connection.encryptedApiKey);
+      const apiSecret = await this.encryptionService.decrypt(connection.encryptedApiSecret);
+      const passphrase = connection.encryptedPassphrase
+        ? await this.encryptionService.decrypt(connection.encryptedPassphrase)
+        : undefined;
+
+      return {
+        userUid: connection.userUid,
+        exchange: connection.exchange,
+        label: connection.label,
+        apiKey,
+        apiSecret,
+        passphrase,
+        isActive: connection.isActive,
+      };
+    } catch (error) {
+      logger.error('Failed to decrypt credentials:', error);
+      return null;
+    }
+  }
+
+  /**
+   * SECURITY: Get credentials and use them with automatic memory cleanup
+   *
+   * This method ensures credentials are wiped from memory after use,
+   * preventing potential memory dump attacks in non-SEV-SNP environments.
+   *
+   * @param connectionId - The connection ID to fetch credentials for
+   * @param operation - Async operation that uses the credentials
+   * @returns Result of the operation, or null if credentials not found
+   *
+   * @example
+   * ```
+   * const result = await repo.useDecryptedCredentials(connId, async (creds) => {
+   *   const exchange = new ccxt[creds.exchange]({
+   *     apiKey: creds.apiKey,
+   *     secret: creds.apiSecret,
+   *   });
+   *   return await exchange.fetchBalance();
+   * });
+   * ```
+   */
+  async useDecryptedCredentials<R>(
+    connectionId: string,
+    operation: (credentials: ExchangeCredentials) => Promise<R>
+  ): Promise<R | null> {
+    const credentials = await this.getDecryptedCredentials(connectionId);
+
+    if (!credentials) {
+      return null;
+    }
+
+    try {
+      return await operation(credentials);
+    } finally {
+      // SECURITY: Wipe credentials from memory after use
+      MemoryProtectionService.wipeObject(credentials as unknown as Record<string, unknown>);
+      logger.debug('Credentials wiped after use');
+    }
+  }
+
+  async updateConnection(id: string, updates: Partial<ExchangeCredentials>): Promise<ExchangeConnection> {
+    const updateData: Prisma.ExchangeConnectionUpdateInput = {};
+
+    if (updates.label) {
+      updateData.label = updates.label;
+    }
+    if (updates.isActive !== undefined) {
+      updateData.isActive = updates.isActive;
+    }
+
+    if (updates.apiKey) {
+      updateData.encryptedApiKey = await this.encryptionService.encrypt(updates.apiKey);
+    }
+    if (updates.apiSecret) {
+      updateData.encryptedApiSecret = await this.encryptionService.encrypt(updates.apiSecret);
+    }
+    if (updates.passphrase) {
+      updateData.encryptedPassphrase = await this.encryptionService.encrypt(updates.passphrase);
+    }
+
+    // Update credentials hash if any credentials changed
+    if (updates.apiKey || updates.apiSecret || updates.passphrase !== undefined) {
+      const connection = await this.prisma.exchangeConnection.findUnique({
+        where: { id },
+      });
+
+      if (connection) {
+        // SECURITY: Track decrypted credentials for cleanup
+        let apiKey: string | undefined;
+        let apiSecret: string | undefined;
+        let passphrase: string | undefined;
+
+        try {
+          apiKey = updates.apiKey || await this.encryptionService.decrypt(connection.encryptedApiKey);
+          apiSecret = updates.apiSecret || await this.encryptionService.decrypt(connection.encryptedApiSecret);
+          passphrase = updates.passphrase !== undefined
+            ? updates.passphrase
+            : (connection.encryptedPassphrase ? await this.encryptionService.decrypt(connection.encryptedPassphrase) : undefined);
+
+          updateData.credentialsHash = this.encryptionService.createCredentialsHash(apiKey, apiSecret, passphrase);
+        } finally {
+          // SECURITY: Wipe decrypted credentials from memory
+          const credsToWipe = { apiKey, apiSecret, passphrase };
+          MemoryProtectionService.wipeObject(credsToWipe);
+        }
+      }
+    }
+
+    const updatedConnection = await this.prisma.exchangeConnection.update({
+      where: { id },
+      data: updateData,
+    });
+
+    return this.mapPrismaConnectionToConnection(updatedConnection);
+  }
+
+  async deleteConnection(id: string): Promise<void> {
+    await this.prisma.exchangeConnection.delete({
+      where: { id },
+    });
+  }
+
+  /**
+   * Get all user UIDs that have at least one active exchange connection
+   * Used by scheduler to sync only active users
+   */
+  async getActiveUserUids(): Promise<string[]> {
+    const result = await this.prisma.exchangeConnection.findMany({
+      where: { isActive: true },
+      select: { userUid: true },
+      distinct: ['userUid'],
+    });
+
+    return result.map(item => item.userUid);
+  }
+
+  /**
+   * Get all active connections with their sync intervals
+   * Used by scheduler to create jobs with exchange-specific intervals
+   * Returns: Array of {userUid, exchange, syncIntervalMinutes}
+   */
+  async getActiveConnectionsWithIntervals(): Promise<Array<{
+    userUid: string;
+    exchange: string;
+    syncIntervalMinutes: number;
+  }>> {
+    const connections = await this.prisma.exchangeConnection.findMany({
+      where: { isActive: true },
+      select: {
+        userUid: true,
+        exchange: true,
+        syncIntervalMinutes: true,
+      },
+    });
+
+    return connections.map(conn => ({
+      userUid: conn.userUid,
+      exchange: conn.exchange,
+      syncIntervalMinutes: conn.syncIntervalMinutes,
+    }));
+  }
+
+  async findExistingConnection(userUid: string, exchange: string, label: string): Promise<ExchangeConnection | null> {
+    const connection = await this.prisma.exchangeConnection.findFirst({
+      where: {
+        userUid,
+        exchange,
+        label,
+        isActive: true,
+      },
+    });
+
+    return connection ? this.mapPrismaConnectionToConnection(connection) : null;
+  }
+
+  async getUniqueCredentialsForUser(userUid: string): Promise<ExchangeConnection[]> {
+    // Get all active connections for user
+    const connections = await this.prisma.exchangeConnection.findMany({
+      where: {
+        userUid,
+        isActive: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // Filter by unique credentials hash
+    const uniqueConnections: PrismaExchangeConnection[] = [];
+    const seenHashes = new Set<string>();
+
+    for (const connection of connections) {
+      if (connection.credentialsHash && !seenHashes.has(connection.credentialsHash)) {
+        seenHashes.add(connection.credentialsHash);
+        uniqueConnections.push(connection);
+      }
+    }
+
+    return uniqueConnections.map(this.mapPrismaConnectionToConnection);
+  }
+
+  async getConnectionsByCredentialsHash(userUid: string, credentialsHash: string): Promise<ExchangeConnection[]> {
+    const connections = await this.prisma.exchangeConnection.findMany({
+      where: {
+        userUid,
+        credentialsHash,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return connections.map(this.mapPrismaConnectionToConnection);
+  }
+
+  async countConnectionsByUser(userUid: string): Promise<number> {
+    return this.prisma.exchangeConnection.count({
+      where: { userUid, isActive: true },
+    });
+  }
+
+  async countAllActiveConnections(): Promise<number> {
+    return this.prisma.exchangeConnection.count({
+      where: { isActive: true },
+    });
+  }
+
+  private mapPrismaConnectionToConnection(prismaConnection: PrismaExchangeConnection): ExchangeConnection {
+    return {
+      id: prismaConnection.id,
+      userUid: prismaConnection.userUid,
+      exchange: prismaConnection.exchange,
+      label: prismaConnection.label,
+      encryptedApiKey: prismaConnection.encryptedApiKey,
+      encryptedApiSecret: prismaConnection.encryptedApiSecret,
+      encryptedPassphrase: prismaConnection.encryptedPassphrase || undefined,
+      credentialsHash: prismaConnection.credentialsHash || undefined,
+      isActive: prismaConnection.isActive,
+      createdAt: prismaConnection.createdAt,
+      updatedAt: prismaConnection.updatedAt,
+    };
+  }
+}

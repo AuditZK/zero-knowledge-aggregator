@@ -1,0 +1,69 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build output
+dist/
+build/
+*.js.map
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.production.example
+
+# Docker configuration (production)
+docker-compose.prod.yml
+
+# IDE
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Prisma
+prisma/generated/
+
+# Testing
+coverage/
+.nyc_output/
+scripts/test/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Production secrets
+*.pem
+*.key
+*.crt
+credentials/
+
+# Certificate metadata (never commit)
+certs/*.srl
+certs/*.csr
+certs/*.ext
+
+# CI/CD with sensitive info (never commit)
+cloudbuild.yaml
+
+# Client helper with hardcoded IPs (never commit)
+client-encrypt-helper.js
+
+# Development & testing
+api-tests.http
+AUDIT_PROMPT.md

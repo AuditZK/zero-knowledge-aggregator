@@ -1,0 +1,155 @@
+// Aggregator Service Database Schema
+// Autonomous microservice for trading data aggregation
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Users table for aggregator service
+model User {
+  id                  String   @id @default(cuid())
+  uid                 String   @unique // Microservice UID (anonyme, pas d'email/nom)
+  syncIntervalMinutes Int      @default(1440) // Snapshot interval: 1440 = daily (24h)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  // Relations - NO trades table (alpha protection: trades processed in-memory only)
+  snapshots         SnapshotData[]
+  exchangeConnections ExchangeConnection[]
+  syncStatuses      SyncStatus[]
+
+  @@map("users")
+}
+
+// SECURITY: Individual trades are NEVER persisted to database
+// Trades are fetched from exchange API → aggregated in memory → only snapshots stored
+// This prevents alpha/strategy leakage from trade timing, symbols, and prices
+
+// Snapshot data aggregation - DAILY account state snapshots
+// Captures daily equity snapshots with deposits/withdrawals for accurate PnL calculation
+model SnapshotData {
+  id         String   @id @default(cuid())
+  userUid    String
+  timestamp  DateTime // Daily snapshot timestamp (00:00 UTC of each day)
+  exchange   String
+
+  // Core equity tracking (CRITICAL for PnL calculation)
+  totalEquity        Float    // Total account value (realized + unrealized positions)
+  realizedBalance    Float    // Available cash/balance (no open positions)
+  unrealizedPnL      Float    // Unrealized profit/loss from open positions
+
+  // Cash flow tracking (REQUIRED for accurate PnL)
+  // Daily PnL = (Equity_end - Equity_start) - Deposits + Withdrawals
+  deposits           Float    @default(0) // Cash deposited on this day
+  withdrawals        Float    @default(0) // Cash withdrawn on this day
+
+  // Market breakdown structure (JSON)
+  // Structure: {
+  //   global: { equity, available_margin, volume, orders, trading_fees, funding_fees },
+  //   spot: { equity, volume, orders, trading_fees },  // NO funding_fees on spot
+  //   swap: { equity, volume, orders, trading_fees, funding_fees },
+  //   options: { equity, volume, orders, trading_fees },
+  //   ...
+  // }
+  breakdown_by_market Json? // Market-specific metrics breakdown (spot/swap/options)
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userUid], references: [uid], onDelete: Cascade)
+
+  @@unique([userUid, timestamp, exchange])
+  @@index([userUid, timestamp])
+  @@index([exchange, timestamp])
+  @@map("snapshot_data")
+}
+
+// Exchange connections
+model ExchangeConnection {
+  id                   String   @id @default(cuid())
+  userUid              String
+  exchange             String
+  label                String
+  encryptedApiKey      String
+  encryptedApiSecret   String
+  encryptedPassphrase  String?
+  credentialsHash      String?
+  isActive             Boolean  @default(true)
+  syncIntervalMinutes  Int      @default(1440)  // Sync interval in minutes (1440=daily)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  user User @relation(fields: [userUid], references: [uid], onDelete: Cascade)
+
+  @@unique([userUid, exchange])
+  @@index([userUid, exchange])
+  @@map("exchange_connections")
+}
+
+// Sync status tracking
+model SyncStatus {
+  id                    String           @id @default(cuid())
+  userUid               String
+  exchange              String
+  lastSyncTime          DateTime?
+  status                SyncStatusEnum   @default(pending)
+  totalTrades           Int              @default(0)
+  errorMessage          String?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  user User @relation(fields: [userUid], references: [uid], onDelete: Cascade)
+
+  @@unique([userUid, exchange])
+  @@map("sync_statuses")
+}
+
+// Data Encryption Keys (DEKs) - Hardware-wrapped encryption keys
+// SECURITY: Replaces environment variable key storage with AMD SEV-SNP derived keys
+// Architecture:
+//   1. Master Key = Derived from AMD SEV-SNP measurement (hardware-based, never stored)
+//   2. DEK = Random key encrypted with Master Key (stored here)
+//   3. User credentials = Encrypted with DEK
+//
+// This provides:
+//   - Zero secrets in environment variables
+//   - Automatic key rotation on code updates (measurement changes)
+//   - Enterprise-level security at €0 cost
+model DataEncryptionKey {
+  id              String   @id @default(cuid())
+  encryptedDEK    String   // DEK encrypted with master key (base64)
+  iv              String   // Initialization vector for AES-GCM (base64)
+  authTag         String   // Authentication tag for integrity verification (base64)
+  keyVersion      String   // Key version identifier (e.g., "v1")
+  masterKeyId     String   // Hash identifier of master key used for wrapping (not the key itself)
+  isActive        Boolean  @default(true) // Only one active DEK at a time
+  rotatedAt       DateTime? // When this DEK was rotated (if inactive)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([masterKeyId])
+  @@map("data_encryption_keys")
+}
+
+// Migrations tracking
+model Migration {
+  id         Int      @id @default(autoincrement())
+  name       String   @unique
+  appliedAt  DateTime @default(now())
+
+  @@map("migrations")
+}
+
+// Enums
+enum SyncStatusEnum {
+  pending
+  syncing
+  completed
+  error
+}

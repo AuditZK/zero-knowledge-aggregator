@@ -1,0 +1,555 @@
+import { injectable, inject } from 'tsyringe';
+import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repository';
+import { ExchangeConnectionRepository } from '../core/repositories/exchange-connection-repository';
+import { UserRepository } from '../core/repositories/user-repository';
+import { UniversalConnectorCacheService } from '../core/services/universal-connector-cache.service';
+import type { SnapshotData, IConnectorWithMarketTypes, IConnectorWithBalanceBreakdown, IConnectorWithBalance, MarketBalanceBreakdown, BreakdownByMarket } from '../types';
+import { MarketType, getFilteredMarketTypes } from '../types/snapshot-breakdown';
+import { getLogger } from '../utils/secure-enclave-logger';
+import { TimeUtils } from '../utils/time-utils';
+import { IExchangeConnector } from '../external/interfaces/IExchangeConnector';
+
+const logger = getLogger('EquitySnapshotAggregator');
+
+// Types for market trade data
+interface MarketTrade {
+  id: string;
+  timestamp: number;
+  symbol: string;
+  side: string;
+  price: number;
+  amount: number;
+  cost: number;
+  fee?: { cost: number; currency: string };
+}
+
+// Type for funding fee data
+interface FundingFeeData {
+  amount: number;
+  symbol?: string;
+}
+
+// Extended connector with optional methods
+interface ExtendedConnector extends IExchangeConnector {
+  getExecutedOrders?(marketType: string, since: Date): Promise<MarketTrade[]>;
+  getFundingFees?(symbols: string[], since: Date): Promise<FundingFeeData[]>;
+  getHistoricalSummaries?(since: Date): Promise<Array<{ date: string; breakdown: BreakdownByMarket }>>;
+  getEarnBalance?(): Promise<{ equity: number; available_margin?: number }>;
+}
+
+const hasMarketTypes = (connector: unknown): connector is IConnectorWithMarketTypes => typeof (connector as IConnectorWithMarketTypes).detectMarketTypes === 'function';
+const hasBalanceBreakdown = (connector: unknown): connector is IConnectorWithBalanceBreakdown => typeof (connector as IConnectorWithBalanceBreakdown).getBalanceBreakdown === 'function';
+const hasGetBalance = (connector: unknown): connector is IConnectorWithBalance => typeof (connector as IConnectorWithBalance).getBalance === 'function';
+const hasEarnBalance = (connector: unknown): connector is ExtendedConnector => typeof (connector as ExtendedConnector).getEarnBalance === 'function';
+
+function roundToInterval(date: Date, intervalMinutes: number = 60): Date {
+  const rounded = new Date(date);
+  if (intervalMinutes >= 1440) { rounded.setUTCHours(0, 0, 0, 0); return rounded; }
+  const minutes = rounded.getMinutes();
+  rounded.setMinutes(Math.floor(minutes / intervalMinutes) * intervalMinutes, 0, 0);
+  return rounded;
+}
+
+@injectable()
+export class EquitySnapshotAggregator {
+  constructor(
+    @inject(SnapshotDataRepository) private readonly snapshotDataRepo: SnapshotDataRepository,
+    @inject(ExchangeConnectionRepository) private readonly connectionRepo: ExchangeConnectionRepository,
+    @inject(UserRepository) private readonly userRepo: UserRepository,
+    @inject(UniversalConnectorCacheService) private readonly connectorCache: UniversalConnectorCacheService,
+  ) {}
+  // SECURITY: No TradeRepository - trades are fetched from API and aggregated in memory only
+
+  private matchesMarketType(symbol: string, marketType: string): boolean {
+    const s = symbol.toUpperCase();
+    switch (marketType) {
+      case 'swap': return s.includes('PERP') || s.includes('SWAP') || s.includes(':USDT') || s.includes(':USD') || s.includes(':BUSD');
+      case 'future': return /\d{6}/.test(s) && !s.includes('-C') && !s.includes('-P');
+      case 'options': return s.includes('-C') || s.includes('-P');
+      case 'spot':
+      case 'margin': return !s.includes('PERP') && !s.includes('SWAP') && !s.includes(':USDT') && !s.includes(':USD') && !/\d{6}/.test(s) && !s.includes('-C') && !s.includes('-P');
+      default: return true;
+    }
+  }
+
+  async updateCurrentSnapshot(userUid: string, exchange: string): Promise<void> {
+    try {
+      // Step 1: Get user and connector
+      const { connector, currentSnapshot } = await this.getConnectorAndSnapshotTime(
+        userUid,
+        exchange
+      );
+      if (!connector) {
+        logger.warn(`No connector found for ${userUid}/${exchange}`);
+        return;
+      }
+
+      // Step 2: Fetch balances by market type
+      const { balancesByMarket, globalEquity, globalMargin, filteredTypes } =
+        await this.fetchBalancesByMarket(connector, exchange);
+
+      // Step 3: Fetch trades by market - ALWAYS from start of day (00:00 UTC)
+      // Daily snapshots need ALL trades from the day, not just since last sync
+      const startOfDay = TimeUtils.getStartOfDayUTC(currentSnapshot);
+      const { tradesByMarket, swapSymbols } = await this.fetchTradesByMarket(
+        exchange,
+        startOfDay,
+        filteredTypes,
+        connector
+      );
+
+      // Step 4: Calculate fees
+      const totalFundingFees = await this.calculateFundingFees(connector, swapSymbols, startOfDay);
+
+      // Step 5: Build market breakdown
+      const breakdown = this.buildMarketBreakdown(
+        balancesByMarket,
+        tradesByMarket,
+        totalFundingFees,
+        globalEquity,
+        globalMargin
+      );
+
+      // Step 6: Calculate unrealized PnL
+      const totalUnrealizedPnl = await this.calculateUnrealizedPnl(connector, balancesByMarket);
+
+      // Step 7: Save snapshot
+      await this.saveSnapshot({
+        userUid,
+        exchange,
+        currentSnapshot,
+        globalEquity,
+        totalUnrealizedPnl,
+        breakdown
+      });
+
+      const totalRealizedBalance = globalEquity - totalUnrealizedPnl;
+      logger.info(`Updated snapshot for ${userUid} on ${exchange}: equity=${globalEquity.toFixed(2)}, realized=${totalRealizedBalance.toFixed(2)}, unrealized=${totalUnrealizedPnl.toFixed(2)}, markets=${Object.keys(breakdown).length - 1}`);
+    } catch (error) { logger.error(`Failed to update snapshot with breakdown for ${userUid}`, error); throw error; }
+  }
+
+  /**
+   * Get connector and calculate snapshot time
+   */
+  private async getConnectorAndSnapshotTime(userUid: string, exchange: string) {
+    const user = await this.userRepo.getUserByUid(userUid);
+    if (!user) {
+      logger.error(`User ${userUid} not found`);
+      return { connector: null, syncInterval: 60, currentSnapshot: new Date() };
+    }
+
+    const syncInterval = user.syncIntervalMinutes || 60;
+    const currentSnapshot = roundToInterval(new Date(), syncInterval);
+    const connections = (await this.connectionRepo.getConnectionsByUser(userUid)) ?? [];
+    const connection = connections.find(c => c.exchange === exchange && c.isActive);
+
+    if (!connection) {
+      logger.error(`No active connection found for ${exchange}`, {
+        userUid,
+        availableExchanges: connections.map(c => c.exchange)
+      });
+      return { connector: null, syncInterval, currentSnapshot };
+    }
+
+    const credentials = await this.connectionRepo.getDecryptedCredentials(connection.id);
+    if (!credentials) {
+      logger.error(`Failed to decrypt credentials for ${exchange}`, { userUid, connectionId: connection.id });
+      return { connector: null, syncInterval, currentSnapshot };
+    }
+
+    const connector = this.connectorCache.getOrCreate(exchange, credentials);
+    return { connector, syncInterval, currentSnapshot };
+  }
+
+  /**
+   * Fetch balances for all market types
+   */
+  private async fetchBalancesByMarket(connector: ExtendedConnector, exchange: string) {
+    const balancesByMarket: Record<string, MarketBalanceBreakdown> = {};
+    let globalEquity = 0;
+    let globalMargin = 0;
+    let filteredTypes: MarketType[] = [];
+
+    const isCcxtConnector = hasMarketTypes(connector);
+
+    if (isCcxtConnector) {
+      const marketTypes = await connector.detectMarketTypes();
+      filteredTypes = getFilteredMarketTypes(exchange, marketTypes as MarketType[]);
+      const balanceResults = await Promise.allSettled(
+        filteredTypes.map(async (marketType) => ({
+          marketType,
+          data: await connector.getBalanceByMarket(marketType)
+        }))
+      );
+
+      for (const result of balanceResults) {
+        if (result.status === 'fulfilled') {
+          const { marketType, data } = result.value;
+          const typedData = data as { equity: number; available_margin?: number };
+          if (typedData.equity > 0) {
+            balancesByMarket[marketType] = { totalEquityUsd: typedData.equity, unrealizedPnl: 0 };
+            globalEquity += typedData.equity;
+            globalMargin += typedData.available_margin || 0;
+          }
+        }
+      }
+
+      // Fetch Earn/Staking balance separately (not included in standard market types)
+      if (hasEarnBalance(connector)) {
+        try {
+          const earnData = await connector.getEarnBalance!();
+          if (earnData.equity > 0) {
+            balancesByMarket['earn'] = { totalEquityUsd: earnData.equity, unrealizedPnl: 0 };
+            globalEquity += earnData.equity;
+            logger.info(`Earn balance: ${earnData.equity.toFixed(2)} USD`);
+          }
+        } catch (earnError) {
+          logger.debug('Earn balance not available', { error: earnError instanceof Error ? earnError.message : String(earnError) });
+        }
+      }
+    } else if (hasBalanceBreakdown(connector)) {
+      const breakdown = await connector.getBalanceBreakdown();
+      if (breakdown.global) {
+        // Support both IBKR format (equity, available_margin) and standard format (totalEquityUsd, availableBalance)
+        globalEquity = breakdown.global.equity || breakdown.global.totalEquityUsd || 0;
+        globalMargin = breakdown.global.available_margin || breakdown.global.availableBalance || 0;
+      }
+
+      for (const [marketType, marketData] of Object.entries(breakdown)) {
+        // Support both IBKR format (equity) and standard format (totalEquityUsd)
+        const equityValue = marketData?.equity ?? marketData?.totalEquityUsd;
+        if (marketData && equityValue !== undefined) {
+          balancesByMarket[marketType] = {
+            totalEquityUsd: equityValue,
+            unrealizedPnl: marketData.unrealizedPnl,
+            realizedPnl: marketData.realizedPnl,
+            availableBalance: marketData.available_margin || marketData.availableBalance,
+            usedMargin: marketData.usedMargin,
+            positions: marketData.positions,
+            // FIX: Extract trading activity metrics from IBKR breakdown
+            volume: marketData.volume,
+            trades: marketData.trades,
+            tradingFees: marketData.trading_fees || marketData.tradingFees,
+            fundingFees: marketData.funding_fees || marketData.fundingFees
+          };
+        }
+      }
+      filteredTypes = Object.keys(balancesByMarket) as MarketType[];
+    } else if (hasGetBalance(connector)) {
+      const balanceData = await connector.getBalance();
+      const typedBalanceData = balanceData as unknown as { equity: number; unrealizedPnl?: number };
+      balancesByMarket['global'] = {
+        totalEquityUsd: typedBalanceData.equity,
+        unrealizedPnl: typedBalanceData.unrealizedPnl || 0
+      };
+      globalEquity = typedBalanceData.equity;
+      filteredTypes = ['global' as MarketType];
+    }
+
+    return { balancesByMarket, globalEquity, globalMargin, filteredTypes };
+  }
+
+  /**
+   * Fetch trades grouped by market type
+   * For CCXT connectors: fetch directly from exchange API (memory only)
+   * For other connectors: empty (trade metrics from historical summaries)
+   * SECURITY: No database storage - trades stay in memory only
+   */
+  private async fetchTradesByMarket(
+    exchange: string,
+    since: Date,
+    filteredTypes: MarketType[],
+    connector: ExtendedConnector
+  ) {
+    const tradesByMarket: Record<string, MarketTrade[]> = {};
+    const swapSymbols = new Set<string>();
+
+    // CCXT connectors (crypto exchanges): fetch trades directly from exchange API
+    const isCcxtConnector = hasMarketTypes(connector) && connector.getExecutedOrders;
+
+    if (isCcxtConnector) {
+      // Fetch trades from each market type via API
+      for (const marketType of filteredTypes) {
+        try {
+          const trades = await connector.getExecutedOrders!(marketType, since);
+          tradesByMarket[marketType] = trades;
+          if (marketType === 'swap') {
+            trades.forEach((trade: MarketTrade) => swapSymbols.add(trade.symbol));
+          }
+          logger.debug(`Fetched ${trades.length} trades from ${exchange} ${marketType} API since ${since.toISOString()}`);
+        } catch (apiError) {
+          logger.warn(`Failed to fetch trades from ${exchange} ${marketType} API`, { error: apiError instanceof Error ? apiError.message : String(apiError) });
+          tradesByMarket[marketType] = [];
+        }
+      }
+    } else {
+      // IBKR and other connectors: no individual trade storage (alpha protection)
+      // Trade metrics come from historical summaries, not individual trades
+      // For current day, volume/fees will be 0 - only balance/equity matters
+      logger.debug(`${exchange}: Trade metrics from historical summaries only (no individual trade storage)`);
+      for (const marketType of filteredTypes) {
+        tradesByMarket[marketType] = [];
+      }
+    }
+
+    return { tradesByMarket, swapSymbols };
+  }
+
+  /**
+   * Calculate total funding fees for swap positions
+   */
+  private async calculateFundingFees(
+    connector: ExtendedConnector,
+    swapSymbols: Set<string>,
+    since: Date
+  ): Promise<number> {
+    if (swapSymbols.size === 0) {return 0;}
+
+    try {
+      const fundingData = connector.getFundingFees
+        ? await connector.getFundingFees(Array.from(swapSymbols), since)
+        : [];
+      return fundingData.reduce((sum: number, f: FundingFeeData) => sum + f.amount, 0);
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  /**
+   * Helper to create both camelCase and snake_case properties for gRPC compatibility
+   * gRPC expects snake_case but TypeScript uses camelCase internally
+   */
+  private createDualCaseMetrics(tradingFees: number, fundingFees: number) {
+    return {
+      tradingFees,
+      trading_fees: tradingFees,
+      fundingFees,
+      funding_fees: fundingFees
+    };
+  }
+
+  /**
+   * Build detailed breakdown by market type
+   * Always categorizes trades into spot/swap/options even if balance data only exists globally
+   * Uses snake_case for JSON properties to match gRPC expected format
+   */
+  private buildMarketBreakdown(
+    balancesByMarket: Record<string, MarketBalanceBreakdown>,
+    tradesByMarket: Record<string, MarketTrade[]>,
+    totalFundingFees: number,
+    globalEquity: number,
+    globalMargin: number
+  ): BreakdownByMarket {
+    const breakdown: BreakdownByMarket = {};
+
+    // Collect all trades from all market buckets
+    const allTrades: MarketTrade[] = [];
+    for (const trades of Object.values(tradesByMarket)) {
+      allTrades.push(...trades);
+    }
+
+    // Standard market types to always categorize (crypto: spot, swap, earn; plus shared: options)
+    const standardMarkets: MarketType[] = ['spot', 'swap', 'earn', 'options'];
+
+    let totalVolume = 0;
+    let totalTrades = 0;
+    let totalTradingFees = 0;
+
+    // Always categorize trades by market type
+    for (const marketType of standardMarkets) {
+      // Filter trades for this market type
+      const marketTrades = allTrades.filter(t => this.matchesMarketType(t.symbol, marketType));
+
+      // Use balance data if available for this market type
+      const balance = balancesByMarket[marketType];
+
+      // FIX: For IBKR and connectors with getBalanceBreakdown, use data from balance instead of empty trades
+      // Volume = trade cost (price * amount). Fallback to manual calculation if cost not set.
+      const volume = balance?.volume ?? marketTrades.reduce((sum, t) => {
+        const tradeCost = t.cost || (t.price && t.amount ? t.price * t.amount : 0);
+        return sum + tradeCost;
+      }, 0);
+      const fees = balance?.tradingFees ?? balance?.trading_fees ?? marketTrades.reduce((sum, t) => sum + (t.fee?.cost || 0), 0);
+      const trades = balance?.trades ?? marketTrades.length;
+
+      // Use snake_case format for JSON (matches gRPC expected format)
+      const fundingForMarket = marketType === 'swap' ? totalFundingFees : 0;
+      const marketData: MarketBalanceBreakdown = {
+        // Main fields using TypeScript interface
+        totalEquityUsd: balance?.totalEquityUsd || 0,
+        unrealizedPnl: balance?.unrealizedPnl || 0,
+        realizedPnl: balance?.realizedPnl,
+        availableBalance: balance?.availableBalance,
+        usedMargin: balance?.usedMargin,
+        positions: balance?.positions,
+        // snake_case aliases for gRPC mapping
+        equity: balance?.totalEquityUsd || balance?.equity || 0,
+        available_margin: balance?.availableBalance || balance?.available_margin || 0,
+        // Trading activity metrics (both camelCase and snake_case)
+        volume,
+        trades,
+        ...this.createDualCaseMetrics(fees, fundingForMarket)
+      };
+
+      (breakdown as Record<string, MarketBalanceBreakdown>)[marketType] = marketData;
+      totalVolume += volume;
+      totalTrades += trades;
+      totalTradingFees += fees;
+    }
+
+    // FIX: Also process IBKR-specific market types (stocks, futures_commodities, cfd, forex)
+    // that are in balancesByMarket but not in standardMarkets
+    for (const [marketType, balance] of Object.entries(balancesByMarket)) {
+      if (marketType !== 'global' && !standardMarkets.includes(marketType as MarketType)) {
+        const volume = balance.volume || 0;
+        const trades = balance.trades || 0;
+        const fees = balance.tradingFees || balance.trading_fees || 0;
+
+        const marketData: MarketBalanceBreakdown = {
+          totalEquityUsd: balance.totalEquityUsd || 0,
+          unrealizedPnl: balance.unrealizedPnl || 0,
+          realizedPnl: balance.realizedPnl,
+          availableBalance: balance.availableBalance,
+          usedMargin: balance.usedMargin,
+          positions: balance.positions,
+          equity: balance.totalEquityUsd || balance.equity || 0,
+          available_margin: balance.availableBalance || balance.available_margin || 0,
+          volume,
+          trades,
+          ...this.createDualCaseMetrics(fees, 0) // No funding fees for stocks/futures/cfd/forex
+        };
+
+        (breakdown as Record<string, MarketBalanceBreakdown>)[marketType] = marketData;
+        totalVolume += volume;
+        totalTrades += trades;
+        totalTradingFees += fees;
+      }
+    }
+
+    breakdown.global = {
+      totalEquityUsd: globalEquity,
+      availableBalance: globalMargin,
+      unrealizedPnl: 0,
+      // snake_case aliases
+      equity: globalEquity,
+      available_margin: globalMargin,
+      // Global totals (both camelCase and snake_case)
+      volume: totalVolume,
+      trades: totalTrades,
+      ...this.createDualCaseMetrics(totalTradingFees, totalFundingFees)
+    };
+
+    return breakdown;
+  }
+
+  /**
+   * Calculate unrealized PnL from open positions
+   */
+  private async calculateUnrealizedPnl(
+    connector: ExtendedConnector,
+    balancesByMarket: Record<string, MarketBalanceBreakdown>
+  ): Promise<number> {
+    let totalUnrealizedPnl = 0;
+
+    try {
+      const positions = await connector.getCurrentPositions();
+      if (positions && Array.isArray(positions)) {
+        for (const position of positions) {
+          if (position.size && Number(position.size) !== 0) {
+            totalUnrealizedPnl += Number(position.unrealizedPnl) || 0;
+          }
+        }
+      }
+    } catch (posError: unknown) {
+      // Fallback: use breakdown data if available
+      totalUnrealizedPnl = Object.values(balancesByMarket).reduce(
+        (sum, market) => sum + (market.unrealizedPnl || 0),
+        0
+      );
+    }
+
+    return totalUnrealizedPnl;
+  }
+
+  /**
+   * Save snapshot to database
+   */
+  private async saveSnapshot(params: {
+    userUid: string;
+    exchange: string;
+    currentSnapshot: Date;
+    globalEquity: number;
+    totalUnrealizedPnl: number;
+    breakdown: BreakdownByMarket;
+  }) {
+    const { userUid, exchange, currentSnapshot, globalEquity, totalUnrealizedPnl, breakdown } =
+      params;
+
+    const totalRealizedBalance = globalEquity - totalUnrealizedPnl;
+
+    const snapshot: SnapshotData = {
+      id: `${userUid}-${exchange}-${currentSnapshot.toISOString()}`,
+      userUid,
+      timestamp: currentSnapshot.toISOString(),
+      exchange,
+      totalEquity: globalEquity,
+      realizedBalance: totalRealizedBalance,
+      unrealizedPnL: totalUnrealizedPnl,
+      deposits: 0, // Cash flow tracking not yet implemented
+      withdrawals: 0, // Cash flow tracking not yet implemented
+      breakdown_by_market: breakdown,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    await this.snapshotDataRepo.upsertSnapshotData(snapshot);
+  }
+
+  async backfillIbkrHistoricalSnapshots(userUid: string, exchange: string): Promise<void> {
+    if (exchange !== 'ibkr') {return;}
+    try {
+      const connections = (await this.connectionRepo.getConnectionsByUser(userUid)) ?? [];
+      const connection = connections.find(c => c.exchange === exchange && c.isActive);
+      if (!connection) {return;}
+      const credentials = await this.connectionRepo.getDecryptedCredentials(connection.id);
+      if (!credentials) {return;}
+      const connector = this.connectorCache.getOrCreate(exchange, credentials) as ExtendedConnector;
+      if (!connector.getHistoricalSummaries) {return;}
+      const historicalData = await connector.getHistoricalSummaries(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
+      if (!historicalData || historicalData.length === 0) {return;}
+      let processedCount = 0, skippedCount = 0;
+      for (const entry of historicalData) {
+        // IBKR connector uses 'equity' not 'totalEquityUsd'
+        const globalEquity = entry.breakdown?.global?.equity || entry.breakdown?.global?.totalEquityUsd || 0;
+        const unrealizedPnl = entry.breakdown?.global?.unrealizedPnl || 0;
+        const realizedBalance = globalEquity - unrealizedPnl;
+
+        if (globalEquity === 0) { skippedCount++; continue; }
+
+        const year = parseInt(entry.date.substring(0, 4));
+        const month = parseInt(entry.date.substring(4, 6)) - 1;
+        const day = parseInt(entry.date.substring(6, 8));
+
+        // Create 1 daily snapshot per day in Flex report
+        // IBKR Flex reports contain multiple days → we create 1 snapshot per day
+        // Same output as crypto exchanges (daily snapshots), but source is different
+        const snapshotDate = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+
+        await this.snapshotDataRepo.upsertSnapshotData({
+          userUid,
+          exchange,
+          timestamp: snapshotDate.toISOString(),
+          totalEquity: globalEquity,
+          realizedBalance: realizedBalance,
+          unrealizedPnL: unrealizedPnl,
+          deposits: 0, // Cash flow extraction from IBKR Flex not yet implemented
+          withdrawals: 0, // Cash flow extraction from IBKR Flex not yet implemented
+          breakdown_by_market: entry.breakdown
+        });
+
+        processedCount++;
+      }
+      logger.info(`IBKR historical backfill completed for ${userUid}: ${processedCount} daily snapshots created, ${skippedCount} days skipped`);
+    } catch (error) { logger.error(`Failed to backfill IBKR historical snapshots for ${userUid}`, error); throw error; }
+  }
+}
