@@ -58,12 +58,18 @@ certs/*.srl
 certs/*.csr
 certs/*.ext
 
-# CI/CD with sensitive info (never commit)
-cloudbuild.yaml
+# CI/CD configuration
+*build*.yaml
+*build*.yml
 
-# Client helper with hardcoded IPs (never commit)
-client-encrypt-helper.js
+# Helper scripts with sensitive data
+*-helper.js
+
+# Documentation (exclude all except root README and SECURITY)
+*.md
+**/*.md
+!README.md
+!SECURITY.md
 
 # Development & testing
 api-tests.http
-AUDIT_PROMPT.md
