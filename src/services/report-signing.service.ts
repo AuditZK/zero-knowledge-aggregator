@@ -2,6 +2,7 @@ import { injectable } from 'tsyringe';
 import { createHash, createSign, createVerify, generateKeyPairSync, KeyObject } from 'crypto';
 import { getLogger } from '../utils/secure-enclave-logger';
 import { ReportData, SignedReport, VerifySignatureRequest, VerifySignatureResponse } from '../types/report.types';
+import { SnapshotData } from '../types';
 
 const logger = getLogger('ReportSigning');
 
@@ -231,5 +232,187 @@ export class ReportSigningService {
         }, {});
     }
     return value;
+  }
+
+  // ============================================
+  // SNAPSHOT SIGNING (Ingestion Chain of Custody)
+  // ============================================
+
+  /**
+   * Data structure for signing (excludes signature fields to avoid circular dependency)
+   */
+  private getSnapshotDataForSigning(snapshot: Omit<SnapshotData, 'id' | 'createdAt' | 'updatedAt' | 'ingestionSignature' | 'ingestionPublicKey' | 'snapshotHash' | 'ingestedAt'>): object {
+    return {
+      userUid: snapshot.userUid,
+      timestamp: snapshot.timestamp,
+      exchange: snapshot.exchange,
+      totalEquity: snapshot.totalEquity,
+      realizedBalance: snapshot.realizedBalance,
+      unrealizedPnL: snapshot.unrealizedPnL,
+      deposits: snapshot.deposits,
+      withdrawals: snapshot.withdrawals,
+      breakdown_by_market: snapshot.breakdown_by_market,
+    };
+  }
+
+  /**
+   * Sign a snapshot at ingestion time
+   * Returns signature data to be stored alongside the snapshot
+   */
+  signSnapshot(snapshot: Omit<SnapshotData, 'id' | 'createdAt' | 'updatedAt' | 'ingestionSignature' | 'ingestionPublicKey' | 'snapshotHash' | 'ingestedAt'>): {
+    ingestionSignature: string;
+    ingestionPublicKey: string;
+    snapshotHash: string;
+    ingestedAt: Date;
+  } {
+    const dataToSign = this.getSnapshotDataForSigning(snapshot);
+    const snapshotJson = JSON.stringify(dataToSign, this.sortedReplacer);
+
+    // Calculate SHA-256 hash
+    const snapshotHash = createHash('sha256')
+      .update(snapshotJson)
+      .digest('hex');
+
+    // Sign the hash with ECDSA
+    const sign = createSign('SHA256');
+    sign.update(snapshotHash);
+    sign.end();
+
+    const signature = sign.sign(this.privateKey, 'base64');
+    const ingestedAt = new Date();
+
+    logger.debug('Snapshot signed at ingestion', {
+      userUid: snapshot.userUid,
+      exchange: snapshot.exchange,
+      timestamp: snapshot.timestamp,
+      hashPrefix: snapshotHash.substring(0, 16),
+    });
+
+    return {
+      ingestionSignature: signature,
+      ingestionPublicKey: this.publicKeyBase64,
+      snapshotHash,
+      ingestedAt,
+    };
+  }
+
+  /**
+   * Verify a snapshot's ingestion signature
+   * Returns true if the signature is valid and the data hasn't been tampered with
+   */
+  verifySnapshotSignature(snapshot: SnapshotData): { valid: boolean; error?: string } {
+    // Check if signature data exists
+    if (!snapshot.ingestionSignature || !snapshot.ingestionPublicKey || !snapshot.snapshotHash) {
+      return {
+        valid: false,
+        error: 'Missing signature data - snapshot may have been injected without proper ingestion',
+      };
+    }
+
+    try {
+      // Recalculate hash from current data
+      const dataToSign = this.getSnapshotDataForSigning(snapshot);
+      const snapshotJson = JSON.stringify(dataToSign, this.sortedReplacer);
+      const calculatedHash = createHash('sha256')
+        .update(snapshotJson)
+        .digest('hex');
+
+      // Verify hash matches stored hash
+      if (calculatedHash !== snapshot.snapshotHash) {
+        return {
+          valid: false,
+          error: 'Hash mismatch - snapshot data has been tampered with',
+        };
+      }
+
+      // Import the public key
+      const publicKeyDer = Buffer.from(snapshot.ingestionPublicKey, 'base64');
+
+      // Verify signature
+      const verify = createVerify('SHA256');
+      verify.update(snapshot.snapshotHash);
+      verify.end();
+
+      const isValid = verify.verify(
+        {
+          key: publicKeyDer,
+          format: 'der',
+          type: 'spki',
+        },
+        snapshot.ingestionSignature,
+        'base64'
+      );
+
+      if (!isValid) {
+        return {
+          valid: false,
+          error: 'Invalid signature - snapshot was not signed by a trusted enclave',
+        };
+      }
+
+      return { valid: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown verification error';
+      logger.error('Snapshot signature verification failed', { error: errorMessage });
+
+      return {
+        valid: false,
+        error: errorMessage,
+      };
+    }
+  }
+
+  /**
+   * Verify multiple snapshots and return statistics
+   * Used during report generation to validate all source data
+   */
+  verifySnapshotBatch(snapshots: SnapshotData[]): {
+    allValid: boolean;
+    validCount: number;
+    invalidCount: number;
+    unsignedCount: number;
+    errors: Array<{ snapshot: string; error: string }>;
+  } {
+    let validCount = 0;
+    let invalidCount = 0;
+    let unsignedCount = 0;
+    const errors: Array<{ snapshot: string; error: string }> = [];
+
+    for (const snapshot of snapshots) {
+      const snapshotId = `${snapshot.userUid}/${snapshot.exchange}/${snapshot.timestamp}`;
+
+      if (!snapshot.ingestionSignature) {
+        unsignedCount++;
+        errors.push({ snapshot: snapshotId, error: 'Unsigned snapshot' });
+        continue;
+      }
+
+      const result = this.verifySnapshotSignature(snapshot);
+      if (result.valid) {
+        validCount++;
+      } else {
+        invalidCount++;
+        errors.push({ snapshot: snapshotId, error: result.error || 'Unknown error' });
+      }
+    }
+
+    const allValid = invalidCount === 0 && unsignedCount === 0;
+
+    if (!allValid) {
+      logger.warn('Snapshot batch verification found issues', {
+        total: snapshots.length,
+        validCount,
+        invalidCount,
+        unsignedCount,
+      });
+    }
+
+    return {
+      allValid,
+      validCount,
+      invalidCount,
+      unsignedCount,
+      errors,
+    };
   }
 }

@@ -27,6 +27,11 @@ export class SnapshotDataRepository {
         deposits: snapshot.deposits,
         withdrawals: snapshot.withdrawals,
         breakdown_by_market: (snapshot.breakdown_by_market || undefined) as Prisma.InputJsonValue,
+        // Update signature fields if provided (re-ingestion)
+        ingestionSignature: snapshot.ingestionSignature,
+        ingestionPublicKey: snapshot.ingestionPublicKey,
+        snapshotHash: snapshot.snapshotHash,
+        ingestedAt: snapshot.ingestedAt,
         updatedAt: new Date(),
       },
       create: {
@@ -39,6 +44,11 @@ export class SnapshotDataRepository {
         deposits: snapshot.deposits || 0,
         withdrawals: snapshot.withdrawals || 0,
         breakdown_by_market: (snapshot.breakdown_by_market || undefined) as Prisma.InputJsonValue,
+        // Signature fields for chain of custody
+        ingestionSignature: snapshot.ingestionSignature,
+        ingestionPublicKey: snapshot.ingestionPublicKey,
+        snapshotHash: snapshot.snapshotHash,
+        ingestedAt: snapshot.ingestedAt,
       },
     });
 
@@ -186,6 +196,11 @@ export class SnapshotDataRepository {
       deposits: prismaSnapshotData.deposits,
       withdrawals: prismaSnapshotData.withdrawals,
       breakdown_by_market: prismaSnapshotData.breakdown_by_market as BreakdownByMarket | undefined,
+      // Signature fields for chain of custody
+      ingestionSignature: prismaSnapshotData.ingestionSignature ?? undefined,
+      ingestionPublicKey: prismaSnapshotData.ingestionPublicKey ?? undefined,
+      snapshotHash: prismaSnapshotData.snapshotHash ?? undefined,
+      ingestedAt: prismaSnapshotData.ingestedAt ?? undefined,
       createdAt: prismaSnapshotData.createdAt,
       updatedAt: prismaSnapshotData.updatedAt,
     };

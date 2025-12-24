@@ -180,6 +180,21 @@ const startEnclave = async () => {
       auditProof: 'Rate-limited (23h cooldown)'
     });
 
+    // Start Database Backup Scheduler (SOC 2 compliance)
+    logger.info('[ENCLAVE] Starting database backup scheduler...');
+    const { DatabaseBackupService } = await import('./services/database-backup.service');
+    const backupService = diContainer.resolve(DatabaseBackupService);
+    backupService.start();
+
+    const backupStatus = await backupService.getStatus();
+    logger.info('[ENCLAVE] Database backup scheduler started', {
+      schedule: process.env.BACKUP_SCHEDULE || '0 15 * * *',
+      nextBackup: backupStatus.nextScheduledBackup?.toISOString() || 'calculating...',
+      retentionDays: parseInt(process.env.BACKUP_RETENTION_DAYS || '30', 10),
+      backupDir: process.env.BACKUP_DIR || '/var/backups/enclave',
+      soc2: 'Automated daily backups with retention policy'
+    });
+
     logger.info('[ENCLAVE] Enclave Worker ready to process sync jobs', {
       grpcPort: process.env.ENCLAVE_PORT || 50051,
       restPort: restPort,
@@ -202,6 +217,9 @@ const startEnclave = async () => {
       try {
         // Stop daily sync scheduler
         scheduler.stop();
+
+        // Stop database backup scheduler
+        backupService.stop();
 
         // Stop HTTP log server
         await httpLogServer.stop();

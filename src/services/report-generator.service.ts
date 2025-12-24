@@ -71,6 +71,39 @@ export class ReportGeneratorService {
         };
       }
 
+      // 1.5. SECURITY: Verify all snapshot signatures (chain of custody)
+      // Reject report generation if any snapshot has invalid or missing signature
+      const verificationResult = this.signingService.verifySnapshotBatch(snapshots);
+
+      if (!verificationResult.allValid) {
+        logger.error('Snapshot signature verification failed - report generation rejected', {
+          userUid: request.userUid,
+          totalSnapshots: snapshots.length,
+          validCount: verificationResult.validCount,
+          invalidCount: verificationResult.invalidCount,
+          unsignedCount: verificationResult.unsignedCount,
+          errors: verificationResult.errors.slice(0, 5) // Log first 5 errors
+        });
+
+        // Allow unsigned snapshots in development mode (for backwards compatibility)
+        const isDevelopment = process.env.NODE_ENV === 'development' || process.env.ENCLAVE_MODE !== 'true';
+        if (isDevelopment && verificationResult.invalidCount === 0) {
+          logger.warn('Allowing unsigned snapshots in development mode', {
+            unsignedCount: verificationResult.unsignedCount
+          });
+        } else {
+          return {
+            success: false,
+            error: `Data integrity verification failed: ${verificationResult.invalidCount} invalid signatures, ${verificationResult.unsignedCount} unsigned snapshots. Report cannot be signed with potentially tampered data.`
+          };
+        }
+      } else {
+        logger.info('All snapshot signatures verified successfully', {
+          userUid: request.userUid,
+          verifiedCount: verificationResult.validCount
+        });
+      }
+
       // 2. Convert snapshots to daily returns
       const dailyReturns = this.convertSnapshotsToDailyReturns(snapshots);
 

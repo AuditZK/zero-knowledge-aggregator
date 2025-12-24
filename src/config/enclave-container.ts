@@ -27,10 +27,14 @@ import { ReportSigningService } from '../services/report-signing.service';
 import { ReportGeneratorService } from '../services/report-generator.service';
 import { TlsKeyGeneratorService } from '../services/tls-key-generator.service';
 import { E2EEncryptionService } from '../services/e2e-encryption.service';
+import { DatabaseBackupService } from '../services/database-backup.service';
 
 // External Services (handle credentials)
 import { IbkrFlexService } from '../external/ibkr-flex-service';
 import { AlpacaApiService } from '../external/alpaca-api-service';
+
+// Core Services
+import { UniversalConnectorCacheService } from '../core/services/universal-connector-cache.service';
 
 // Repositories (NO TradeRepository - trades are memory-only for alpha protection)
 import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repository';
@@ -78,6 +82,9 @@ export function setupEnclaveContainer(): void {
   container.registerSingleton(IbkrFlexService);
   container.registerSingleton(AlpacaApiService);
 
+  // Register Core Services
+  container.registerSingleton(UniversalConnectorCacheService);
+
   // Register Core Enclave Services
   container.registerSingleton(SevSnpAttestationService);
   container.registerSingleton(KeyDerivationService);
@@ -95,6 +102,9 @@ export function setupEnclaveContainer(): void {
   // Register TLS and E2E Encryption Services
   container.registerSingleton(TlsKeyGeneratorService);
   container.registerSingleton(E2EEncryptionService);
+
+  // Register Database Backup Service (SOC 2 compliance)
+  container.registerSingleton(DatabaseBackupService);
 
   // Register Enclave Worker
   container.registerSingleton(EnclaveWorker);

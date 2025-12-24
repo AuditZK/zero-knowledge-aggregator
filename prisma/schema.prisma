@@ -32,6 +32,7 @@ model User {
 
 // Snapshot data aggregation - DAILY account state snapshots
 // Captures daily equity snapshots with deposits/withdrawals for accurate PnL calculation
+// SECURITY: Each snapshot is cryptographically signed at ingestion to prove origin
 model SnapshotData {
   id         String   @id @default(cuid())
   userUid    String
@@ -57,6 +58,16 @@ model SnapshotData {
   //   ...
   // }
   breakdown_by_market Json? // Market-specific metrics breakdown (spot/swap/options)
+
+  // ============================================
+  // INGESTION SIGNATURE (SOC 2 / Chain of Custody)
+  // ============================================
+  // Cryptographic proof that this data was ingested by the enclave from the exchange API
+  // Prevents database tampering - unsigned/invalid data rejected at report generation
+  ingestionSignature  String?  // ECDSA P-256 signature of snapshot data (base64)
+  ingestionPublicKey  String?  // Public key used for signing (base64, for verification)
+  snapshotHash        String?  // SHA-256 hash of snapshot data (hex)
+  ingestedAt          DateTime? // Timestamp when data was fetched from exchange API
 
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt

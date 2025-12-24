@@ -95,6 +95,15 @@ export interface SnapshotData {
   // Market breakdown (optional, for detailed analysis)
   breakdown_by_market?: BreakdownByMarket; // Market-specific breakdown (spot, swap, options)
 
+  // ============================================
+  // INGESTION SIGNATURE (SOC 2 / Chain of Custody)
+  // ============================================
+  // Cryptographic proof that this data was ingested by the enclave from the exchange API
+  ingestionSignature?: string;  // ECDSA P-256 signature of snapshot data (base64)
+  ingestionPublicKey?: string;  // Public key used for signing (base64)
+  snapshotHash?: string;        // SHA-256 hash of snapshot data (hex)
+  ingestedAt?: Date;            // Timestamp when data was fetched from exchange API
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -115,27 +124,6 @@ export interface CreateTradeRequest {
   exchangeTradeId?: string;
 }
 
-export interface GetReturnsQuery {
-  startHour?: string; // Format: '2024-01-15T14:00:00.000Z'
-  endHour?: string;   // Format: '2024-01-15T15:00:00.000Z'
-  symbol?: string;
-  aggregation?: 'snapshot' | 'daily' | 'weekly' | 'monthly';
-}
-
-export interface ApiResponse<T = unknown> {
-  success: boolean;
-  data?: T;
-  error?: string;
-  message?: string;
-}
-
-export interface PaginationQuery {
-  page?: number;
-  limit?: number;
-  sortBy?: string;
-  sortOrder?: 'asc' | 'desc';
-}
-
 export interface DatabaseConfig {
   url: string;
   ssl: boolean;
@@ -153,7 +141,6 @@ export interface ServerConfig {
   logLevel: string;
   rateLimitWindowMs: number;
   rateLimitMaxRequests: number;
-  dataRetentionDays: number;
 }
 
 export interface TradeData {
@@ -213,19 +200,6 @@ export interface SyncStatus {
 export type LogMetadata = {
   [key: string]: unknown;
 };
-
-// Database raw query result types
-export interface DatabaseTableInfo {
-  column_name: string;
-  data_type: string;
-  is_nullable: string;
-  column_default: string | null;
-}
-
-export interface DatabaseMigrationInfo {
-  table_name: string;
-  column_count: number;
-}
 
 // Alpaca SDK types
 export interface AlpacaPosition {
@@ -288,31 +262,8 @@ export interface AlpacaAccount {
   daytrade_count: number;
 }
 
-// CCXT position type
-export interface CCXTPosition {
-  info: Record<string, unknown>;
-  symbol: string;
-  timestamp: number;
-  datetime: string;
-  initialMargin: number;
-  initialMarginPercentage: number;
-  maintenanceMargin: number;
-  maintenanceMarginPercentage: number;
-  entryPrice: number;
-  notional: number;
-  leverage: number;
-  unrealizedPnl: number;
-  contracts: number;
-  contractSize: number;
-  marginRatio: number;
-  liquidationPrice: number;
-  markPrice: number;
-  collateral: number;
-  marginMode: string;
-  side: 'long' | 'short';
-  percentage: number;
-  realizedPnl?: number;
-}
+// Re-export CCXT Position type (avoid manual duplication)
+export type { Position as CCXTPosition } from 'ccxt';
 
 // Extended connector interfaces with specific methods
 export interface IConnectorWithMarketTypes {

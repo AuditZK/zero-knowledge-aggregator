@@ -9,6 +9,7 @@ import { getLogger } from './utils/secure-enclave-logger';
 import { TlsKeyGeneratorService } from './services/tls-key-generator.service';
 import { SevSnpAttestationService } from './services/sev-snp-attestation.service';
 import { E2EEncryptionService } from './services/e2e-encryption.service';
+import { DatabaseBackupService } from './services/database-backup.service';
 
 const logger = getLogger('REST-Server');
 const app = express();
@@ -276,6 +277,96 @@ app.post('/api/v1/credentials/connect', credentialsRateLimiter, async (req, res)
     return res.status(500).json({
       success: false,
       error: error.message || 'Failed to create connection'
+    });
+  }
+});
+
+// ============================================
+// DATABASE BACKUP ENDPOINTS (SOC 2 Compliance)
+// ============================================
+
+/**
+ * GET /api/v1/backup/status
+ * Get current backup status, health, and schedule info
+ */
+app.get('/api/v1/backup/status', async (_req, res) => {
+  try {
+    const backupService = container.resolve(DatabaseBackupService);
+    const status = await backupService.getStatus();
+
+    return res.json({
+      success: true,
+      backup: status,
+    });
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error('[REST] Failed to get backup status', { error: errorMessage });
+    return res.status(500).json({
+      success: false,
+      error: errorMessage,
+    });
+  }
+});
+
+/**
+ * GET /api/v1/backup/list
+ * List all available backup files
+ */
+app.get('/api/v1/backup/list', (_req, res) => {
+  try {
+    const backupService = container.resolve(DatabaseBackupService);
+    const backups = backupService.listBackups();
+
+    return res.json({
+      success: true,
+      backups,
+      count: backups.length,
+    });
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error('[REST] Failed to list backups', { error: errorMessage });
+    return res.status(500).json({
+      success: false,
+      error: errorMessage,
+    });
+  }
+});
+
+/**
+ * POST /api/v1/backup/trigger
+ * Manually trigger a backup (admin only - add auth in production)
+ */
+app.post('/api/v1/backup/trigger', async (_req, res) => {
+  try {
+    logger.info('[REST] Manual backup requested');
+    const backupService = container.resolve(DatabaseBackupService);
+    const result = await backupService.triggerManualBackup();
+
+    if (result.success) {
+      return res.json({
+        success: true,
+        message: 'Backup completed successfully',
+        backup: {
+          filename: result.filename,
+          sizeBytes: result.sizeBytes,
+          sizeMB: result.sizeBytes ? (result.sizeBytes / 1024 / 1024).toFixed(2) : null,
+          checksum: result.checksum,
+          durationMs: result.durationMs,
+          timestamp: result.timestamp,
+        },
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        error: result.error,
+      });
+    }
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error('[REST] Manual backup failed', { error: errorMessage });
+    return res.status(500).json({
+      success: false,
+      error: errorMessage,
     });
   }
 });

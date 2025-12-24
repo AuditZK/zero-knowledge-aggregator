@@ -42,7 +42,8 @@ export const serverConfig: ServerConfig = {
   logLevel: process.env.LOG_LEVEL || 'info',
   rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
   rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
-  dataRetentionDays: parseInt(process.env.DATA_RETENTION_DAYS || '30', 10),
+  // NOTE: Snapshots are NEVER auto-deleted (track record integrity)
+  // Deletion only on: user request (GDPR) or account closure
 };
 
 export const databaseConfig: DatabaseConfig = {

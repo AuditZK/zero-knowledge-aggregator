@@ -55,110 +55,41 @@ export interface LogEntry {
 }
 
 /**
- * TIER 1: Sensitive field patterns (ALWAYS redacted in all environments)
- * These fields will be replaced with '[REDACTED]' in log output
+ * TIER 1: Credential and secret field names (exact match, case-insensitive)
  */
-const TIER1_SENSITIVE_PATTERNS = [
-  // API credentials
-  /^api[-_]?key$/i,
-  /^api[-_]?secret$/i,
-  /^access[-_]?key$/i,
-  /^secret[-_]?key$/i,
+const TIER1_EXACT = new Set([
+  'apikey', 'apisecret', 'accesskey', 'secretkey', 'password', 'passwd', 'pwd',
+  'token', 'accesstoken', 'refreshtoken', 'bearertoken', 'jwt', 'encryptionkey',
+  'privatekey', 'secret', 'auth', 'authorization', 'credentials', 'passphrase'
+]);
 
-  // Passwords
-  /^password$/i,
-  /^passwd$/i,
-  /^pwd$/i,
+/**
+ * TIER 1: Substrings that trigger redaction if present anywhere in field name
+ */
+const TIER1_CONTAINS = ['encrypted', 'secret', 'password', 'token'];
 
-  // Tokens
-  /^token$/i,
-  /^access[-_]?token$/i,
-  /^refresh[-_]?token$/i,
-  /^bearer[-_]?token$/i,
-  /^jwt$/i,
+/**
+ * TIER 2: Business-sensitive exact field names (case-insensitive)
+ */
+const TIER2_EXACT = new Set([
+  'useruid', 'userid', 'accountid', 'customerid', 'exchange', 'exchangename',
+  'broker', 'platform', 'value', 'price', 'size', 'volume', 'synced', 'count',
+  'name', 'email', 'phone', 'address', 'ssn', 'taxid'
+]);
 
-  // Encryption keys
-  /^encryption[-_]?key$/i,
-  /^private[-_]?key$/i,
-  /^secret$/i,
-
-  // Authentication
-  /^auth$/i,
-  /^authorization$/i,
-  /^credentials$/i,
-  /^passphrase$/i,
-
-  // Encrypted data (field names containing 'encrypted')
-  /encrypted/i,
+/**
+ * TIER 2: Substrings that trigger redaction (financial/trading data)
+ */
+const TIER2_CONTAINS = [
+  'balance', 'equity', 'amount', 'total', 'pnl', 'profit', 'loss', 'fee',
+  'commission', 'deposit', 'withdrawal', 'trade', 'position', 'order', 'quantity', 'num'
 ];
 
 /**
- * TIER 2: Business-sensitive patterns (ALWAYS redacted - no exceptions)
- * These prevent leaking user identity, trading activity, and financial data
- *
- * SECURITY: TIER 2 is ALWAYS active regardless of environment for deterministic auditing.
- * Auditors can verify that NO sensitive business data ever leaves the enclave.
+ * Normalize field name for matching (lowercase, remove separators)
  */
-const TIER2_BUSINESS_PATTERNS = [
-  // User identification
-  /^user[-_]?uid$/i,
-  /^user[-_]?id$/i,
-  /^account[-_]?id$/i,
-  /^customer[-_]?id$/i,
-
-  // Exchange identification
-  /^exchange$/i,
-  /^exchange[-_]?name$/i,
-  /^broker$/i,
-  /^platform$/i,
-
-  // Financial amounts (any field with amount/balance/equity/value/price)
-  /balance/i,
-  /equity/i,
-  /amount/i,
-  /^value$/i,
-  /^price$/i,
-  /^total/i,
-  /pnl/i,
-  /profit/i,
-  /loss/i,
-  /fee/i,
-  /commission/i,
-  /deposit/i,
-  /withdrawal/i,
-
-  // Trading activity
-  /^trade/i,
-  /^position/i,
-  /^order/i,
-  /^quantity/i,
-  /^size$/i,
-  /^volume$/i,
-  /^synced$/i,
-  /^count$/i,
-  /^num/i,
-
-  // Personal identifiable information
-  /^name$/i,
-  /^email$/i,
-  /^phone$/i,
-  /^address$/i,
-  /^ssn$/i,
-  /^tax[-_]?id$/i,
-];
-
-/**
- * Check if a field name matches TIER 1 sensitive patterns (credentials, secrets)
- */
-function isTier1Sensitive(fieldName: string): boolean {
-  return TIER1_SENSITIVE_PATTERNS.some(pattern => pattern.test(fieldName));
-}
-
-/**
- * Check if a field name matches TIER 2 patterns (business data, user IDs, amounts)
- */
-function isTier2Sensitive(fieldName: string): boolean {
-  return TIER2_BUSINESS_PATTERNS.some(pattern => pattern.test(fieldName));
+function normalizeFieldName(fieldName: string): string {
+  return fieldName.toLowerCase().replaceAll(/[-_]/g, '');
 }
 
 /**
@@ -166,7 +97,20 @@ function isTier2Sensitive(fieldName: string): boolean {
  * SECURITY: BOTH tiers are ALWAYS active for deterministic auditing
  */
 function shouldRedactField(fieldName: string): boolean {
-  return isTier1Sensitive(fieldName) || isTier2Sensitive(fieldName);
+  const normalized = normalizeFieldName(fieldName);
+
+  // Check exact matches first (fast path)
+  if (TIER1_EXACT.has(normalized) || TIER2_EXACT.has(normalized)) return true;
+
+  // Check substring matches
+  for (const substr of TIER1_CONTAINS) {
+    if (normalized.includes(substr)) return true;
+  }
+  for (const substr of TIER2_CONTAINS) {
+    if (normalized.includes(substr)) return true;
+  }
+
+  return false;
 }
 
 /**

@@ -3,6 +3,7 @@ import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repos
 import { ExchangeConnectionRepository } from '../core/repositories/exchange-connection-repository';
 import { UserRepository } from '../core/repositories/user-repository';
 import { UniversalConnectorCacheService } from '../core/services/universal-connector-cache.service';
+import { ReportSigningService } from './report-signing.service';
 import type { SnapshotData, IConnectorWithMarketTypes, IConnectorWithBalanceBreakdown, IConnectorWithBalance, MarketBalanceBreakdown, BreakdownByMarket } from '../types';
 import { MarketType, getFilteredMarketTypes } from '../types/snapshot-breakdown';
 import { getLogger } from '../utils/secure-enclave-logger';
@@ -57,6 +58,7 @@ export class EquitySnapshotAggregator {
     @inject(ExchangeConnectionRepository) private readonly connectionRepo: ExchangeConnectionRepository,
     @inject(UserRepository) private readonly userRepo: UserRepository,
     @inject(UniversalConnectorCacheService) private readonly connectorCache: UniversalConnectorCacheService,
+    @inject(ReportSigningService) private readonly signingService: ReportSigningService,
   ) {}
   // SECURITY: No TradeRepository - trades are fetched from API and aggregated in memory only
 
@@ -472,7 +474,8 @@ export class EquitySnapshotAggregator {
   }
 
   /**
-   * Save snapshot to database
+   * Save snapshot to database with cryptographic signature
+   * SECURITY: Signs the snapshot data to prove it was ingested from the exchange API
    */
   private async saveSnapshot(params: {
     userUid: string;
@@ -487,8 +490,8 @@ export class EquitySnapshotAggregator {
 
     const totalRealizedBalance = globalEquity - totalUnrealizedPnl;
 
-    const snapshot: SnapshotData = {
-      id: `${userUid}-${exchange}-${currentSnapshot.toISOString()}`,
+    // Build snapshot data (without signature fields first)
+    const snapshotBase = {
       userUid,
       timestamp: currentSnapshot.toISOString(),
       exchange,
@@ -498,11 +501,32 @@ export class EquitySnapshotAggregator {
       deposits: 0, // Cash flow tracking not yet implemented
       withdrawals: 0, // Cash flow tracking not yet implemented
       breakdown_by_market: breakdown,
+    };
+
+    // Sign the snapshot at ingestion (chain of custody proof)
+    const signatureData = this.signingService.signSnapshot(snapshotBase);
+
+    // Create complete snapshot with signature
+    const snapshot: SnapshotData = {
+      id: `${userUid}-${exchange}-${currentSnapshot.toISOString()}`,
+      ...snapshotBase,
+      // Cryptographic signature for chain of custody
+      ingestionSignature: signatureData.ingestionSignature,
+      ingestionPublicKey: signatureData.ingestionPublicKey,
+      snapshotHash: signatureData.snapshotHash,
+      ingestedAt: signatureData.ingestedAt,
       createdAt: new Date(),
       updatedAt: new Date()
     };
 
     await this.snapshotDataRepo.upsertSnapshotData(snapshot);
+
+    logger.debug('Snapshot saved with signature', {
+      userUid,
+      exchange,
+      timestamp: currentSnapshot.toISOString(),
+      hashPrefix: signatureData.snapshotHash.substring(0, 16),
+    });
   }
 
   async backfillIbkrHistoricalSnapshots(userUid: string, exchange: string): Promise<void> {
@@ -535,7 +559,8 @@ export class EquitySnapshotAggregator {
         // Same output as crypto exchanges (daily snapshots), but source is different
         const snapshotDate = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
 
-        await this.snapshotDataRepo.upsertSnapshotData({
+        // Build snapshot base data
+        const snapshotBase = {
           userUid,
           exchange,
           timestamp: snapshotDate.toISOString(),
@@ -545,11 +570,22 @@ export class EquitySnapshotAggregator {
           deposits: 0, // Cash flow extraction from IBKR Flex not yet implemented
           withdrawals: 0, // Cash flow extraction from IBKR Flex not yet implemented
           breakdown_by_market: entry.breakdown
+        };
+
+        // Sign the snapshot at ingestion (chain of custody proof)
+        const signatureData = this.signingService.signSnapshot(snapshotBase);
+
+        await this.snapshotDataRepo.upsertSnapshotData({
+          ...snapshotBase,
+          ingestionSignature: signatureData.ingestionSignature,
+          ingestionPublicKey: signatureData.ingestionPublicKey,
+          snapshotHash: signatureData.snapshotHash,
+          ingestedAt: signatureData.ingestedAt,
         });
 
         processedCount++;
       }
-      logger.info(`IBKR historical backfill completed for ${userUid}: ${processedCount} daily snapshots created, ${skippedCount} days skipped`);
+      logger.info(`IBKR historical backfill completed for ${userUid}: ${processedCount} signed daily snapshots created, ${skippedCount} days skipped`);
     } catch (error) { logger.error(`Failed to backfill IBKR historical snapshots for ${userUid}`, error); throw error; }
   }
 }
