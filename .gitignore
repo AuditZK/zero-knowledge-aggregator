@@ -67,3 +67,4 @@ client-encrypt-helper.js
 # Development & testing
 api-tests.http
 AUDIT_PROMPT.md
+AUDIT_REPORT.txt
