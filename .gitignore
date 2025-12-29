@@ -70,6 +70,9 @@ AUDIT_PROMPT.md
 AUDIT_REPORT.txt
 docs/AUDIT_PROMPT.md
 docs/AUDIT_REPORT.txt
+scripts/seed-test-data.ts
+scripts/migrate-to-hardware-keys.ts
+scripts/audit-project.py
 
 # Wiki (managed in separate .wiki repository)
 wiki/
