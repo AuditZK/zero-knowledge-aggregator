@@ -9,9 +9,9 @@
     "outDir": "./dist",
     "rootDir": "./src",
 
-    // Strict Type Checking (PHASE 2 completed: noImplicitAny, strictNullChecks, noImplicitReturns)
+    // Strict Type Checking (100% strict mode enabled)
     "strict": true,
-    "strictPropertyInitialization": false,  // tsyringe DI injects properties
+    "strictPropertyInitialization": true,
 
     // Additional Strictness
     "noImplicitReturns": true,
