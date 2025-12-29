@@ -1,6 +1,6 @@
 import * as crypto from 'crypto';
 import { injectable } from 'tsyringe';
-import { getLogger } from '../utils/secure-enclave-logger';
+import { getLogger, extractErrorMessage } from '../utils/secure-enclave-logger';
 
 const logger = getLogger('E2EEncryption');
 
@@ -135,8 +135,8 @@ export class E2EEncryptionService {
       });
 
       return decrypted;
-    } catch (error: any) {
-      logger.error('[E2E] Decryption failed', { error: error.message });
+    } catch (error: unknown) {
+      logger.error('[E2E] Decryption failed', { error: extractErrorMessage(error) });
       throw new Error('Failed to decrypt credentials: Invalid encryption or corrupted data');
     }
   }

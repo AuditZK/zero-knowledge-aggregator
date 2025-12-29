@@ -5,7 +5,7 @@ import rateLimit from 'express-rate-limit';
 import { container } from 'tsyringe';
 import { EnclaveWorker } from './enclave-worker';
 import { CreateUserConnectionRequestSchema } from './validation/grpc-schemas';
-import { getLogger } from './utils/secure-enclave-logger';
+import { getLogger, extractErrorMessage } from './utils/secure-enclave-logger';
 import { TlsKeyGeneratorService } from './services/tls-key-generator.service';
 import { SevSnpAttestationService } from './services/sev-snp-attestation.service';
 import { E2EEncryptionService } from './services/e2e-encryption.service';
@@ -64,8 +64,8 @@ app.get('/api/v1/tls/fingerprint', (_req, res) => {
       algorithm: 'SHA-256',
       usage: 'Compare with attestation report to verify TLS cert authenticity'
     });
-  } catch (error: any) {
-    return res.status(500).json({ error: error.message });
+  } catch (error: unknown) {
+    return res.status(500).json({ error: extractErrorMessage(error) });
   }
 });
 
@@ -124,9 +124,9 @@ app.get('/api/v1/attestation', async (_req, res) => {
           : 'WARNING: TLS fingerprint not bound - MITM possible'
       }
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     logger.error('[REST] Attestation request failed:', error);
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: extractErrorMessage(error) });
   }
 });
 
@@ -270,12 +270,12 @@ app.post('/api/v1/credentials/connect', credentialsRateLimiter, async (req, res)
       message: 'Credentials encrypted and stored in enclave'
     });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     logger.error('[REST] Connection creation failed:', error);
 
     return res.status(500).json({
       success: false,
-      error: error.message || 'Failed to create connection'
+      error: extractErrorMessage(error) || 'Failed to create connection'
     });
   }
 });
