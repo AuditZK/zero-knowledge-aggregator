@@ -68,6 +68,8 @@ client-encrypt-helper.js
 api-tests.http
 AUDIT_PROMPT.md
 AUDIT_REPORT.txt
+docs/AUDIT_PROMPT.md
+docs/AUDIT_REPORT.txt
 
 # Wiki (managed in separate .wiki repository)
 wiki/
