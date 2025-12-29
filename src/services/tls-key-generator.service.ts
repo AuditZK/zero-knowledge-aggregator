@@ -210,11 +210,15 @@ export class TlsKeyGeneratorService {
 
   /**
    * Build Validity structure
+   * UTCTime format: YYMMDDHHMMSSZ (13 chars total)
    */
   private buildValidity(notBefore: Date, notAfter: Date): Buffer {
     const formatTime = (d: Date) => {
-      const str = d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-      return Buffer.from(str.slice(2, 15) + 'Z', 'ascii'); // UTCTime
+      // ISO: 2025-12-29T00:40:30.000Z -> UTCTime: 251229004030Z
+      const str = d.toISOString()
+        .replace(/[-:T]/g, '')  // Remove dashes, colons, and T separator
+        .replace(/\.\d{3}/, ''); // Remove milliseconds
+      return Buffer.from(str.slice(2, 14) + 'Z', 'ascii'); // YYMMDDHHMMSSZ
     };
     const nb = this.wrapAsn1(0x17, formatTime(notBefore));
     const na = this.wrapAsn1(0x17, formatTime(notAfter));
