@@ -56,14 +56,14 @@ if (process.env.NODE_ENV === 'production') {
 // Load all environment variables
 const DATABASE_URL = getEnvVar('database-url', 'DATABASE_URL') || process.env.DATABASE_URL;
 const JWT_SECRET = getEnvVar('jwt-secret', 'JWT_SECRET') || process.env.JWT_SECRET;
-const ENCRYPTION_KEY = getEnvVar('encryption-key', 'ENCRYPTION_KEY') || process.env.ENCRYPTION_KEY;
+const _ENCRYPTION_KEY = getEnvVar('encryption-key', 'ENCRYPTION_KEY') || process.env.ENCRYPTION_KEY;
 const LOG_LEVEL = getEnvVar('log-level', 'LOG_LEVEL') || process.env.LOG_LEVEL;
 
 // CRITICAL: All required environment variables for production
 const requiredEnvVars: Record<string, string | undefined> = {
   DATABASE_URL,
   JWT_SECRET,
-  ENCRYPTION_KEY,
+  ENCRYPTION_KEY: _ENCRYPTION_KEY,
 };
 
 const missingVars = Object.entries(requiredEnvVars)
@@ -116,7 +116,7 @@ export const databaseConfig: DatabaseConfig = {
 };
 
 // Export encryption key for EncryptionService
-export const ENCRYPTION_KEY = ENCRYPTION_KEY!;
+export const ENCRYPTION_KEY = _ENCRYPTION_KEY!;
 
 export const isDevelopment = serverConfig.nodeEnv === 'development';
 export const isProduction = serverConfig.nodeEnv === 'production';
