@@ -135,7 +135,14 @@ export class PerformanceMetricsService {
   private aggregateToDailyData(snapshots: Array<{
     timestamp: string;
     totalEquity: number;
-    breakdown_by_market?: any;
+    breakdown_by_market?: {
+      global?: {
+        volume?: number;
+        orders?: number;
+        trading_fees?: number;
+        funding_fees?: number;
+      };
+    };
   }>): DailyDataPoint[] {
     // Group snapshots by date (YYYY-MM-DD)
     const byDate = new Map<string, typeof snapshots>();

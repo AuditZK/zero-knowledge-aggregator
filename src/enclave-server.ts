@@ -291,12 +291,23 @@ export class EnclaveServer {
 
       // Convert to gRPC format with market breakdown
       // Supports both crypto (spot/swap) and traditional (stocks/futures/cfd) categories
+
+      // Market metrics data structure
+      interface MarketMetricsData {
+        equity?: number;
+        available_margin?: number;
+        volume?: number;
+        trades?: number;
+        trading_fees?: number;
+        funding_fees?: number;
+      }
+
       const response = {
         snapshots: snapshots.map(snapshot => {
-          const bd = snapshot.breakdown as Record<string, any> | undefined;
+          const bd = snapshot.breakdown as Record<string, MarketMetricsData> | undefined;
 
           // Helper to map market metrics
-          const mapMetrics = (data: any) => data ? {
+          const mapMetrics = (data: MarketMetricsData | undefined) => data ? {
             equity: data.equity || 0,
             available_margin: data.available_margin || 0,
             volume: data.volume || 0,
