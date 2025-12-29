@@ -520,5 +520,5 @@ This code is published for transparency and audit purposes. Third-party deployme
 
 ## Contact
 
-- **Security Email**: security@trackrecord.com (for vulnerabilities)
-- **GitHub Issues**: https://github.com/Jimmy7892/track-return-enclave/issues (for code questions)
+- **Support Email**: support@auditzk.com
+- **GitHub Issues**: https://github.com/AuditZK/zero-knowledge-aggregator/issues
