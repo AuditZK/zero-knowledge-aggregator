@@ -65,7 +65,8 @@ FROM node:20-alpine
 RUN apk add --no-cache \
     openssl \
     ca-certificates \
-    tini
+    tini \
+    curl
 
 # Copy snpguest binary for SEV-SNP attestation
 COPY --from=snpguest-builder /usr/local/bin/snpguest /usr/bin/snpguest
