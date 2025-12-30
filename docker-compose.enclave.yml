@@ -13,14 +13,11 @@ services:
     container_name: enclave_service
     restart: unless-stopped
     environment:
-      NODE_ENV: ${NODE_ENV:-production}
+      # Production mode: secrets loaded from GCP VM metadata
+      NODE_ENV: production
       ENCLAVE_PORT: 50051
       REST_PORT: 3050
-      # Database: postgres-enclave on VPS (source de vérité)
-      DATABASE_URL: ${DATABASE_URL}
-      JWT_SECRET: ${JWT_SECRET}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_LEVEL: info
       METRICS_ENABLED: "true"
       METRICS_PORT: 9092
       SKIP_ATTESTATION: ${SKIP_ATTESTATION:-false}
