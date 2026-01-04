@@ -66,6 +66,9 @@ interface FlexCache {
 export class IbkrFlexService {
   private readonly baseUrl = 'https://ndcdyn.interactivebrokers.com/Universal/servlet';
   private readonly flexCache = new Map<string, FlexCache>();
+  // Track in-flight requests to prevent duplicate concurrent API calls
+  // This fixes rate limit errors (1018) when Promise.all triggers multiple fetches
+  private readonly inflightRequests = new Map<string, Promise<string>>();
   // IBKR Flex data is daily snapshots, not real-time - cache for 30 minutes
   // This prevents rate limiting (Error 1018) during sync operations
   private readonly CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
@@ -324,6 +327,7 @@ export class IbkrFlexService {
     const cacheKey = `${token}:${queryId}`;
     const now = Date.now();
 
+    // Check cache first
     const cached = this.flexCache.get(cacheKey);
     if (cached && (now - cached.timestamp) < this.CACHE_TTL_MS) {
       const age = Math.round((now - cached.timestamp) / 1000);
@@ -331,21 +335,42 @@ export class IbkrFlexService {
       return cached.xmlData;
     }
 
-    logger.debug('Flex cache MISS - fetching from API', { queryId });
-
-    const referenceCode = await this.requestFlexReport(token, queryId);
-    const xmlData = await this.getFlexStatement(token, referenceCode);
-
-    this.flexCache.set(cacheKey, { xmlData, timestamp: now });
-
-    // Cleanup entries older than 1 hour (well past the 30min TTL)
-    for (const [key, value] of this.flexCache.entries()) {
-      if (now - value.timestamp > 60 * 60 * 1000) {
-        this.flexCache.delete(key);
-      }
+    // Check if request already in-flight (prevents duplicate concurrent requests)
+    const inflight = this.inflightRequests.get(cacheKey);
+    if (inflight) {
+      logger.debug('Reusing in-flight Flex request', { queryId });
+      return inflight;
     }
 
-    logger.debug('Flex data cached', { queryId, cacheSize: this.flexCache.size });
-    return xmlData;
+    logger.debug('Flex cache MISS - fetching from API', { queryId });
+
+    // Create and track the request promise
+    const requestPromise = (async () => {
+      const referenceCode = await this.requestFlexReport(token, queryId);
+      const xmlData = await this.getFlexStatement(token, referenceCode);
+
+      this.flexCache.set(cacheKey, { xmlData, timestamp: Date.now() });
+
+      // Cleanup entries older than 1 hour (well past the 30min TTL)
+      const cleanupTime = Date.now();
+      for (const [key, value] of this.flexCache.entries()) {
+        if (cleanupTime - value.timestamp > 60 * 60 * 1000) {
+          this.flexCache.delete(key);
+        }
+      }
+
+      logger.debug('Flex data cached', { queryId, cacheSize: this.flexCache.size });
+      return xmlData;
+    })();
+
+    // Track in-flight request
+    this.inflightRequests.set(cacheKey, requestPromise);
+
+    // Clean up in-flight tracking when done (success or failure)
+    requestPromise.finally(() => {
+      this.inflightRequests.delete(cacheKey);
+    });
+
+    return requestPromise;
   }
 }
