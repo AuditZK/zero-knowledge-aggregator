@@ -10,7 +10,7 @@ echo ""
 
 # Configuration
 PROJECT_DIR="/root/zero-knowledge-aggregator"
-BRANCH="feature/integrate-performance-metrics"
+BRANCH="main"
 
 # Step 1: Navigate to project directory
 echo "📁 Navigating to project directory..."
