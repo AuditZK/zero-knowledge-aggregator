@@ -1,6 +1,6 @@
 import { injectable, inject } from 'tsyringe';
 import { PrismaClient } from '@prisma/client';
-import { getLogger } from '../utils/secure-enclave-logger';
+import { getLogger, extractErrorMessage } from '../utils/secure-enclave-logger';
 
 const logger = getLogger('DEKRepository');
 
@@ -53,7 +53,7 @@ export class DEKRepository {
 
       return dek;
     } catch (error) {
-      logger.error('Failed to retrieve active DEK', { error });
+      logger.error('Failed to retrieve active DEK', { error: extractErrorMessage(error) });
       throw error;
     }
   }
@@ -101,7 +101,7 @@ export class DEKRepository {
 
       return dek;
     } catch (error) {
-      logger.error('Failed to create DEK', { error });
+      logger.error('Failed to create DEK', { error: extractErrorMessage(error) });
       throw error;
     }
   }
@@ -138,7 +138,7 @@ export class DEKRepository {
 
       return deks;
     } catch (error) {
-      logger.error('Failed to retrieve all DEKs', { error });
+      logger.error('Failed to retrieve all DEKs', { error: extractErrorMessage(error) });
       throw error;
     }
   }
@@ -165,7 +165,7 @@ export class DEKRepository {
 
       return deks;
     } catch (error) {
-      logger.error('Failed to retrieve DEKs by master key ID', { error });
+      logger.error('Failed to retrieve DEKs by master key ID', { error: extractErrorMessage(error) });
       throw error;
     }
   }
@@ -196,7 +196,7 @@ export class DEKRepository {
 
       return result.count;
     } catch (error) {
-      logger.error('Failed to delete inactive DEKs', { error });
+      logger.error('Failed to delete inactive DEKs', { error: extractErrorMessage(error) });
       throw error;
     }
   }
@@ -214,7 +214,7 @@ export class DEKRepository {
 
       return count > 0;
     } catch (error) {
-      logger.error('Failed to check for active DEK', { error });
+      logger.error('Failed to check for active DEK', { error: extractErrorMessage(error) });
       throw error;
     }
   }

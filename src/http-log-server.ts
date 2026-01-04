@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import http from 'http';
 import { container } from 'tsyringe';
-import { getLogBuffer, clearLogBuffer, getLogger } from './utils/secure-enclave-logger';
+import { getLogBuffer, clearLogBuffer, getLogger, extractErrorMessage } from './utils/secure-enclave-logger';
 import { SevSnpAttestationService } from './services/sev-snp-attestation.service';
 
 const logger = getLogger('HttpLogServer');
@@ -93,7 +93,7 @@ export class HttpLogServer {
           timestamp: new Date().toISOString()
         });
       } catch (error) {
-        logger.error('Attestation endpoint failed', { error });
+        logger.error('Attestation endpoint failed', { error: extractErrorMessage(error) });
         res.status(500).json({
           verified: false,
           enclave: false,
@@ -117,7 +117,7 @@ export class HttpLogServer {
           timestamp: new Date().toISOString()
         });
       } catch (error) {
-        logger.error('Attestation info endpoint failed', { error });
+        logger.error('Attestation info endpoint failed', { error: extractErrorMessage(error) });
         res.status(500).json({
           error: 'Failed to retrieve attestation info',
           timestamp: new Date().toISOString()
