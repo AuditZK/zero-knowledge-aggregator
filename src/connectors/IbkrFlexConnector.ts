@@ -56,9 +56,12 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
 
   async getHistoricalSummaries(): Promise<Array<{ date: string; breakdown: Record<string, { equity: number; available_margin: number; volume: number; trades: number; trading_fees: number; funding_fees: number }> }>> {
     return this.withErrorHandling('getHistoricalSummaries', async () => {
+      // FIX: Fetch XML once, then parse both data types from same response
+      // This prevents rate limiting (Error 1018) from concurrent API calls
+      const xmlData = await this.flexService.getFlexDataCached(this.flexToken, this.queryId);
       const [summaries, trades] = await Promise.all([
-        this.fetchFlexData(xml => this.flexService.parseAccountSummary(xml)),
-        this.fetchFlexData(xml => this.flexService.parseTrades(xml))
+        this.flexService.parseAccountSummary(xmlData),
+        this.flexService.parseTrades(xmlData)
       ]);
 
       if (summaries.length === 0) {return [];}
@@ -186,9 +189,12 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
 
   async getBalanceBreakdown(): Promise<Record<string, { equity: number; available_margin: number; volume: number; trades: number; trading_fees: number; funding_fees: number }>> {
     return this.withErrorHandling('getBalanceBreakdown', async () => {
+      // FIX: Fetch XML once, then parse both data types from same response
+      // This prevents rate limiting (Error 1018) from concurrent API calls
+      const xmlData = await this.flexService.getFlexDataCached(this.flexToken, this.queryId);
       const [summaries, trades] = await Promise.all([
-        this.fetchFlexData(xml => this.flexService.parseAccountSummary(xml)),
-        this.fetchFlexData(xml => this.flexService.parseTrades(xml))
+        this.flexService.parseAccountSummary(xmlData),
+        this.flexService.parseTrades(xmlData)
       ]);
 
       if (summaries.length === 0) {throw new Error('No account data found in Flex report');}
