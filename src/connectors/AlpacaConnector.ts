@@ -121,7 +121,6 @@ export class AlpacaConnector extends RestBrokerConnector {
   // ========================================
   // Alpaca-specific methods
   // ========================================
-  // Note: Capital flows not supported via API (uses default implementation from BaseExchangeConnector)
 
   /**
    * Test connection to Alpaca
@@ -137,5 +136,26 @@ export class AlpacaConnector extends RestBrokerConnector {
       this.logger.error('Alpaca connection test error', error);
       return false;
     }
+  }
+
+  /**
+   * Get cash deposits and withdrawals since a date
+   * Uses Alpaca Activity Types: CSD (deposit), CSW (withdrawal)
+   */
+  async getCashflows(since: Date): Promise<{ deposits: number; withdrawals: number }> {
+    return this.withErrorHandling('getCashflows', async () => {
+      const cashflows = await this.api.getCashflows(since);
+
+      const deposits = cashflows
+        .filter(cf => cf.type === 'deposit')
+        .reduce((sum, cf) => sum + cf.amount, 0);
+
+      const withdrawals = cashflows
+        .filter(cf => cf.type === 'withdrawal')
+        .reduce((sum, cf) => sum + cf.amount, 0);
+
+      this.logger.info(`Alpaca cashflows since ${since.toISOString()}: +${deposits.toFixed(2)} deposits, -${withdrawals.toFixed(2)} withdrawals`);
+      return { deposits, withdrawals };
+    });
   }
 }
