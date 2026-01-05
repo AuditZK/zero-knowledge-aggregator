@@ -4,6 +4,7 @@ import { ExchangeCredentials } from '../../types';
 import { CcxtExchangeConnector } from '../../connectors/CcxtExchangeConnector';
 import { IbkrFlexConnector } from '../../connectors/IbkrFlexConnector';
 import { AlpacaConnector } from '../../connectors/AlpacaConnector';
+import { TradeStationConnector } from '../../connectors/TradeStationConnector';
 import { IbkrFlexService } from '../ibkr-flex-service';
 import { getLogger } from '../../utils/secure-enclave-logger';
 
@@ -31,6 +32,7 @@ const logger = getLogger('ExchangeConnectorFactory');
  * Supported stock brokers:
  *   - IBKR (ibkr) - Flex Query API
  *   - Alpaca (alpaca) - REST API
+ *   - TradeStation (tradestation) - OAuth 2.0 REST API
  */
 export class ExchangeConnectorFactory {
   /**
@@ -60,7 +62,7 @@ export class ExchangeConnectorFactory {
   /**
    * List of stock brokers with custom connectors
    */
-  private static readonly CUSTOM_BROKERS = ['ibkr', 'alpaca'];
+  private static readonly CUSTOM_BROKERS = ['ibkr', 'alpaca', 'tradestation'];
 
   /**
    * Create an exchange connector instance
@@ -110,6 +112,9 @@ export class ExchangeConnectorFactory {
 
       case 'alpaca':
         return new AlpacaConnector(credentials);
+
+      case 'tradestation':
+        return new TradeStationConnector(credentials);
 
       default:
         throw new Error(`Custom broker ${exchange} not implemented`);
