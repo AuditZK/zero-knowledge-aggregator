@@ -45,6 +45,17 @@ interface AlpacaSDKActivity {
   order_status?: string;
   leaves_qty?: string;
   cum_qty?: string;
+  net_amount?: string;
+  description?: string;
+  status?: string;
+}
+
+export interface AlpacaCashflow {
+  id: string;
+  type: 'deposit' | 'withdrawal';
+  amount: number;
+  date: Date;
+  status: string;
 }
 
 @injectable()
@@ -136,6 +147,33 @@ export class AlpacaApiService {
       }));
     } catch (error) {
       logger.error('Failed to fetch Alpaca trade history:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get cash transfers (deposits and withdrawals)
+   * Uses activity types: CSD (Cash Deposit), CSW (Cash Withdrawal)
+   */
+  async getCashflows(since: Date): Promise<AlpacaCashflow[]> {
+    try {
+      // Fetch both deposits (CSD) and withdrawals (CSW)
+      const activities = await this.alpaca.getAccountActivities({
+        activityTypes: 'CSD,CSW',
+        after: since.toISOString(),
+        direction: 'desc',
+        pageSize: 500,
+      } as any);
+
+      return (activities as AlpacaSDKActivity[]).map((activity) => ({
+        id: activity.id,
+        type: activity.activity_type === 'CSD' ? 'deposit' as const : 'withdrawal' as const,
+        amount: Math.abs(parseFloat(activity.net_amount || '0')),
+        date: new Date(activity.transaction_time),
+        status: activity.status || 'completed',
+      }));
+    } catch (error) {
+      logger.error('Failed to fetch Alpaca cashflows', error);
       return [];
     }
   }
