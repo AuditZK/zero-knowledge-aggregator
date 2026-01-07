@@ -21,7 +21,8 @@ const logger = getLogger('ReportGenerator');
 
 // Constants
 const TRADING_DAYS_PER_YEAR = 252;
-const RISK_FREE_RATE = 2.5; // 2.5% annual risk-free rate
+// NOTE: Risk-free rate set to 0 to align with Analytics Service calculations
+const RISK_FREE_RATE = 0;
 
 /**
  * Report Generator Service
@@ -194,6 +195,7 @@ export class ReportGeneratorService {
 
   /**
    * Convert snapshot data to daily returns
+   * ALIGNED with Analytics Service TWR (Time-Weighted Return) calculation
    */
   private convertSnapshotsToDailyReturns(snapshots: Array<{
     timestamp: string;
@@ -216,7 +218,7 @@ export class ReportGeneratorService {
     }
 
     const dailyReturns: DailyReturn[] = [];
-    let previousEquity: number | null = null;
+    let previousCloseEquity: number | null = null;
     let cumulativeReturn = 1.0;
 
     // Sort dates chronologically
@@ -234,13 +236,15 @@ export class ReportGeneratorService {
       const closeSnap = daySnapshots[daySnapshots.length - 1];
       if (!closeSnap) continue;
 
-      // Adjust for deposits/withdrawals
-      const adjustedEquity = closeSnap.totalEquity - closeSnap.deposits + closeSnap.withdrawals;
+      // TWR formula aligned with Analytics:
+      // adjustedReturn = closeEquity - previousCloseEquity - netDeposits
+      // dailyReturnPct = adjustedReturn / previousCloseEquity * 100
+      const netDeposits = closeSnap.deposits - closeSnap.withdrawals;
 
-      // Calculate daily return
       let dailyReturnPct = 0;
-      if (previousEquity !== null && previousEquity > 0) {
-        dailyReturnPct = ((adjustedEquity - previousEquity) / previousEquity) * 100;
+      if (previousCloseEquity !== null && previousCloseEquity > 0) {
+        const adjustedReturn = closeSnap.totalEquity - previousCloseEquity - netDeposits;
+        dailyReturnPct = (adjustedReturn / previousCloseEquity) * 100;
         cumulativeReturn *= (1 + dailyReturnPct / 100);
       }
 
@@ -253,7 +257,8 @@ export class ReportGeneratorService {
         nav: closeSnap.totalEquity
       });
 
-      previousEquity = adjustedEquity;
+      // Use RAW equity for next day's calculation (aligned with Analytics)
+      previousCloseEquity = closeSnap.totalEquity;
     }
 
     return dailyReturns;
@@ -336,8 +341,8 @@ export class ReportGeneratorService {
     // Max Drawdown
     const maxDrawdown = this.calculateMaxDrawdown(dailyReturns);
 
-    // Calmar Ratio
-    const calmarRatio = Math.abs(maxDrawdown) > 0 ? annualizedReturn / Math.abs(maxDrawdown) : 0;
+    // Calmar Ratio (maxDrawdown is now positive, aligned with Analytics)
+    const calmarRatio = maxDrawdown > 0 ? annualizedReturn / maxDrawdown : 0;
 
     return {
       totalReturn,
@@ -478,9 +483,10 @@ export class ReportGeneratorService {
 
   /**
    * Calculate drawdown data
+   * ALIGNED with Analytics: uses NAV (equity) for consistency
    */
   private calculateDrawdownData(dailyReturns: DailyReturn[]): DrawdownData {
-    let peak = dailyReturns[0]?.cumulativeReturn || 1;
+    let peak = dailyReturns[0]?.nav || 0;
     let maxDrawdownDepth = 0;
     let maxDrawdownDuration = 0;
     let currentDrawdownStart: number | null = null;
@@ -490,7 +496,7 @@ export class ReportGeneratorService {
       const currentDay = dailyReturns[i];
       if (!currentDay) continue;
 
-      const current = currentDay.cumulativeReturn;
+      const current = currentDay.nav;
 
       if (current >= peak) {
         // New peak - end of drawdown period
@@ -502,11 +508,11 @@ export class ReportGeneratorService {
 
           const startDay = dailyReturns[currentDrawdownStart];
           if (startDay) {
-            const slicedReturns = dailyReturns.slice(currentDrawdownStart, i + 1).map(d => d.cumulativeReturn);
+            const slicedNavs = dailyReturns.slice(currentDrawdownStart, i + 1).map(d => d.nav);
             drawdownPeriods.push({
               startDate: startDay.date,
               endDate: currentDay.date,
-              depth: ((peak - Math.min(...slicedReturns)) / peak) * 100,
+              depth: ((peak - Math.min(...slicedNavs)) / peak) * 100,
               duration,
               recovered: true
             });
@@ -531,7 +537,7 @@ export class ReportGeneratorService {
     // Handle ongoing drawdown
     const lastReturn = dailyReturns[dailyReturns.length - 1];
     const currentDrawdown = lastReturn
-      ? ((peak - lastReturn.cumulativeReturn) / peak) * 100
+      ? ((peak - lastReturn.nav) / peak) * 100
       : 0;
 
     if (currentDrawdownStart !== null) {
@@ -669,6 +675,7 @@ export class ReportGeneratorService {
 
   /**
    * Calculate maximum drawdown
+   * ALIGNED with Analytics: uses NAV (equity) and returns POSITIVE value
    */
   private calculateMaxDrawdown(dailyReturns: DailyReturn[]): number {
     if (dailyReturns.length === 0) return 0;
@@ -676,20 +683,21 @@ export class ReportGeneratorService {
     const firstDay = dailyReturns[0];
     if (!firstDay) return 0;
 
-    let peak = firstDay.cumulativeReturn;
+    // Use NAV (equity) for drawdown calculation, aligned with Analytics
+    let peak = firstDay.nav;
     let maxDrawdown = 0;
 
     for (const day of dailyReturns) {
-      if (day.cumulativeReturn > peak) {
-        peak = day.cumulativeReturn;
+      if (day.nav > peak) {
+        peak = day.nav;
       }
 
-      const drawdown = ((peak - day.cumulativeReturn) / peak) * 100;
+      const drawdown = ((peak - day.nav) / peak) * 100;
       if (drawdown > maxDrawdown) {
         maxDrawdown = drawdown;
       }
     }
 
-    return -maxDrawdown; // Return as negative value
+    return maxDrawdown; // Return as POSITIVE value (aligned with Analytics)
   }
 }
