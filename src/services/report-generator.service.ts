@@ -196,6 +196,11 @@ export class ReportGeneratorService {
   /**
    * Convert snapshot data to daily returns
    * ALIGNED with Analytics Service TWR (Time-Weighted Return) calculation
+   *
+   * MULTI-EXCHANGE SUPPORT:
+   * - Groups snapshots by date AND exchange
+   * - Aggregates equity across all exchanges for each day
+   * - Handles new exchanges appearing (treats initial equity as deposit)
    */
   private convertSnapshotsToDailyReturns(snapshots: Array<{
     timestamp: string;
@@ -203,47 +208,103 @@ export class ReportGeneratorService {
     realizedBalance: number;
     deposits: number;
     withdrawals: number;
+    exchange?: string;
   }>): DailyReturn[] {
-    // Group snapshots by date
-    const byDate = new Map<string, typeof snapshots>();
+    // Group snapshots by date AND exchange
+    // Map<dateKey, Map<exchange, snapshot[]>>
+    const byDateAndExchange = new Map<string, Map<string, typeof snapshots>>();
 
     for (const snapshot of snapshots) {
       const dateKey = new Date(snapshot.timestamp).toISOString().split('T')[0];
       if (!dateKey) continue;
 
-      if (!byDate.has(dateKey)) {
-        byDate.set(dateKey, []);
+      const exchange = snapshot.exchange || 'unknown';
+
+      if (!byDateAndExchange.has(dateKey)) {
+        byDateAndExchange.set(dateKey, new Map());
       }
-      byDate.get(dateKey)!.push(snapshot);
+      const exchangeMap = byDateAndExchange.get(dateKey)!;
+
+      if (!exchangeMap.has(exchange)) {
+        exchangeMap.set(exchange, []);
+      }
+      exchangeMap.get(exchange)!.push(snapshot);
     }
 
     const dailyReturns: DailyReturn[] = [];
     let previousCloseEquity: number | null = null;
     let cumulativeReturn = 1.0;
 
+    // Track seen exchanges and their last known equity (for forward-fill)
+    const seenExchanges = new Set<string>();
+    const lastKnownEquity = new Map<string, number>();
+    const exchangeFirstEquity = new Map<string, number>();
+
     // Sort dates chronologically
-    const sortedDates = Array.from(byDate.keys()).sort();
+    const sortedDates = Array.from(byDateAndExchange.keys()).sort();
+    const isFirstDay = (dateKey: string) => dateKey === sortedDates[0];
+
+    // Find first equity for each exchange
+    for (const dateKey of sortedDates) {
+      const exchangeMap = byDateAndExchange.get(dateKey)!;
+      for (const [exchange, daySnapshots] of exchangeMap.entries()) {
+        if (!exchangeFirstEquity.has(exchange) && daySnapshots.length > 0) {
+          const sorted = [...daySnapshots].sort((a, b) =>
+            new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+          );
+          exchangeFirstEquity.set(exchange, sorted[0]!.totalEquity);
+        }
+      }
+    }
 
     for (const dateKey of sortedDates) {
-      const daySnapshots = byDate.get(dateKey);
-      if (!daySnapshots || daySnapshots.length === 0) continue;
+      const exchangeMap = byDateAndExchange.get(dateKey)!;
 
-      // Sort by timestamp and take the last snapshot of the day
-      daySnapshots.sort((a, b) =>
-        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-      );
+      // Aggregate equity, deposits, withdrawals across ALL exchanges for this day
+      let totalEquity = 0;
+      let totalDeposits = 0;
+      let totalWithdrawals = 0;
+      let virtualDeposit = 0;
 
-      const closeSnap = daySnapshots[daySnapshots.length - 1];
-      if (!closeSnap) continue;
+      // First, add data from exchanges that have snapshots today
+      for (const [exchange, daySnapshots] of exchangeMap.entries()) {
+        // Sort and take last snapshot of the day for this exchange
+        const sorted = [...daySnapshots].sort((a, b) =>
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+        const closeSnap = sorted[sorted.length - 1]!;
+
+        totalEquity += closeSnap.totalEquity;
+        totalDeposits += closeSnap.deposits;
+        totalWithdrawals += closeSnap.withdrawals;
+
+        // Update last known equity for this exchange
+        lastKnownEquity.set(exchange, closeSnap.totalEquity);
+
+        // Check if this is a NEW exchange appearing after the first day
+        if (!seenExchanges.has(exchange)) {
+          seenExchanges.add(exchange);
+          if (!isFirstDay(dateKey)) {
+            // New exchange after first day - treat initial equity as virtual deposit
+            const firstEquity = exchangeFirstEquity.get(exchange) || closeSnap.totalEquity;
+            virtualDeposit += firstEquity;
+          }
+        }
+      }
+
+      // Forward-fill: add last known equity for exchanges not present today
+      for (const [exchange, equity] of lastKnownEquity.entries()) {
+        if (!exchangeMap.has(exchange)) {
+          totalEquity += equity;
+        }
+      }
 
       // TWR formula aligned with Analytics:
-      // adjustedReturn = closeEquity - previousCloseEquity - netDeposits
-      // dailyReturnPct = adjustedReturn / previousCloseEquity * 100
-      const netDeposits = closeSnap.deposits - closeSnap.withdrawals;
+      const netDeposits = totalDeposits - totalWithdrawals + virtualDeposit;
 
       let dailyReturnPct = 0;
       if (previousCloseEquity !== null && previousCloseEquity > 0) {
-        const adjustedReturn = closeSnap.totalEquity - previousCloseEquity - netDeposits;
+        const adjustedReturn = totalEquity - previousCloseEquity - netDeposits;
         dailyReturnPct = (adjustedReturn / previousCloseEquity) * 100;
         cumulativeReturn *= (1 + dailyReturnPct / 100);
       }
@@ -251,14 +312,13 @@ export class ReportGeneratorService {
       dailyReturns.push({
         date: dateKey,
         netReturn: dailyReturnPct,
-        benchmarkReturn: 0, // Will be filled if benchmark requested
-        outperformance: dailyReturnPct, // Will be updated if benchmark
+        benchmarkReturn: 0,
+        outperformance: dailyReturnPct,
         cumulativeReturn,
-        nav: closeSnap.totalEquity
+        nav: totalEquity
       });
 
-      // Use RAW equity for next day's calculation (aligned with Analytics)
-      previousCloseEquity = closeSnap.totalEquity;
+      previousCloseEquity = totalEquity;
     }
 
     return dailyReturns;
