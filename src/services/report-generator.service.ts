@@ -118,15 +118,19 @@ export class ReportGeneratorService {
         );
 
         if (benchmarkReturns.length > 0) {
+          // Create a map for fast date-based lookup
+          const benchmarkMap = new Map(benchmarkReturns.map(b => [b.date, b.return]));
+
           // Merge benchmark returns with daily returns
           const mergedReturns = this.mergeBenchmarkReturns(dailyReturns, benchmarkReturns);
           metrics.benchmarkMetrics = this.calculateBenchmarkMetrics(mergedReturns);
 
-          // Update daily returns with benchmark data
-          dailyReturns.forEach((dr, i) => {
-            if (mergedReturns[i]) {
-              dr.benchmarkReturn = mergedReturns[i].benchmarkReturn;
-              dr.outperformance = dr.netReturn - dr.benchmarkReturn;
+          // Update daily returns with benchmark data (by date, not by index)
+          dailyReturns.forEach((dr) => {
+            const benchReturn = benchmarkMap.get(dr.date);
+            if (benchReturn !== undefined) {
+              dr.benchmarkReturn = benchReturn;
+              dr.outperformance = dr.netReturn - benchReturn;
             }
           });
         }
