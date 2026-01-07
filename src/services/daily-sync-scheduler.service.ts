@@ -2,8 +2,10 @@ import { injectable, inject } from 'tsyringe';
 import * as cron from 'node-cron';
 import { UserRepository } from '../core/repositories/user-repository';
 import { ExchangeConnectionRepository } from '../core/repositories/exchange-connection-repository';
+import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repository';
 import { EquitySnapshotAggregator } from './equity-snapshot-aggregator';
 import { getLogger } from '../utils/secure-enclave-logger';
+import type { SnapshotData } from '../types';
 
 const logger = getLogger('DailySyncScheduler');
 
@@ -30,7 +32,8 @@ export class DailySyncSchedulerService {
   constructor(
     @inject(UserRepository) private readonly userRepo: UserRepository,
     @inject(ExchangeConnectionRepository) private readonly exchangeConnectionRepo: ExchangeConnectionRepository,
-    @inject(EquitySnapshotAggregator) private readonly snapshotAggregator: EquitySnapshotAggregator
+    @inject(EquitySnapshotAggregator) private readonly snapshotAggregator: EquitySnapshotAggregator,
+    @inject(SnapshotDataRepository) private readonly snapshotDataRepo: SnapshotDataRepository
   ) {}
 
   /**
@@ -77,10 +80,14 @@ export class DailySyncSchedulerService {
   /**
    * Execute daily sync for all active users
    *
+   * ATOMIC SYNC: For users with multiple exchanges, ALL snapshots are collected first,
+   * then saved in a single transaction. If ANY exchange fails, NO snapshots are saved.
+   * This prevents partial snapshots that would corrupt performance metrics.
+   *
    * This method:
    * 1. Gets all active users from database
-   * 2. For each user, syncs all their active exchange connections
-   * 3. Creates snapshots without rate limiting (automatic execution)
+   * 2. For each user, builds ALL exchange snapshots in memory
+   * 3. Saves ALL snapshots atomically (all-or-nothing per user)
    * 4. Logs all operations for audit trail
    */
   private async executeDailySync(): Promise<void> {
@@ -94,7 +101,8 @@ export class DailySyncSchedulerService {
 
     logger.info('Daily sync started', {
       timestamp: new Date().toISOString(),
-      mode: 'enclave_attested'
+      mode: 'enclave_attested',
+      strategy: 'atomic_multi_exchange'
     });
 
     try {
@@ -104,6 +112,7 @@ export class DailySyncSchedulerService {
 
       let totalSynced = 0;
       let totalFailed = 0;
+      let usersWithPartialFailure = 0;
 
       for (const user of users) {
         try {
@@ -115,22 +124,55 @@ export class DailySyncSchedulerService {
             continue;
           }
 
-          logger.info(`User ${user.uid}: Found ${connections.length} active exchange(s)`);
+          logger.info(`User ${user.uid}: Found ${connections.length} active exchange(s), starting atomic sync`);
 
-          // Sync each exchange
+          // ATOMIC SYNC: Build ALL snapshots in memory first
+          const snapshots: SnapshotData[] = [];
+          const failedExchanges: string[] = [];
+
           for (const connection of connections) {
             try {
-              // Perform snapshot sync (no rate limiting for automatic daily syncs)
-              await this.snapshotAggregator.updateCurrentSnapshot(user.uid, connection.exchange);
+              // Build snapshot WITHOUT saving (memory only)
+              const snapshot = await this.snapshotAggregator.buildSnapshot(user.uid, connection.exchange);
 
-              logger.info(`User ${user.uid}/${connection.exchange}: Snapshot created successfully`);
-              totalSynced++;
+              if (snapshot) {
+                snapshots.push(snapshot);
+                logger.info(`User ${user.uid}/${connection.exchange}: Snapshot built successfully (pending atomic save)`);
+              } else {
+                failedExchanges.push(connection.exchange);
+                logger.warn(`User ${user.uid}/${connection.exchange}: No snapshot returned (no connector)`);
+              }
 
               // Small delay between exchanges to avoid overwhelming APIs
               await new Promise(resolve => setTimeout(resolve, 500));
             } catch (error) {
-              logger.error(`User ${user.uid}/${connection.exchange}: Snapshot creation failed`, error);
-              totalFailed++;
+              failedExchanges.push(connection.exchange);
+              logger.error(`User ${user.uid}/${connection.exchange}: Failed to build snapshot`, error);
+            }
+          }
+
+          // ATOMIC SAVE: All-or-nothing per user
+          if (failedExchanges.length > 0) {
+            // At least one exchange failed - DO NOT save any snapshots for this user
+            logger.error(`User ${user.uid}: ATOMIC SYNC ABORTED - ${failedExchanges.length}/${connections.length} exchanges failed`, {
+              failed_exchanges: failedExchanges,
+              successful_exchanges: snapshots.map(s => s.exchange),
+              reason: 'Partial snapshots would corrupt performance metrics'
+            });
+            totalFailed += connections.length;
+            usersWithPartialFailure++;
+          } else if (snapshots.length > 0) {
+            // ALL exchanges succeeded - save atomically
+            try {
+              await this.snapshotDataRepo.upsertSnapshotsTransactional(snapshots);
+              logger.info(`User ${user.uid}: ATOMIC SYNC COMPLETED - ${snapshots.length} snapshots saved`, {
+                exchanges: snapshots.map(s => s.exchange),
+                total_equity: snapshots.reduce((sum, s) => sum + s.totalEquity, 0).toFixed(2)
+              });
+              totalSynced += snapshots.length;
+            } catch (saveError) {
+              logger.error(`User ${user.uid}: ATOMIC SAVE FAILED - transaction rolled back`, saveError);
+              totalFailed += snapshots.length;
             }
           }
         } catch (error) {
@@ -144,8 +186,10 @@ export class DailySyncSchedulerService {
       logger.info('Daily sync completed', {
         snapshots_created: totalSynced,
         failed: totalFailed,
+        users_with_partial_failure: usersWithPartialFailure,
         duration_sec: durationSec,
-        completed_at: new Date().toISOString()
+        completed_at: new Date().toISOString(),
+        strategy: 'atomic_multi_exchange'
       });
     } catch (error) {
       logger.error('DAILY SYNC FAILED', error);

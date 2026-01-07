@@ -145,6 +145,68 @@ export class SnapshotDataRepository {
     return result.count;
   }
 
+  /**
+   * Atomically upsert multiple snapshots in a single transaction.
+   * If ANY snapshot fails, ALL are rolled back (all-or-nothing).
+   *
+   * SECURITY: Ensures multi-exchange users have complete snapshots.
+   * Partial snapshots (missing exchanges) would corrupt performance metrics.
+   */
+  async upsertSnapshotsTransactional(
+    snapshots: Array<Omit<SnapshotData, 'id' | 'createdAt' | 'updatedAt'>>
+  ): Promise<SnapshotData[]> {
+    if (snapshots.length === 0) {
+      return [];
+    }
+
+    logger.info('Atomic snapshot upsert starting', {
+      count: snapshots.length,
+      exchanges: snapshots.map(s => s.exchange),
+      userUid: snapshots[0]?.userUid
+    });
+
+    const results = await this.prisma.$transaction(
+      snapshots.map(snapshot =>
+        this.prisma.snapshotData.upsert({
+          where: {
+            userUid_timestamp_exchange: {
+              userUid: snapshot.userUid,
+              timestamp: new Date(snapshot.timestamp),
+              exchange: snapshot.exchange,
+            },
+          },
+          update: {
+            totalEquity: snapshot.totalEquity,
+            realizedBalance: snapshot.realizedBalance,
+            unrealizedPnL: snapshot.unrealizedPnL,
+            deposits: snapshot.deposits,
+            withdrawals: snapshot.withdrawals,
+            breakdown_by_market: (snapshot.breakdown_by_market || undefined) as Prisma.InputJsonValue,
+            updatedAt: new Date(),
+          },
+          create: {
+            userUid: snapshot.userUid,
+            timestamp: new Date(snapshot.timestamp),
+            exchange: snapshot.exchange,
+            totalEquity: snapshot.totalEquity,
+            realizedBalance: snapshot.realizedBalance,
+            unrealizedPnL: snapshot.unrealizedPnL,
+            deposits: snapshot.deposits || 0,
+            withdrawals: snapshot.withdrawals || 0,
+            breakdown_by_market: (snapshot.breakdown_by_market || undefined) as Prisma.InputJsonValue,
+          },
+        })
+      )
+    );
+
+    logger.info('Atomic snapshot upsert completed', {
+      count: results.length,
+      userUid: snapshots[0]?.userUid
+    });
+
+    return results.map(this.mapPrismaSnapshotDataToSnapshotData);
+  }
+
   async deleteAllForUser(userUid: string, exchange?: string): Promise<number> {
     const where: Prisma.SnapshotDataWhereInput = { userUid };
     if (exchange) {
