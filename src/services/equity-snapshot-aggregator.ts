@@ -73,6 +73,22 @@ export class EquitySnapshotAggregator {
   }
 
   async updateCurrentSnapshot(userUid: string, exchange: string): Promise<void> {
+    const snapshot = await this.buildSnapshot(userUid, exchange);
+    if (!snapshot) {
+      return;
+    }
+    await this.snapshotDataRepo.upsertSnapshotData(snapshot);
+    logger.info(`Updated snapshot for ${userUid} on ${exchange}: equity=${snapshot.totalEquity.toFixed(2)}, realized=${snapshot.realizedBalance.toFixed(2)}, unrealized=${snapshot.unrealizedPnL.toFixed(2)}`);
+  }
+
+  /**
+   * Build snapshot data WITHOUT saving to database.
+   * Used for atomic multi-exchange sync where all snapshots are collected first,
+   * then saved in a single transaction (all-or-nothing).
+   *
+   * SECURITY: Prevents partial snapshots that would corrupt performance metrics.
+   */
+  async buildSnapshot(userUid: string, exchange: string): Promise<SnapshotData | null> {
     try {
       // Step 1: Get user and connector
       const { connector, currentSnapshot } = await this.getConnectorAndSnapshotTime(
@@ -81,7 +97,7 @@ export class EquitySnapshotAggregator {
       );
       if (!connector) {
         logger.warn(`No connector found for ${userUid}/${exchange}`);
-        return;
+        return null;
       }
 
       // Step 2: Fetch balances by market type
@@ -113,19 +129,31 @@ export class EquitySnapshotAggregator {
       // Step 6: Calculate unrealized PnL
       const totalUnrealizedPnl = await this.calculateUnrealizedPnl(connector, balancesByMarket);
 
-      // Step 7: Save snapshot
-      await this.saveSnapshot({
-        userUid,
-        exchange,
-        currentSnapshot,
-        globalEquity,
-        totalUnrealizedPnl,
-        breakdown
-      });
-
+      // Step 7: Build and return snapshot (without saving)
       const totalRealizedBalance = globalEquity - totalUnrealizedPnl;
-      logger.info(`Updated snapshot for ${userUid} on ${exchange}: equity=${globalEquity.toFixed(2)}, realized=${totalRealizedBalance.toFixed(2)}, unrealized=${totalUnrealizedPnl.toFixed(2)}, markets=${Object.keys(breakdown).length - 1}`);
-    } catch (error) { logger.error(`Failed to update snapshot with breakdown for ${userUid}`, error); throw error; }
+
+      const snapshot: SnapshotData = {
+        id: `${userUid}-${exchange}-${currentSnapshot.toISOString()}`,
+        userUid,
+        timestamp: currentSnapshot.toISOString(),
+        exchange,
+        totalEquity: globalEquity,
+        realizedBalance: totalRealizedBalance,
+        unrealizedPnL: totalUnrealizedPnl,
+        deposits: 0,
+        withdrawals: 0,
+        breakdown_by_market: breakdown,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      logger.info(`Built snapshot for ${userUid} on ${exchange}: equity=${globalEquity.toFixed(2)}, realized=${totalRealizedBalance.toFixed(2)}, unrealized=${totalUnrealizedPnl.toFixed(2)}, markets=${Object.keys(breakdown).length - 1}`);
+
+      return snapshot;
+    } catch (error) {
+      logger.error(`Failed to build snapshot for ${userUid}/${exchange}`, error);
+      throw error;
+    }
   }
 
   /**
@@ -469,40 +497,6 @@ export class EquitySnapshotAggregator {
     }
 
     return totalUnrealizedPnl;
-  }
-
-  /**
-   * Save snapshot to database
-   */
-  private async saveSnapshot(params: {
-    userUid: string;
-    exchange: string;
-    currentSnapshot: Date;
-    globalEquity: number;
-    totalUnrealizedPnl: number;
-    breakdown: BreakdownByMarket;
-  }) {
-    const { userUid, exchange, currentSnapshot, globalEquity, totalUnrealizedPnl, breakdown } =
-      params;
-
-    const totalRealizedBalance = globalEquity - totalUnrealizedPnl;
-
-    const snapshot: SnapshotData = {
-      id: `${userUid}-${exchange}-${currentSnapshot.toISOString()}`,
-      userUid,
-      timestamp: currentSnapshot.toISOString(),
-      exchange,
-      totalEquity: globalEquity,
-      realizedBalance: totalRealizedBalance,
-      unrealizedPnL: totalUnrealizedPnl,
-      deposits: 0, // Cash flow tracking not yet implemented
-      withdrawals: 0, // Cash flow tracking not yet implemented
-      breakdown_by_market: breakdown,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-
-    await this.snapshotDataRepo.upsertSnapshotData(snapshot);
   }
 
   async backfillIbkrHistoricalSnapshots(userUid: string, exchange: string): Promise<void> {
