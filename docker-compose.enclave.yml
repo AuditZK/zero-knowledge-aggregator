@@ -15,6 +15,7 @@ services:
     environment:
       # Production mode: secrets loaded from GCP VM metadata
       NODE_ENV: production
+      ENCLAVE_MODE: "true"
       ENCLAVE_PORT: 50051
       REST_PORT: 3050
       LOG_LEVEL: info
