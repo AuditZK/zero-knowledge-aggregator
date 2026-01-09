@@ -6,7 +6,9 @@ import { ReportSigningService } from './report-signing.service';
 import { getLogger } from '../utils/secure-enclave-logger';
 import {
   ReportRequest,
-  ReportData,
+  SignedFinancialData,
+  DisplayParameters,
+  SignedReport,
   ReportMetrics,
   CoreMetrics,
   RiskMetrics,
@@ -53,15 +55,28 @@ export class ReportGeneratorService {
 
   /**
    * Generate a signed track record report
-   * DEDUPLICATION: Returns cached report if same period was already generated
+   *
+   * DEDUPLICATION: Returns cached report if same period was already generated.
+   * The cached FINANCIAL DATA is returned, but DISPLAY PARAMETERS are applied fresh.
+   *
+   * ARCHITECTURE:
+   * - SignedFinancialData: Cached and signed (metrics, returns, period)
+   * - DisplayParameters: Applied per request (reportName, manager, firm)
+   * - Signature proves the NUMBERS, not arbitrary text labels
    */
   async generateSignedReport(request: ReportRequest): Promise<GenerateReportResult> {
     try {
+      // Extract display parameters (NOT part of deduplication key)
+      const displayParams: DisplayParameters = request.displayParams || {
+        reportName: 'Track Record Report'
+      };
+
       logger.info('Generating signed report', {
         userUid: request.userUid,
         startDate: request.startDate,
         endDate: request.endDate,
-        benchmark: request.benchmark
+        benchmark: request.benchmark,
+        displayParams: { reportName: displayParams.reportName }
       });
 
       // DEDUPLICATION CHECK: Look for existing report with same period
@@ -77,14 +92,21 @@ export class ReportGeneratorService {
         );
 
         if (existingReport) {
-          logger.info('Returning cached report (same period already generated)', {
+          logger.info('Found cached financial data, applying new display parameters', {
             reportId: existingReport.reportId,
-            originalCreatedAt: existingReport.createdAt.toISOString()
+            originalCreatedAt: existingReport.createdAt.toISOString(),
+            newDisplayParams: { reportName: displayParams.reportName }
           });
+
+          // Return cached report with NEW display parameters
+          const cachedReport = existingReport.reportData as SignedReport;
 
           return {
             success: true,
-            signedReport: existingReport.reportData as GenerateReportResult['signedReport'],
+            signedReport: {
+              ...cachedReport,
+              displayParams // Apply NEW display parameters
+            },
             cached: true
           };
         }
@@ -168,7 +190,7 @@ export class ReportGeneratorService {
         }
       }
 
-      // 7. Build report data
+      // 7. Build financial data (this is what gets SIGNED and CACHED)
       const reportFirstDay = dailyReturns[0];
       const reportLastDay = dailyReturns[dailyReturns.length - 1];
 
@@ -179,10 +201,9 @@ export class ReportGeneratorService {
         };
       }
 
-      const reportData: ReportData = {
+      const financialData: SignedFinancialData = {
         reportId: this.generateReportId(),
         userUid: request.userUid,
-        reportName: request.reportName || 'Track Record Report',
         generatedAt: new Date(),
         periodStart: new Date(reportFirstDay.date),
         periodEnd: new Date(reportLastDay.date),
@@ -194,23 +215,25 @@ export class ReportGeneratorService {
         monthlyReturns
       };
 
-      // 8. Sign the report
-      const signedReport = this.signingService.signReport(reportData);
+      // 8. Sign the FINANCIAL DATA only (display params are NOT signed)
+      const signedReport = this.signingService.signFinancialData(financialData, displayParams);
 
       logger.info('Signed report generated successfully', {
-        reportId: reportData.reportId,
-        dataPoints: reportData.dataPoints,
-        periodStart: reportData.periodStart.toISOString(),
-        periodEnd: reportData.periodEnd.toISOString()
+        reportId: financialData.reportId,
+        dataPoints: financialData.dataPoints,
+        periodStart: financialData.periodStart.toISOString(),
+        periodEnd: financialData.periodEnd.toISOString(),
+        displayParams: { reportName: displayParams.reportName }
       });
 
       // 9. Save report to database for deduplication
+      // NOTE: Display params are saved but can be overwritten on retrieval
       try {
         await this.reportRepo.save({
-          reportId: reportData.reportId,
+          reportId: financialData.reportId,
           userUid: request.userUid,
-          startDate: reportData.periodStart,
-          endDate: reportData.periodEnd,
+          startDate: financialData.periodStart,
+          endDate: financialData.periodEnd,
           benchmark: request.benchmark || null,
           reportData: signedReport as unknown as Record<string, unknown>,
           signature: signedReport.signature || '',
@@ -218,7 +241,7 @@ export class ReportGeneratorService {
           enclaveVersion: ENCLAVE_VERSION
         });
         logger.info('Report saved to database for deduplication', {
-          reportId: reportData.reportId
+          reportId: financialData.reportId
         });
       } catch (saveError) {
         // Log but don't fail - report generation succeeded, just caching failed
