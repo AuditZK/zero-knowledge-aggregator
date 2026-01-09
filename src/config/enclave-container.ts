@@ -39,6 +39,7 @@ import { ExchangeConnectionRepository } from '../core/repositories/exchange-conn
 import { SyncStatusRepository } from '../core/repositories/sync-status-repository';
 import { UserRepository } from '../core/repositories/user-repository';
 import { DEKRepository } from '../repositories/dek-repository';
+import { SignedReportRepository } from '../core/repositories/signed-report-repository';
 
 // Enclave Worker
 import { EnclaveWorker } from '../enclave-worker';
@@ -74,6 +75,7 @@ export function setupEnclaveContainer(): void {
   container.registerSingleton(SyncStatusRepository);
   container.registerSingleton(UserRepository);
   container.registerSingleton(DEKRepository);
+  container.registerSingleton(SignedReportRepository);
 
   // Register External Services (these handle credentials)
   container.registerSingleton(IbkrFlexService);

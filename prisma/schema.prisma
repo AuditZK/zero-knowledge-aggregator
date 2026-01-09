@@ -153,6 +153,29 @@ model DataEncryptionKey {
   @@map("data_encryption_keys")
 }
 
+// Signed Reports - Cached reports for deduplication
+// SECURITY: Same period requested multiple times returns cached report (no regeneration)
+// This ensures report integrity and prevents manipulation through selective regeneration
+model SignedReport {
+  id              String   @id @default(cuid())
+  reportId        String   @unique // Unique report identifier (e.g., TR-xxx-XXX)
+  userUid         String
+  startDate       DateTime // Report period start
+  endDate         DateTime // Report period end (always end of completed month)
+  benchmark       String?  // SPY, BTC-USD, or null
+  reportData      Json     // Full signed report data
+  signature       String   // Cryptographic signature
+  reportHash      String   // Hash of report data
+  enclaveVersion  String   // Enclave version that generated the report
+  createdAt       DateTime @default(now())
+
+  // Deduplication key: same user + period + benchmark = same report
+  @@unique([userUid, startDate, endDate, benchmark])
+  @@index([userUid])
+  @@index([reportId])
+  @@map("signed_reports")
+}
+
 // Migrations tracking
 model Migration {
   id         Int      @id @default(autoincrement())

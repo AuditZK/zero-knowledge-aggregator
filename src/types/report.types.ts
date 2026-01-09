@@ -156,4 +156,5 @@ export interface GenerateReportResult {
   success: boolean;
   signedReport?: SignedReport;
   error?: string;
+  cached?: boolean;  // True if report was returned from cache (same period already generated)
 }

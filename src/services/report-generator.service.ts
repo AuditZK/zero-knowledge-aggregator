@@ -1,6 +1,7 @@
 import { injectable, inject } from 'tsyringe';
 import { randomBytes } from 'crypto';
 import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repository';
+import { SignedReportRepository } from '../core/repositories/signed-report-repository';
 import { ReportSigningService } from './report-signing.service';
 import { getLogger } from '../utils/secure-enclave-logger';
 import {
@@ -18,6 +19,9 @@ import {
 } from '../types/report.types';
 
 const logger = getLogger('ReportGenerator');
+
+// Enclave version for report tracking
+const ENCLAVE_VERSION = process.env.ENCLAVE_VERSION || '3.0.0';
 
 // Constants
 const TRADING_DAYS_PER_YEAR = 252;
@@ -43,11 +47,13 @@ const RISK_FREE_RATE = 0;
 export class ReportGeneratorService {
   constructor(
     @inject(SnapshotDataRepository) private readonly snapshotRepo: SnapshotDataRepository,
+    @inject(SignedReportRepository) private readonly reportRepo: SignedReportRepository,
     @inject(ReportSigningService) private readonly signingService: ReportSigningService
   ) {}
 
   /**
    * Generate a signed track record report
+   * DEDUPLICATION: Returns cached report if same period was already generated
    */
   async generateSignedReport(request: ReportRequest): Promise<GenerateReportResult> {
     try {
@@ -57,6 +63,32 @@ export class ReportGeneratorService {
         endDate: request.endDate,
         benchmark: request.benchmark
       });
+
+      // DEDUPLICATION CHECK: Look for existing report with same period
+      const startDate = request.startDate ? new Date(request.startDate) : undefined;
+      const endDate = request.endDate ? new Date(request.endDate) : undefined;
+
+      if (startDate && endDate) {
+        const existingReport = await this.reportRepo.findByPeriod(
+          request.userUid,
+          startDate,
+          endDate,
+          request.benchmark || null
+        );
+
+        if (existingReport) {
+          logger.info('Returning cached report (same period already generated)', {
+            reportId: existingReport.reportId,
+            originalCreatedAt: existingReport.createdAt.toISOString()
+          });
+
+          return {
+            success: true,
+            signedReport: existingReport.reportData as GenerateReportResult['signedReport'],
+            cached: true
+          };
+        }
+      }
 
       // 1. Fetch snapshots from database
       const snapshots = await this.snapshotRepo.getSnapshotData(
@@ -171,6 +203,29 @@ export class ReportGeneratorService {
         periodStart: reportData.periodStart.toISOString(),
         periodEnd: reportData.periodEnd.toISOString()
       });
+
+      // 9. Save report to database for deduplication
+      try {
+        await this.reportRepo.save({
+          reportId: reportData.reportId,
+          userUid: request.userUid,
+          startDate: reportData.periodStart,
+          endDate: reportData.periodEnd,
+          benchmark: request.benchmark || null,
+          reportData: signedReport as unknown as Record<string, unknown>,
+          signature: signedReport.signature || '',
+          reportHash: signedReport.reportHash || '',
+          enclaveVersion: ENCLAVE_VERSION
+        });
+        logger.info('Report saved to database for deduplication', {
+          reportId: reportData.reportId
+        });
+      } catch (saveError) {
+        // Log but don't fail - report generation succeeded, just caching failed
+        logger.warn('Failed to save report for deduplication (report still valid)', {
+          error: saveError instanceof Error ? saveError.message : 'Unknown error'
+        });
+      }
 
       return {
         success: true,
