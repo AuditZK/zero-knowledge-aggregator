@@ -99,7 +99,7 @@ export class ReportGeneratorService {
           });
 
           // Return cached report with NEW display parameters
-          const cachedReport = existingReport.reportData as SignedReport;
+          const cachedReport = existingReport.reportData as unknown as SignedReport;
 
           return {
             success: true,
