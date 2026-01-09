@@ -92,11 +92,8 @@ export class AlpacaConnector extends RestBrokerConnector {
 
   async getTrades(startDate: Date, endDate: Date): Promise<TradeData[]> {
     return this.withErrorHandling('getTrades', async () => {
-      // Calculate days difference
-      const daysDiff = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
-
-      // Get trade history (FILL activities)
-      const activities = await this.api.getTradeHistory(daysDiff);
+      // Get trade history using actual date range
+      const activities = await this.api.getTradeHistory(startDate, endDate);
 
       return activities
         .filter(activity => {
