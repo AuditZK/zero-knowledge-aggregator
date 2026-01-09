@@ -24,9 +24,6 @@ services:
       SKIP_ATTESTATION: ${SKIP_ATTESTATION:-false}
       ENABLE_ENCLAVE_LOG_STREAMING: "true"
       LOG_SERVER_API_KEY: ${LOG_SERVER_API_KEY:-}
-      # Allow insecure gRPC connections (for report-service on VPS)
-      # TODO: Fix by syncing TLS certificates properly for production
-      GRPC_INSECURE: "true"
     ports:
       - "50051:50051"  # gRPC Server
       - "50052:50052"  # HTTP Log Server (SSE)
