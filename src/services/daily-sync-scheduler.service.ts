@@ -9,21 +9,7 @@ import type { SnapshotData } from '../types';
 
 const logger = getLogger('DailySyncScheduler');
 
-/**
- * Daily Sync Scheduler Service
- *
- * SECURITY: Runs inside AMD SEV-SNP enclave with hardware-attested clock
- * This ensures snapshot timestamps cannot be manipulated, providing verifiable proof
- * that equity snapshots are taken systematically at 00:00 UTC every day,
- * not cherry-picked at favorable market conditions.
- *
- * Architecture:
- * - Cron job executes at 00:00 UTC daily (strict schedule)
- * - Syncs ALL active users automatically (no rate limiting)
- * - Manual syncs via ProcessSyncJob are blocked after initialization
- * - All sync timestamps logged for audit trail
- * - Enclave attestation proves scheduler integrity
- */
+/** Daily sync at 00:00 UTC inside AMD SEV-SNP enclave. Timestamps cannot be manipulated. */
 @injectable()
 export class DailySyncSchedulerService {
   private cronJob: cron.ScheduledTask | null = null;
@@ -36,14 +22,7 @@ export class DailySyncSchedulerService {
     @inject(SnapshotDataRepository) private readonly snapshotDataRepo: SnapshotDataRepository
   ) {}
 
-  /**
-   * Start the daily sync scheduler
-   *
-   * Cron schedule: '0 0 * * *' = Every day at 00:00 UTC
-   *
-   * IMPORTANT: This scheduler runs in UTC timezone to ensure consistent
-   * snapshot times across all deployments regardless of server location.
-   */
+  /** Start cron scheduler (00:00 UTC daily). */
   start(): void {
     if (this.cronJob) {
       logger.warn('Daily sync scheduler already running');
@@ -66,9 +45,6 @@ export class DailySyncSchedulerService {
     logger.info('Next sync at: ' + this.getNextSyncTime().toISOString());
   }
 
-  /**
-   * Stop the daily sync scheduler
-   */
   stop(): void {
     if (this.cronJob) {
       this.cronJob.stop();
@@ -77,19 +53,7 @@ export class DailySyncSchedulerService {
     }
   }
 
-  /**
-   * Execute daily sync for all active users
-   *
-   * ATOMIC SYNC: For users with multiple exchanges, ALL snapshots are collected first,
-   * then saved in a single transaction. If ANY exchange fails, NO snapshots are saved.
-   * This prevents partial snapshots that would corrupt performance metrics.
-   *
-   * This method:
-   * 1. Gets all active users from database
-   * 2. For each user, builds ALL exchange snapshots in memory
-   * 3. Saves ALL snapshots atomically (all-or-nothing per user)
-   * 4. Logs all operations for audit trail
-   */
+  /** Atomic sync: all exchanges succeed or none saved (prevents partial snapshots). */
   private async executeDailySync(): Promise<void> {
     if (this.isRunning) {
       logger.warn('Daily sync already in progress, skipping...');
@@ -198,20 +162,12 @@ export class DailySyncSchedulerService {
     }
   }
 
-  /**
-   * Manual trigger for daily sync (admin use only)
-   *
-   * SECURITY WARNING: This bypasses the automatic schedule and should only
-   * be used for testing or emergency scenarios. All manual triggers are logged.
-   */
+  /** Admin-only manual trigger. Bypasses schedule, logged for audit. */
   async triggerManualSync(): Promise<void> {
     logger.warn('MANUAL SYNC TRIGGERED (bypassing scheduler)');
     await this.executeDailySync();
   }
 
-  /**
-   * Get the next scheduled sync time
-   */
   getNextSyncTime(): Date {
     const now = new Date();
     const tomorrow = new Date(now);
@@ -220,9 +176,6 @@ export class DailySyncSchedulerService {
     return tomorrow;
   }
 
-  /**
-   * Get scheduler status
-   */
   getStatus(): {
     isRunning: boolean;
     syncInProgress: boolean;

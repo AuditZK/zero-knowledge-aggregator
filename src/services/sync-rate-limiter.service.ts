@@ -4,18 +4,7 @@ import { getLogger } from '../utils/secure-enclave-logger';
 
 const logger = getLogger('SyncRateLimiter');
 
-/**
- * Rate Limiter for Daily Sync Operations
- *
- * SECURITY: Prevents abuse by enforcing a minimum 23-hour interval between syncs
- * for the same user/exchange combination.
- *
- * Architecture:
- * - Stores last sync timestamp in database (SyncRateLimitLog table)
- * - Enforces 23-hour cooldown (allows 1-hour buffer for scheduling flexibility)
- * - Returns audit-friendly error messages when rate limit is hit
- * - Automatically cleans up old logs (retention: 7 days)
- */
+/** 23-hour rate limit between syncs to prevent cherry-picking. Logs retained 7 days. */
 @injectable()
 export class SyncRateLimiterService {
   private readonly RATE_LIMIT_HOURS = 23; // Minimum hours between syncs

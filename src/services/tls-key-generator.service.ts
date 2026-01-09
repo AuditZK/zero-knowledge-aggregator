@@ -10,18 +10,7 @@ export interface TlsCredentials {
   fingerprint: string;  // SHA-256 fingerprint for attestation
 }
 
-/**
- * TLS Key Generator Service
- *
- * SECURITY: Generates TLS private key INSIDE the enclave.
- * The VPS hypervisor NEVER sees the private key.
- *
- * Architecture:
- * 1. Generate ECDSA P-256 key pair in SEV-SNP protected RAM
- * 2. Create self-signed certificate
- * 3. Include certificate fingerprint in attestation report
- * 4. Client verifies: attestation → fingerprint → TLS cert matches
- */
+/** Generates TLS credentials inside enclave. VPS never sees private key. */
 @injectable()
 export class TlsKeyGeneratorService {
   private credentials: TlsCredentials | null = null;

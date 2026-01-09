@@ -1,12 +1,4 @@
-/**
- * TradeSyncService - Memory-Only Trade Processing
- *
- * SECURITY: Trades are NEVER persisted to database
- * - Fetches trades from exchange API
- * - Returns trade count for status tracking
- * - Individual trade data stays in memory only
- * - EquitySnapshotAggregator handles aggregation directly from API
- */
+/** Memory-only trade processing. Trades are NEVER persisted - only counts for status tracking. */
 
 import { injectable, inject } from 'tsyringe';
 import { ExchangeConnectionRepository } from '../core/repositories/exchange-connection-repository';

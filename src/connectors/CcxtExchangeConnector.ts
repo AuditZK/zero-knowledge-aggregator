@@ -16,9 +16,20 @@ import {
   getFilteredMarketTypes,
 } from '../types/snapshot-breakdown';
 
+/** Cache TTL in milliseconds. */
+const MARKET_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const SYMBOL_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
 export class CcxtExchangeConnector extends CryptoExchangeConnector {
   private exchange: ccxt.Exchange;
   private exchangeName: string;
+
+  /** Cached market types to avoid repeated loadMarkets() calls. */
+  private cachedMarketTypes: MarketType[] | null = null;
+  private marketTypesExpiry = 0;
+
+  /** Cached active symbols by market type. */
+  private cachedSymbols: Map<string, { symbols: string[]; expiry: number }> = new Map();
 
   constructor(exchangeId: string, credentials: ExchangeCredentials) {
     super(credentials);
@@ -81,40 +92,71 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
 
       this.logger.info(`Fetching trades from markets: ${filteredTypes.join(', ')}`);
 
-      const allTrades: ccxt.Trade[] = [];
+      const tradeArrays: ccxt.Trade[][] = [];
+
       for (const marketType of filteredTypes) {
-        const originalType = this.exchange.options['defaultType'];
-        this.exchange.options['defaultType'] = marketType;
-
-        // Universal approach: fetch trades per symbol
-        const symbols = await this.getActiveSymbols(marketType, since);
-
-        for (const symbol of symbols) {
-          try {
-            const symbolTrades = await this.exchange.fetchMyTrades(symbol, since);
-            if (symbolTrades.length > 0) {
-              allTrades.push(...symbolTrades);
-            }
-          } catch {
-            // Symbol might not have trades
-          }
-        }
-
-        this.exchange.options['defaultType'] = originalType;
+        const marketTrades = await this.fetchTradesForMarket(marketType, since);
+        tradeArrays.push(marketTrades);
       }
 
+      const allTrades = tradeArrays.flat();
       this.logger.info(`Total: ${allTrades.length} trades from ${filteredTypes.length} markets`);
 
-      return allTrades
-        .filter(trade => this.isInDateRange(this.timestampToDate(trade.timestamp || 0), startDate, endDate))
-        .map(trade => ({
-          tradeId: trade.id || `${trade.timestamp}`, symbol: trade.symbol || '', side: trade.side as 'buy' | 'sell',
-          quantity: trade.amount || 0, price: trade.price || 0, fee: trade.fee?.cost || 0,
-          feeCurrency: trade.fee?.currency || this.defaultCurrency,
-          timestamp: this.timestampToDate(trade.timestamp || 0), orderId: trade.order || '',
-          realizedPnl: Number((trade.info as Record<string, unknown>)?.realizedPnl) || 0,
-        }));
+      return this.mapAndFilterTrades(allTrades, startDate, endDate);
     });
+  }
+
+  /** Fetches trades for a specific market type. */
+  private async fetchTradesForMarket(marketType: MarketType, since: number): Promise<ccxt.Trade[]> {
+    const originalType = this.exchange.options['defaultType'];
+    this.exchange.options['defaultType'] = marketType;
+
+    try {
+      const symbols = await this.getActiveSymbols(marketType, since);
+      const symbolTradeArrays: ccxt.Trade[][] = [];
+
+      for (const symbol of symbols) {
+        try {
+          const symbolTrades = await this.exchange.fetchMyTrades(symbol, since);
+          if (symbolTrades.length > 0) {
+            symbolTradeArrays.push(symbolTrades);
+          }
+        } catch {
+          // Symbol might not have trades
+        }
+      }
+
+      return symbolTradeArrays.flat();
+    } finally {
+      this.exchange.options['defaultType'] = originalType;
+    }
+  }
+
+  /** Maps and filters trades to TradeData format. */
+  private mapAndFilterTrades(trades: ccxt.Trade[], startDate: Date, endDate: Date): TradeData[] {
+    const result: TradeData[] = [];
+
+    for (const trade of trades) {
+      const tradeDate = this.timestampToDate(trade.timestamp || 0);
+      if (!this.isInDateRange(tradeDate, startDate, endDate)) {
+        continue;
+      }
+
+      result.push({
+        tradeId: trade.id || `${trade.timestamp}`,
+        symbol: trade.symbol || '',
+        side: trade.side as 'buy' | 'sell',
+        quantity: trade.amount || 0,
+        price: trade.price || 0,
+        fee: trade.fee?.cost || 0,
+        feeCurrency: trade.fee?.currency || this.defaultCurrency,
+        timestamp: tradeDate,
+        orderId: trade.order || '',
+        realizedPnl: Number((trade.info as Record<string, unknown>)?.realizedPnl) || 0,
+      });
+    }
+
+    return result;
   }
 
   async testConnection(): Promise<boolean> {
@@ -130,18 +172,28 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
 
   async detectMarketTypes(): Promise<MarketType[]> {
     return this.withErrorHandling('detectMarketTypes', async () => {
+      const now = Date.now();
+
+      if (this.cachedMarketTypes && this.marketTypesExpiry > now) {
+        return this.cachedMarketTypes;
+      }
+
       await this.exchange.loadMarkets();
       const marketTypes = new Set<MarketType>();
 
-      for (const [_marketId, market] of Object.entries(this.exchange.markets)) {
-        if ((market as any).spot) {marketTypes.add('spot');}
-        if ((market as any).swap) {marketTypes.add('swap');}
-        if ((market as any).future) {marketTypes.add('future');}
-        if ((market as any).option) {marketTypes.add('options');}
-        if ((market as any).margin) {marketTypes.add('margin');}
+      for (const market of Object.values(this.exchange.markets)) {
+        const marketInfo = market as Record<string, unknown>;
+        if (marketInfo.spot) { marketTypes.add('spot'); }
+        if (marketInfo.swap) { marketTypes.add('swap'); }
+        if (marketInfo.future) { marketTypes.add('future'); }
+        if (marketInfo.option) { marketTypes.add('options'); }
+        if (marketInfo.margin) { marketTypes.add('margin'); }
       }
 
       const detected = Array.from(marketTypes);
+      this.cachedMarketTypes = detected;
+      this.marketTypesExpiry = now + MARKET_CACHE_TTL_MS;
+
       this.logger.info(`Detected market types for ${this.exchangeName}: ${detected.join(', ')}`);
       return detected;
     });
@@ -210,11 +262,7 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
         return [];
       }
 
-      // Universal approach: fetch trades per symbol
-      // This works for ALL exchanges (Binance, Bitget, etc.)
-      // Each trade has its own timestamp = correct daily volume distribution
       const symbols = await this.getActiveSymbols(marketType, sinceTimestamp);
-
       if (symbols.length === 0) {
         this.logger.info(`No symbols traded in ${marketType} market`);
         return [];
@@ -222,20 +270,23 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
 
       this.logger.info(`Fetching trades for ${symbols.length} ${marketType} symbols`);
 
-      const allTrades: ccxt.Trade[] = [];
+      const tradeArrays: ccxt.Trade[][] = [];
+
       for (const symbol of symbols) {
         try {
           const symbolTrades = await this.exchange.fetchMyTrades(symbol, sinceTimestamp);
           if (symbolTrades.length > 0) {
-            allTrades.push(...symbolTrades);
+            tradeArrays.push(symbolTrades);
             this.logger.debug(`${symbol}: ${symbolTrades.length} trades`);
           }
-        } catch (error) {
+        } catch {
           this.logger.debug(`${symbol}: no trades or error`);
         }
       }
 
+      const allTrades = tradeArrays.flat();
       this.logger.info(`Total: ${allTrades.length} trades from ${marketType} market`);
+
       return this.mapTradesToExecutedOrders(allTrades);
     });
   }
@@ -261,63 +312,99 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
   }
 
   /**
-   * Get symbols that were traded (from closed orders, positions, balances)
-   * Uses fetchClosedOrders ONLY for symbol discovery, NOT for trade data
+   * Get symbols that were traded (from closed orders, positions, balances).
+   * Results are cached for SYMBOL_CACHE_TTL_MS to reduce API calls.
    */
   private async getActiveSymbols(marketType: MarketType, since?: number): Promise<string[]> {
+    const cacheKey = `${marketType}:${since || 'all'}`;
+    const cached = this.cachedSymbols.get(cacheKey);
+    const now = Date.now();
+
+    if (cached && cached.expiry > now) {
+      return cached.symbols;
+    }
+
+    const symbols = await this.discoverActiveSymbols(marketType, since);
+
+    this.cachedSymbols.set(cacheKey, { symbols, expiry: now + SYMBOL_CACHE_TTL_MS });
+    this.logger.info(`Discovered ${symbols.length} symbols for ${marketType}`);
+
+    return symbols;
+  }
+
+  /** Discovers active symbols from closed orders, positions, and balances. */
+  private async discoverActiveSymbols(marketType: MarketType, since?: number): Promise<string[]> {
     const symbols = new Set<string>();
 
-    // 1. Discover symbols from closed orders (works for all exchanges)
-    if (this.exchange.has['fetchClosedOrders']) {
-      try {
-        const closedOrders = await this.exchange.fetchClosedOrders(undefined, since);
-        closedOrders.forEach(order => {
-          if (order.symbol) symbols.add(order.symbol);
-        });
-        this.logger.debug(`Found ${symbols.size} symbols from closed orders`);
-      } catch (error) {
-        // Some exchanges require symbol for fetchClosedOrders too - continue to other methods
-        this.logger.debug(`fetchClosedOrders without symbol not supported`);
-      }
-    }
+    await this.addSymbolsFromClosedOrders(symbols, since);
+    await this.addSymbolsFromPositions(symbols, marketType);
+    await this.addSymbolsFromBalance(symbols, marketType);
 
-    // 2. For swap/futures: also check open positions
-    if (marketType === 'swap' || marketType === 'future') {
-      try {
-        if (this.exchange.has['fetchPositions']) {
-          const positions = await this.exchange.fetchPositions();
-          positions.forEach(pos => {
-            if (pos.symbol) symbols.add(pos.symbol);
-          });
-        }
-      } catch {
-        // Positions not available
-      }
-    }
-
-    // 3. For spot: also check balance for held assets
-    if (marketType === 'spot') {
-      try {
-        const balance = await this.exchange.fetchBalance();
-        await this.exchange.loadMarkets();
-
-        const totalBalances = balance.total as Record<string, number> | undefined;
-        const assets = Object.keys(totalBalances || {}).filter(asset => {
-          const total = totalBalances?.[asset] || 0;
-          return total > 0 && asset !== 'USDT' && asset !== 'USD' && asset !== 'USDC';
-        });
-
-        for (const asset of assets) {
-          const pair = `${asset}/USDT`;
-          if (this.exchange.markets[pair]) symbols.add(pair);
-        }
-      } catch {
-        // Balance not available
-      }
-    }
-
-    this.logger.info(`Discovered ${symbols.size} symbols for ${marketType}`);
     return Array.from(symbols);
+  }
+
+  private async addSymbolsFromClosedOrders(symbols: Set<string>, since?: number): Promise<void> {
+    if (!this.exchange.has['fetchClosedOrders']) {
+      return;
+    }
+
+    try {
+      const closedOrders = await this.exchange.fetchClosedOrders(undefined, since);
+      for (const order of closedOrders) {
+        if (order.symbol) {
+          symbols.add(order.symbol);
+        }
+      }
+    } catch {
+      this.logger.debug('fetchClosedOrders without symbol not supported');
+    }
+  }
+
+  private async addSymbolsFromPositions(symbols: Set<string>, marketType: MarketType): Promise<void> {
+    const isDerivativeMarket = marketType === 'swap' || marketType === 'future';
+    if (!isDerivativeMarket || !this.exchange.has['fetchPositions']) {
+      return;
+    }
+
+    try {
+      const positions = await this.exchange.fetchPositions();
+      for (const pos of positions) {
+        if (pos.symbol) {
+          symbols.add(pos.symbol);
+        }
+      }
+    } catch {
+      // Positions not available
+    }
+  }
+
+  private async addSymbolsFromBalance(symbols: Set<string>, marketType: MarketType): Promise<void> {
+    if (marketType !== 'spot') {
+      return;
+    }
+
+    try {
+      const balance = await this.exchange.fetchBalance();
+      await this.exchange.loadMarkets();
+
+      const totalBalances = balance.total as Record<string, number> | undefined;
+      if (!totalBalances) {
+        return;
+      }
+
+      const excludedAssets = new Set(['USDT', 'USD', 'USDC']);
+
+      for (const [asset, total] of Object.entries(totalBalances)) {
+        if (total > 0 && !excludedAssets.has(asset)) {
+          const pair = `${asset}/USDT`;
+          if (this.exchange.markets[pair]) {
+            symbols.add(pair);
+          }
+        }
+      }
+    } catch {
+      // Balance not available
+    }
   }
 
   async getFundingFees(symbols: string[], since: Date): Promise<FundingFeeData[]> {
