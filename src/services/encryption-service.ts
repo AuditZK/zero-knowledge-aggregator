@@ -5,16 +5,7 @@ import { getLogger, extractErrorMessage } from '../utils/secure-enclave-logger';
 
 const logger = getLogger('EncryptionService');
 
-/**
- * Encryption Service - Credential encryption/decryption
- *
- * SECURITY ARCHITECTURE:
- * - Encryption key derived from AMD SEV-SNP hardware measurement
- * - Key automatically rotates on code updates (measurement changes)
- * - Enterprise-level security at €0 cost
- * - No secrets in environment variables
- * - NO FALLBACK: AMD SEV-SNP hardware is REQUIRED
- */
+/** AES-256-GCM encryption using hardware-derived keys (AMD SEV-SNP). */
 @injectable()
 export class EncryptionService {
   private static readonly ALGORITHM = 'aes-256-gcm';
@@ -25,16 +16,6 @@ export class EncryptionService {
     @inject(KeyManagementService) private keyManagement: KeyManagementService
   ) {}
 
-  /**
-   * Gets encryption key from AMD SEV-SNP hardware derivation
-   *
-   * - Derives master key from enclave measurement
-   * - Unwraps Data Encryption Key (DEK) from database
-   * - DEK is used for credential encryption/decryption
-   *
-   * @returns Current active DEK
-   * @throws Error if AMD SEV-SNP hardware is not available
-   */
   private async getKey(): Promise<Buffer> {
     try {
       const dek = await this.keyManagement.getCurrentDEK();
@@ -47,12 +28,7 @@ export class EncryptionService {
     }
   }
 
-  /**
-   * Encrypts text using AES-256-GCM with hardware-derived key
-   *
-   * @param text Plaintext to encrypt
-   * @returns Hex-encoded encrypted data (iv + tag + ciphertext)
-   */
+  /** Encrypts text. Returns hex-encoded (iv + tag + ciphertext). */
   async encrypt(text: string): Promise<string> {
     try {
       const key = await this.getKey();
@@ -61,14 +37,10 @@ export class EncryptionService {
 
       let encrypted = cipher.update(text, 'utf8', 'hex');
       encrypted += cipher.final('hex');
-
       const tag = cipher.getAuthTag();
 
-      // Combine iv + tag + encrypted data
       const result = iv.toString('hex') + tag.toString('hex') + encrypted;
-
       logger.info('Data encrypted successfully', { dataLength: text.length });
-
       return result;
     } catch (error: unknown) {
       const errorMessage = extractErrorMessage(error);
@@ -77,18 +49,11 @@ export class EncryptionService {
     }
   }
 
-  /**
-   * Decrypts text using AES-256-GCM with hardware-derived key
-   *
-   * @param encryptedData Hex-encoded encrypted data (iv + tag + ciphertext)
-   * @returns Decrypted plaintext
-   * @throws Error if AMD SEV-SNP hardware is not available
-   */
+  /** Decrypts hex-encoded data (iv + tag + ciphertext). */
   async decrypt(encryptedData: string): Promise<string> {
     try {
       const key = await this.getKey();
 
-      // Extract iv, tag, and encrypted data
       const iv = Buffer.from(encryptedData.slice(0, EncryptionService.IV_LENGTH * 2), 'hex');
       const tag = Buffer.from(encryptedData.slice(EncryptionService.IV_LENGTH * 2, (EncryptionService.IV_LENGTH + EncryptionService.TAG_LENGTH) * 2), 'hex');
       const encrypted = encryptedData.slice((EncryptionService.IV_LENGTH + EncryptionService.TAG_LENGTH) * 2);
@@ -100,7 +65,6 @@ export class EncryptionService {
       decrypted += decipher.final('utf8');
 
       logger.info('Data decrypted successfully');
-
       return decrypted;
     } catch (error: unknown) {
       const errorMessage = extractErrorMessage(error);
@@ -109,43 +73,19 @@ export class EncryptionService {
     }
   }
 
-  /**
-   * Creates SHA-256 hash of text
-   *
-   * @param text Text to hash
-   * @returns Hex-encoded hash
-   */
   hash(text: string): string {
     return crypto.createHash('sha256').update(text).digest('hex');
   }
 
-  /**
-   * Creates hash of API credentials for change detection
-   *
-   * @param apiKey API key
-   * @param apiSecret API secret
-   * @param passphrase Optional passphrase
-   * @returns Hex-encoded hash of credentials
-   */
   createCredentialsHash(apiKey: string, apiSecret: string, passphrase?: string): string {
     const credentialsString = `${apiKey}:${apiSecret}:${passphrase || ''}`;
     return this.hash(credentialsString);
   }
 
-  /**
-   * Checks if AMD SEV-SNP key derivation is available
-   *
-   * @returns true if hardware derivation available, false if using fallback
-   */
   async isHardwareKeyAvailable(): Promise<boolean> {
     return this.keyManagement.isSevSnpAvailable();
   }
 
-  /**
-   * Gets current master key ID for diagnostic purposes
-   *
-   * @returns Master key identifier (hash, not the key itself)
-   */
   async getCurrentMasterKeyId(): Promise<string> {
     return this.keyManagement.getCurrentMasterKeyId();
   }

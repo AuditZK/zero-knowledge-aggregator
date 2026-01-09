@@ -11,6 +11,14 @@ import { IExchangeConnector } from '../external/interfaces/IExchangeConnector';
 
 const logger = getLogger('EquitySnapshotAggregator');
 
+/** Pre-compiled regex patterns for market type detection (case-insensitive). */
+const MARKET_TYPE_PATTERNS = {
+  swap: /PERP|SWAP|:USDT|:USD|:BUSD/i,
+  future: /\d{6}/,
+  options: /-[CP]/i,
+  optionsExclude: /-[CP]/i,
+} as const;
+
 // Types for market trade data
 interface MarketTrade {
   id: string;
@@ -60,16 +68,37 @@ export class EquitySnapshotAggregator {
   ) {}
   // SECURITY: No TradeRepository - trades are fetched from API and aggregated in memory only
 
-  private matchesMarketType(symbol: string, marketType: string): boolean {
-    const s = symbol.toUpperCase();
-    switch (marketType) {
-      case 'swap': return s.includes('PERP') || s.includes('SWAP') || s.includes(':USDT') || s.includes(':USD') || s.includes(':BUSD');
-      case 'future': return /\d{6}/.test(s) && !s.includes('-C') && !s.includes('-P');
-      case 'options': return s.includes('-C') || s.includes('-P');
-      case 'spot':
-      case 'margin': return !s.includes('PERP') && !s.includes('SWAP') && !s.includes(':USDT') && !s.includes(':USD') && !/\d{6}/.test(s) && !s.includes('-C') && !s.includes('-P');
-      default: return true;
+  /** Determines market type for a symbol using pre-compiled regex (O(1) per symbol). */
+  private detectMarketTypeForSymbol(symbol: string): MarketType {
+    if (MARKET_TYPE_PATTERNS.options.test(symbol)) {
+      return 'options';
     }
+    if (MARKET_TYPE_PATTERNS.swap.test(symbol)) {
+      return 'swap';
+    }
+    if (MARKET_TYPE_PATTERNS.future.test(symbol)) {
+      return 'future';
+    }
+    return 'spot';
+  }
+
+  /** Classifies trades by market type in single O(n) pass. */
+  private classifyTradesByMarket(trades: MarketTrade[]): Record<MarketType, MarketTrade[]> {
+    const classified: Record<MarketType, MarketTrade[]> = {
+      spot: [],
+      swap: [],
+      future: [],
+      options: [],
+      margin: [],
+      earn: [],
+    };
+
+    for (const trade of trades) {
+      const marketType = this.detectMarketTypeForSymbol(trade.symbol);
+      classified[marketType].push(trade);
+    }
+
+    return classified;
   }
 
   async updateCurrentSnapshot(userUid: string, exchange: string): Promise<void> {
@@ -81,16 +110,9 @@ export class EquitySnapshotAggregator {
     logger.info(`Updated snapshot for ${userUid} on ${exchange}: equity=${snapshot.totalEquity.toFixed(2)}, realized=${snapshot.realizedBalance.toFixed(2)}, unrealized=${snapshot.unrealizedPnL.toFixed(2)}`);
   }
 
-  /**
-   * Build snapshot data WITHOUT saving to database.
-   * Used for atomic multi-exchange sync where all snapshots are collected first,
-   * then saved in a single transaction (all-or-nothing).
-   *
-   * SECURITY: Prevents partial snapshots that would corrupt performance metrics.
-   */
+  /** Build snapshot in memory (no DB save). For atomic multi-exchange sync. */
   async buildSnapshot(userUid: string, exchange: string): Promise<SnapshotData | null> {
     try {
-      // Step 1: Get user and connector
       const { connector, currentSnapshot } = await this.getConnectorAndSnapshotTime(
         userUid,
         exchange
@@ -100,12 +122,9 @@ export class EquitySnapshotAggregator {
         return null;
       }
 
-      // Step 2: Fetch balances by market type
       const { balancesByMarket, globalEquity, globalMargin, filteredTypes } =
         await this.fetchBalancesByMarket(connector, exchange);
 
-      // Step 3: Fetch trades by market - ALWAYS from start of day (00:00 UTC)
-      // Daily snapshots need ALL trades from the day, not just since last sync
       const startOfDay = TimeUtils.getStartOfDayUTC(currentSnapshot);
       const { tradesByMarket, swapSymbols } = await this.fetchTradesByMarket(
         exchange,
@@ -114,10 +133,7 @@ export class EquitySnapshotAggregator {
         connector
       );
 
-      // Step 4: Calculate fees
       const totalFundingFees = await this.calculateFundingFees(connector, swapSymbols, startOfDay);
-
-      // Step 5: Build market breakdown
       const breakdown = this.buildMarketBreakdown(
         balancesByMarket,
         tradesByMarket,
@@ -126,10 +142,7 @@ export class EquitySnapshotAggregator {
         globalMargin
       );
 
-      // Step 6: Calculate unrealized PnL
       const totalUnrealizedPnl = await this.calculateUnrealizedPnl(connector, balancesByMarket);
-
-      // Step 7: Build and return snapshot (without saving)
       const totalRealizedBalance = globalEquity - totalUnrealizedPnl;
 
       const snapshot: SnapshotData = {
@@ -156,9 +169,6 @@ export class EquitySnapshotAggregator {
     }
   }
 
-  /**
-   * Get connector and calculate snapshot time
-   */
   private async getConnectorAndSnapshotTime(userUid: string, exchange: string) {
     const user = await this.userRepo.getUserByUid(userUid);
     if (!user) {
@@ -189,9 +199,6 @@ export class EquitySnapshotAggregator {
     return { connector, syncInterval, currentSnapshot };
   }
 
-  /**
-   * Fetch balances for all market types
-   */
   private async fetchBalancesByMarket(connector: ExtendedConnector, exchange: string) {
     const balancesByMarket: Record<string, MarketBalanceBreakdown> = {};
     let globalEquity = 0;
@@ -277,12 +284,7 @@ export class EquitySnapshotAggregator {
     return { balancesByMarket, globalEquity, globalMargin, filteredTypes };
   }
 
-  /**
-   * Fetch trades grouped by market type
-   * For CCXT connectors: fetch directly from exchange API (memory only)
-   * For other connectors: empty (trade metrics from historical summaries)
-   * SECURITY: No database storage - trades stay in memory only
-   */
+  /** Fetch trades in memory only (no DB). CCXT: from API, others: from historical summaries. */
   private async fetchTradesByMarket(
     exchange: string,
     since: Date,
@@ -323,9 +325,6 @@ export class EquitySnapshotAggregator {
     return { tradesByMarket, swapSymbols };
   }
 
-  /**
-   * Calculate total funding fees for swap positions
-   */
   private async calculateFundingFees(
     connector: ExtendedConnector,
     swapSymbols: Set<string>,
@@ -343,10 +342,6 @@ export class EquitySnapshotAggregator {
     }
   }
 
-  /**
-   * Helper to create both camelCase and snake_case properties for gRPC compatibility
-   * gRPC expects snake_case but TypeScript uses camelCase internally
-   */
   private createDualCaseMetrics(tradingFees: number, fundingFees: number) {
     return {
       tradingFees,
@@ -356,11 +351,47 @@ export class EquitySnapshotAggregator {
     };
   }
 
-  /**
-   * Build detailed breakdown by market type
-   * Always categorizes trades into spot/swap/options even if balance data only exists globally
-   * Uses snake_case for JSON properties to match gRPC expected format
-   */
+  /** Calculates volume, fees, and trade count from balance or trades. */
+  private calculateMarketMetrics(
+    balance: MarketBalanceBreakdown | undefined,
+    trades: MarketTrade[]
+  ): { volume: number; fees: number; trades: number } {
+    const volume = balance?.volume ?? trades.reduce((sum, t) => {
+      const tradeCost = t.cost || (t.price * t.amount) || 0;
+      return sum + tradeCost;
+    }, 0);
+
+    const fees = balance?.tradingFees ?? balance?.trading_fees ??
+      trades.reduce((sum, t) => sum + (t.fee?.cost || 0), 0);
+
+    const tradeCount = balance?.trades ?? trades.length;
+
+    return { volume, fees, trades: tradeCount };
+  }
+
+  /** Builds market breakdown data structure with dual-case field names. */
+  private buildMarketData(
+    balance: MarketBalanceBreakdown | undefined,
+    volume: number,
+    trades: number,
+    fees: number,
+    fundingFees: number
+  ): MarketBalanceBreakdown {
+    return {
+      totalEquityUsd: balance?.totalEquityUsd || 0,
+      unrealizedPnl: balance?.unrealizedPnl || 0,
+      realizedPnl: balance?.realizedPnl,
+      availableBalance: balance?.availableBalance,
+      usedMargin: balance?.usedMargin,
+      positions: balance?.positions,
+      equity: balance?.totalEquityUsd || balance?.equity || 0,
+      available_margin: balance?.availableBalance || balance?.available_margin || 0,
+      volume,
+      trades,
+      ...this.createDualCaseMetrics(fees, fundingFees)
+    };
+  }
+
   private buildMarketBreakdown(
     balancesByMarket: Record<string, MarketBalanceBreakdown>,
     tradesByMarket: Record<string, MarketTrade[]>,
@@ -370,88 +401,49 @@ export class EquitySnapshotAggregator {
   ): BreakdownByMarket {
     const breakdown: BreakdownByMarket = {};
 
-    // Collect all trades from all market buckets
-    const allTrades: MarketTrade[] = [];
-    for (const trades of Object.values(tradesByMarket)) {
-      allTrades.push(...trades);
-    }
+    // Collect and classify trades in single O(n) pass (optimized from O(n²) filter)
+    const allTrades = Object.values(tradesByMarket).flat();
+    const classifiedTrades = this.classifyTradesByMarket(allTrades);
 
-    // Standard market types to always categorize (crypto: spot, swap, earn; plus shared: options)
     const standardMarkets: MarketType[] = ['spot', 'swap', 'earn', 'options'];
-
     let totalVolume = 0;
     let totalTrades = 0;
     let totalTradingFees = 0;
 
-    // Always categorize trades by market type
     for (const marketType of standardMarkets) {
-      // Filter trades for this market type
-      const marketTrades = allTrades.filter(t => this.matchesMarketType(t.symbol, marketType));
-
-      // Use balance data if available for this market type
+      const marketTrades = classifiedTrades[marketType];
       const balance = balancesByMarket[marketType];
 
-      // FIX: For IBKR and connectors with getBalanceBreakdown, use data from balance instead of empty trades
-      // Volume = trade cost (price * amount). Fallback to manual calculation if cost not set.
-      const volume = balance?.volume ?? marketTrades.reduce((sum, t) => {
-        const tradeCost = t.cost || (t.price && t.amount ? t.price * t.amount : 0);
-        return sum + tradeCost;
-      }, 0);
-      const fees = balance?.tradingFees ?? balance?.trading_fees ?? marketTrades.reduce((sum, t) => sum + (t.fee?.cost || 0), 0);
-      const trades = balance?.trades ?? marketTrades.length;
-
-      // Use snake_case format for JSON (matches gRPC expected format)
+      const { volume, fees, trades } = this.calculateMarketMetrics(balance, marketTrades);
       const fundingForMarket = marketType === 'swap' ? totalFundingFees : 0;
-      const marketData: MarketBalanceBreakdown = {
-        // Main fields using TypeScript interface
-        totalEquityUsd: balance?.totalEquityUsd || 0,
-        unrealizedPnl: balance?.unrealizedPnl || 0,
-        realizedPnl: balance?.realizedPnl,
-        availableBalance: balance?.availableBalance,
-        usedMargin: balance?.usedMargin,
-        positions: balance?.positions,
-        // snake_case aliases for gRPC mapping
-        equity: balance?.totalEquityUsd || balance?.equity || 0,
-        available_margin: balance?.availableBalance || balance?.available_margin || 0,
-        // Trading activity metrics (both camelCase and snake_case)
-        volume,
-        trades,
-        ...this.createDualCaseMetrics(fees, fundingForMarket)
-      };
 
+      const marketData = this.buildMarketData(balance, volume, trades, fees, fundingForMarket);
       (breakdown as Record<string, MarketBalanceBreakdown>)[marketType] = marketData;
+
       totalVolume += volume;
       totalTrades += trades;
       totalTradingFees += fees;
     }
 
-    // FIX: Also process IBKR-specific market types (stocks, futures_commodities, cfd, forex)
-    // that are in balancesByMarket but not in standardMarkets
+    // Process IBKR-specific market types (stocks, futures_commodities, cfd, forex)
     for (const [marketType, balance] of Object.entries(balancesByMarket)) {
-      if (marketType !== 'global' && !standardMarkets.includes(marketType as MarketType)) {
-        const volume = balance.volume || 0;
-        const trades = balance.trades || 0;
-        const fees = balance.tradingFees || balance.trading_fees || 0;
+      const isNonStandardMarket = marketType !== 'global' &&
+        !standardMarkets.includes(marketType as MarketType);
 
-        const marketData: MarketBalanceBreakdown = {
-          totalEquityUsd: balance.totalEquityUsd || 0,
-          unrealizedPnl: balance.unrealizedPnl || 0,
-          realizedPnl: balance.realizedPnl,
-          availableBalance: balance.availableBalance,
-          usedMargin: balance.usedMargin,
-          positions: balance.positions,
-          equity: balance.totalEquityUsd || balance.equity || 0,
-          available_margin: balance.availableBalance || balance.available_margin || 0,
-          volume,
-          trades,
-          ...this.createDualCaseMetrics(fees, 0) // No funding fees for stocks/futures/cfd/forex
-        };
-
-        (breakdown as Record<string, MarketBalanceBreakdown>)[marketType] = marketData;
-        totalVolume += volume;
-        totalTrades += trades;
-        totalTradingFees += fees;
+      if (!isNonStandardMarket) {
+        continue;
       }
+
+      const volume = balance.volume || 0;
+      const trades = balance.trades || 0;
+      const fees = balance.tradingFees || balance.trading_fees || 0;
+
+      const marketData = this.buildMarketData(balance, volume, trades, fees, 0);
+      (breakdown as Record<string, MarketBalanceBreakdown>)[marketType] = marketData;
+
+      totalVolume += volume;
+      totalTrades += trades;
+      totalTradingFees += fees;
     }
 
     breakdown.global = {
@@ -470,9 +462,6 @@ export class EquitySnapshotAggregator {
     return breakdown;
   }
 
-  /**
-   * Calculate unrealized PnL from open positions
-   */
   private async calculateUnrealizedPnl(
     connector: ExtendedConnector,
     balancesByMarket: Record<string, MarketBalanceBreakdown>

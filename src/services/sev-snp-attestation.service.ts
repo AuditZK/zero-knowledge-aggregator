@@ -39,10 +39,7 @@ export class SevSnpAttestationService {
 
   private tlsFingerprint: Buffer | null = null;
 
-  /**
-   * Set TLS certificate fingerprint to bind to attestation
-   * This binds the TLS certificate to the attestation report via reportData field
-   */
+  /** Binds TLS fingerprint to attestation reportData field. */
   setTlsFingerprint(fingerprint: Buffer): void {
     if (fingerprint.length !== 32) {
       throw new Error('TLS fingerprint must be 32 bytes (SHA-256)');

@@ -13,14 +13,14 @@ export class MemoryProtectionService {
   private static ptraceProtected = false;
 
   static async initialize(): Promise<void> {
-    logger.info('[MEMORY_PROTECTION] Initializing...');
+    logger.info('Initializing memory protection...');
 
     await this.disableCoreDumps();
     await this.enablePtraceProtection();
     this.checkMlockSupport();
     this.registerCleanupHandlers();
 
-    logger.info('[MEMORY_PROTECTION] Initialized', {
+    logger.info('Memory protection initialized', {
       coreDumps: this.coreDumpsDisabled,
       ptrace: this.ptraceProtected,
       mlock: this.mlockSupported
@@ -32,40 +32,36 @@ export class MemoryProtectionService {
       if ((process as any).setrlimit) {
         (process as any).setrlimit('core', { soft: 0, hard: 0 });
         this.coreDumpsDisabled = true;
-        logger.info('[MEMORY_PROTECTION] ✓ Core dumps disabled');
+        logger.info('Core dumps disabled');
         return;
       }
-
       try {
         await execAsync('ulimit -c 0');
         this.coreDumpsDisabled = true;
-        logger.info('[MEMORY_PROTECTION] ✓ Core dumps disabled via ulimit');
+        logger.info('Core dumps disabled via ulimit');
       } catch {
-        logger.warn('[MEMORY_PROTECTION] ⚠ Core dumps may be enabled - configure at OS level');
+        logger.warn('Core dumps may be enabled - configure at OS level');
       }
     } catch (error: unknown) {
-      const errorMessage = extractErrorMessage(error);
-      logger.error('[MEMORY_PROTECTION] Failed to disable core dumps', { error: errorMessage });
+      logger.error('Failed to disable core dumps', { error: extractErrorMessage(error) });
     }
   }
 
   private static async enablePtraceProtection(): Promise<void> {
     try {
-      if (process.platform !== 'linux') {return;}
-
+      if (process.platform !== 'linux') return;
       const ptraceScopePath = '/proc/sys/kernel/yama/ptrace_scope';
-      if (!fs.existsSync(ptraceScopePath)) {return;}
+      if (!fs.existsSync(ptraceScopePath)) return;
 
       const scope = fs.readFileSync(ptraceScopePath, 'utf8').trim();
       if (scope === '2' || scope === '3') {
         this.ptraceProtected = true;
-        logger.info(`[MEMORY_PROTECTION] ✓ Ptrace protection active (scope=${scope})`);
+        logger.info(`Ptrace protection active (scope=${scope})`);
       } else {
-        logger.warn(`[MEMORY_PROTECTION] ⚠ Weak ptrace protection (scope=${scope})`);
+        logger.warn(`Weak ptrace protection (scope=${scope})`);
       }
     } catch (error: unknown) {
-      const errorMessage = extractErrorMessage(error);
-      logger.error('[MEMORY_PROTECTION] Ptrace protection check failed', { error: errorMessage });
+      logger.error('Ptrace check failed', { error: extractErrorMessage(error) });
     }
   }
 
@@ -73,46 +69,57 @@ export class MemoryProtectionService {
     try {
       if (process.platform === 'linux' && fs.existsSync('/proc/self/status')) {
         const status = fs.readFileSync('/proc/self/status', 'utf8');
-        const vmLck = status.match(/VmLck:\s+(\d+)/);
-        if (vmLck) {
+        if (status.match(/VmLck:\s+(\d+)/)) {
           this.mlockSupported = true;
-          logger.info('[MEMORY_PROTECTION] mlock available');
+          logger.info('mlock available');
         } else {
-          logger.warn('[MEMORY_PROTECTION] ⚠ mlock not available (missing CAP_IPC_LOCK)');
+          logger.warn('mlock not available (missing CAP_IPC_LOCK)');
         }
       }
     } catch (error: unknown) {
-      const errorMessage = extractErrorMessage(error);
-      logger.warn('[MEMORY_PROTECTION] Could not check mlock', { error: errorMessage });
+      logger.warn('Could not check mlock', { error: extractErrorMessage(error) });
     }
   }
 
+  /**
+   * Securely wipes a Buffer by overwriting with random data then zeros.
+   * Unlike strings, Buffers are mutable and can be wiped.
+   */
   static wipeBuffer(buffer: Buffer): void {
-    if (!Buffer.isBuffer(buffer)) {return;}
+    if (!Buffer.isBuffer(buffer)) {
+      return;
+    }
     try {
       crypto.randomFillSync(buffer);
       buffer.fill(0);
-      logger.debug(`[MEMORY_PROTECTION] Wiped ${buffer.length} bytes`);
     } catch (error: unknown) {
-      const errorMessage = extractErrorMessage(error);
-      logger.error('[MEMORY_PROTECTION] Buffer wipe failed', { error: errorMessage });
+      logger.error('Buffer wipe failed', { error: extractErrorMessage(error) });
     }
   }
 
-  static wipeString(str: string): Buffer {
-    const buffer = Buffer.from(str, 'utf8');
-    this.wipeBuffer(buffer);
-    return buffer;
+  /**
+   * LIMITATION: JavaScript strings are immutable and CANNOT be wiped from memory.
+   * This method is a no-op placeholder. The original string remains in memory
+   * until garbage collected.
+   *
+   * In AMD SEV-SNP enclaves, memory encryption provides actual protection.
+   * For truly sensitive data, use Buffer directly (which CAN be wiped).
+   *
+   * @deprecated Use Buffer for sensitive data instead of strings
+   */
+  static wipeString(_str: string): void {
+    // No-op: JS strings are immutable - cannot be overwritten
+    // SEV-SNP memory encryption is the real protection layer
   }
 
   private static registerCleanupHandlers(): void {
     const cleanup = () => {
-      logger.info('[MEMORY_PROTECTION] Cleaning up secrets...');
+      logger.info('Cleaning up secrets...');
+      // Delete env vars on shutdown (strings cannot be wiped, but we remove references)
+      // SEV-SNP memory encryption protects data until process termination
       if (process.env.JWT_SECRET) {
-        this.wipeString(process.env.JWT_SECRET);
         delete process.env.JWT_SECRET;
       }
-      logger.info('[MEMORY_PROTECTION] Cleanup completed');
     };
 
     process.on('SIGTERM', cleanup);
