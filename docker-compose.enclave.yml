@@ -24,6 +24,8 @@ services:
       SKIP_ATTESTATION: ${SKIP_ATTESTATION:-false}
       ENABLE_ENCLAVE_LOG_STREAMING: "true"
       LOG_SERVER_API_KEY: ${LOG_SERVER_API_KEY:-}
+      # VPS benchmark service URL
+      BENCHMARK_SERVICE_URL: http://87.106.4.85
     ports:
       - "50051:50051"  # gRPC Server
       - "50052:50052"  # HTTP Log Server (SSE)
