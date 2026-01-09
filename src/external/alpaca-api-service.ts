@@ -118,18 +118,29 @@ export class AlpacaApiService {
   /**
    * Get trade history (account activities)
    */
-  async getTradeHistory(days: number = 90): Promise<AlpacaActivity[]> {
+  async getTradeHistory(startDate?: Date, endDate?: Date): Promise<AlpacaActivity[]> {
     try {
-      const after = new Date();
-      after.setDate(after.getDate() - days);
+      // Default to last 90 days if no dates provided
+      const after = startDate || (() => {
+        const date = new Date();
+        date.setDate(date.getDate() - 90);
+        return date;
+      })();
 
-      // Get fill activities (executed trades)
-      const activities = await this.alpaca.getAccountActivities({
+      const params: any = {
         activityTypes: 'FILL',
         after: after.toISOString(),
         direction: 'desc',
         pageSize: 500,
-      } as any);
+      };
+
+      // Add until parameter if endDate is provided
+      if (endDate) {
+        params.until = endDate.toISOString();
+      }
+
+      // Get fill activities (executed trades)
+      const activities = await this.alpaca.getAccountActivities(params);
 
       return (activities as AlpacaSDKActivity[]).map((activity) => ({
         id: activity.id,
