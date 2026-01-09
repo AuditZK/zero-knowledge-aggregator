@@ -7,7 +7,7 @@ import { EnclaveWorker } from './enclave-worker';
 import { getLogger, extractErrorMessage } from './utils/secure-enclave-logger';
 import { ReportGeneratorService } from './services/report-generator.service';
 import { ReportSigningService } from './services/report-signing.service';
-import { ReportRequest, VerifySignatureRequest } from './types/report.types';
+import { ReportRequest, VerifySignatureRequest, DailyReturn, MonthlyReturn, DrawdownPeriod } from './types/report.types';
 
 const logger = getLogger('EnclaveServer');
 import {
@@ -588,8 +588,15 @@ export class EnclaveServer {
         benchmark: rawRequest.benchmark === '' ? undefined : rawRequest.benchmark as 'SPY' | 'BTC-USD',
         includeRiskMetrics: rawRequest.include_risk_metrics || false,
         includeDrawdown: rawRequest.include_drawdown || false,
-        reportName: rawRequest.report_name === '' ? undefined : rawRequest.report_name,
-        baseCurrency: rawRequest.base_currency === '' ? 'USD' : rawRequest.base_currency
+        baseCurrency: rawRequest.base_currency === '' ? 'USD' : rawRequest.base_currency,
+        // Display parameters - NOT signed, can be customized per request
+        displayParams: {
+          reportName: rawRequest.report_name === '' ? undefined : rawRequest.report_name,
+          managerName: rawRequest.manager_name === '' ? undefined : rawRequest.manager_name,
+          firmName: rawRequest.firm_name === '' ? undefined : rawRequest.firm_name,
+          strategy: rawRequest.strategy === '' ? undefined : rawRequest.strategy,
+          disclaimers: rawRequest.disclaimers === '' ? undefined : rawRequest.disclaimers,
+        }
       };
 
       // Validate user_uid is present
@@ -620,24 +627,24 @@ export class EnclaveServer {
       }
 
       const signedReport = result.signedReport;
-      const report = signedReport.report;
-      const metrics = report.metrics;
+      const financialData = signedReport.financialData;
+      const metrics = financialData.metrics;
 
       // Convert to gRPC format
       const response = {
         success: true,
         error: '',
 
-        // Report metadata
-        report_id: report.reportId,
-        user_uid: report.userUid,
-        report_name: report.reportName,
-        generated_at: report.generatedAt.toISOString(),
-        period_start: report.periodStart.toISOString(),
-        period_end: report.periodEnd.toISOString(),
-        base_currency: report.baseCurrency,
-        benchmark: report.benchmark || '',
-        data_points: report.dataPoints,
+        // Report metadata (from signed financial data)
+        report_id: financialData.reportId,
+        user_uid: financialData.userUid,
+        report_name: signedReport.displayParams.reportName || 'Track Record Report',
+        generated_at: financialData.generatedAt.toISOString(),
+        period_start: financialData.periodStart.toISOString(),
+        period_end: financialData.periodEnd.toISOString(),
+        base_currency: financialData.baseCurrency,
+        benchmark: financialData.benchmark || '',
+        data_points: financialData.dataPoints,
 
         // Core metrics
         total_return: metrics.totalReturn,
@@ -665,7 +672,7 @@ export class EnclaveServer {
         // Drawdown data (optional)
         max_drawdown_duration: metrics.drawdownData?.maxDrawdownDuration || 0,
         current_drawdown: metrics.drawdownData?.currentDrawdown || 0,
-        drawdown_periods: metrics.drawdownData?.drawdownPeriods?.map(p => ({
+        drawdown_periods: metrics.drawdownData?.drawdownPeriods?.map((p: DrawdownPeriod) => ({
           start_date: p.startDate,
           end_date: p.endDate,
           depth: p.depth,
@@ -673,8 +680,8 @@ export class EnclaveServer {
           recovered: p.recovered
         })) || [],
 
-        // Chart data
-        daily_returns: report.dailyReturns.map(d => ({
+        // Chart data (from signed financial data)
+        daily_returns: financialData.dailyReturns.map((d: DailyReturn) => ({
           date: d.date,
           net_return: d.netReturn,
           benchmark_return: d.benchmarkReturn,
@@ -682,7 +689,7 @@ export class EnclaveServer {
           cumulative_return: d.cumulativeReturn,
           nav: d.nav
         })),
-        monthly_returns: report.monthlyReturns.map(m => ({
+        monthly_returns: financialData.monthlyReturns.map((m: MonthlyReturn) => ({
           date: m.date,
           net_return: m.netReturn,
           benchmark_return: m.benchmarkReturn,
@@ -703,8 +710,8 @@ export class EnclaveServer {
       };
 
       logger.info('Signed report generated successfully', {
-        report_id: report.reportId,
-        data_points: report.dataPoints,
+        report_id: financialData.reportId,
+        data_points: financialData.dataPoints,
         signature_length: signedReport.signature.length
       });
 
