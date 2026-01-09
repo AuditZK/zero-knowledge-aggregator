@@ -16,8 +16,29 @@ export interface ReportRequest {
   benchmark?: 'SPY' | 'BTC-USD';  // Optional benchmark comparison
   includeRiskMetrics?: boolean;   // Include VaR, skewness, kurtosis
   includeDrawdown?: boolean;      // Include drawdown chart data
-  reportName?: string;
   baseCurrency?: string;   // USD, EUR, etc.
+
+  // Display parameters - NOT part of signed data (can be customized per request)
+  displayParams?: DisplayParameters;
+}
+
+// ============================================================================
+// Display Parameters (NOT signed - presentation only)
+// ============================================================================
+
+/**
+ * Display parameters are NOT part of the cryptographic signature.
+ * This allows users to customize the report presentation (name, manager, firm)
+ * without invalidating the cached signed data.
+ *
+ * The signature proves the FINANCIAL DATA is authentic, not arbitrary text.
+ */
+export interface DisplayParameters {
+  reportName?: string;      // Custom report name (default: "Track Record Report")
+  managerName?: string;     // Portfolio manager name
+  firmName?: string;        // Firm/company name
+  strategy?: string;        // Strategy description
+  disclaimers?: string;     // Custom disclaimers
 }
 
 // ============================================================================
@@ -95,11 +116,19 @@ export interface ReportMetrics extends CoreMetrics {
   drawdownData?: DrawdownData;
 }
 
-export interface ReportData {
-  // Metadata
+/**
+ * Signed Financial Data - This is what gets cryptographically signed
+ *
+ * SECURITY: Only financial data is signed. Display parameters (names, labels)
+ * are NOT included in the signature. This ensures:
+ * 1. Same period = same signature (deduplication works)
+ * 2. Users can customize presentation without invalidating proof
+ * 3. The signature proves the NUMBERS are authentic
+ */
+export interface SignedFinancialData {
+  // Immutable identifiers
   reportId: string;
   userUid: string;
-  reportName: string;
   generatedAt: Date;
   periodStart: Date;
   periodEnd: Date;
@@ -107,23 +136,46 @@ export interface ReportData {
   benchmark?: string;
   dataPoints: number;
 
-  // Metrics
+  // Financial metrics (SIGNED)
   metrics: ReportMetrics;
 
-  // Chart data
+  // Chart data (SIGNED)
   dailyReturns: DailyReturn[];
   monthlyReturns: MonthlyReturn[];
+}
+
+/**
+ * Full Report Data - Combines signed financial data with display parameters
+ *
+ * When generating a report:
+ * 1. Check cache for existing SignedFinancialData (same period)
+ * 2. If cached, apply new display parameters
+ * 3. If not cached, generate and sign financial data, then apply display params
+ */
+export interface ReportData extends SignedFinancialData {
+  // Display parameters (NOT signed - can be customized per request)
+  displayParams: DisplayParameters;
 }
 
 // ============================================================================
 // Signed Report Types
 // ============================================================================
 
+/**
+ * Signed Report - Contains cryptographically signed financial data
+ *
+ * IMPORTANT: The signature is computed on SignedFinancialData ONLY.
+ * Display parameters are included but NOT part of the hash/signature.
+ * This allows users to customize presentation without invalidating the proof.
+ */
 export interface SignedReport {
-  // Report content
-  report: ReportData;
+  // Signed financial data (this is what the signature proves)
+  financialData: SignedFinancialData;
 
-  // Cryptographic signature
+  // Display parameters (NOT signed - presentation only)
+  displayParams: DisplayParameters;
+
+  // Cryptographic signature (computed on financialData only)
   signature: string;         // Base64 encoded ECDSA signature
   publicKey: string;         // Base64 encoded public key for verification
   signatureAlgorithm: string; // e.g., "ECDSA-P256-SHA256"
@@ -133,8 +185,23 @@ export interface SignedReport {
   attestationId?: string;    // SEV-SNP attestation ID if available
   enclaveMode: 'production' | 'development';
 
-  // Integrity
-  reportHash: string;        // SHA-256 hash of report data
+  // Integrity (hash of financialData only, NOT displayParams)
+  reportHash: string;        // SHA-256 hash of financial data
+}
+
+/**
+ * @deprecated Use SignedReport.financialData instead
+ * Kept for backward compatibility with existing code
+ */
+export interface SignedReportLegacy {
+  report: ReportData;
+  signature: string;
+  publicKey: string;
+  signatureAlgorithm: string;
+  enclaveVersion: string;
+  attestationId?: string;
+  enclaveMode: 'production' | 'development';
+  reportHash: string;
 }
 
 export interface VerifySignatureRequest {

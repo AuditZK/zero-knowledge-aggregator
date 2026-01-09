@@ -1,7 +1,13 @@
 import { injectable } from 'tsyringe';
 import { createHash, createSign, createVerify, generateKeyPairSync, KeyObject } from 'crypto';
 import { getLogger } from '../utils/secure-enclave-logger';
-import { ReportData, SignedReport, VerifySignatureRequest, VerifySignatureResponse } from '../types/report.types';
+import {
+  SignedFinancialData,
+  DisplayParameters,
+  SignedReport,
+  VerifySignatureRequest,
+  VerifySignatureResponse
+} from '../types/report.types';
 
 const logger = getLogger('ReportSigning');
 
@@ -44,15 +50,21 @@ export class ReportSigningService {
   }
 
   /**
-   * Sign a report with the enclave's private key
+   * Sign financial data with the enclave's private key
+   *
+   * SECURITY: Only SignedFinancialData is signed. DisplayParameters are NOT
+   * part of the signature. This ensures:
+   * 1. Same period = same signature (deduplication works)
+   * 2. Users can customize presentation without invalidating the cryptographic proof
+   * 3. The signature proves the NUMBERS are authentic, not arbitrary text labels
    */
-  signReport(reportData: ReportData): SignedReport {
-    // Serialize report data deterministically
-    const reportJson = this.serializeReportData(reportData);
+  signFinancialData(financialData: SignedFinancialData, displayParams: DisplayParameters): SignedReport {
+    // Serialize ONLY financial data deterministically (NOT display params)
+    const financialJson = this.serializeFinancialData(financialData);
 
-    // Calculate SHA-256 hash of the report
+    // Calculate SHA-256 hash of the FINANCIAL DATA only
     const reportHash = createHash('sha256')
-      .update(reportJson)
+      .update(financialJson)
       .digest('hex');
 
     // Sign the hash with ECDSA (sign the hex hash string for external verification)
@@ -67,7 +79,8 @@ export class ReportSigningService {
     const attestationId = process.env.ATTESTATION_ID;
 
     const signedReport: SignedReport = {
-      report: reportData,
+      financialData,
+      displayParams,
       signature,
       publicKey: this.publicKeyBase64,
       signatureAlgorithm: this.algorithm,
@@ -77,11 +90,12 @@ export class ReportSigningService {
       reportHash
     };
 
-    logger.info('Report signed successfully', {
-      reportId: reportData.reportId,
+    logger.info('Financial data signed successfully', {
+      reportId: financialData.reportId,
       reportHash: reportHash.substring(0, 16) + '...',
       signatureLength: signature.length,
-      enclaveMode: signedReport.enclaveMode
+      enclaveMode: signedReport.enclaveMode,
+      displayParams: { reportName: displayParams.reportName }
     });
 
     return signedReport;
@@ -135,30 +149,33 @@ export class ReportSigningService {
 
   /**
    * Verify a complete signed report
+   *
+   * SECURITY: Verifies only the financial data hash and signature.
+   * Display parameters are NOT verified (they can be customized per request).
    */
   verifySignedReport(signedReport: SignedReport): VerifySignatureResponse {
     try {
-      // Re-serialize the report data
-      const reportJson = this.serializeReportData(signedReport.report);
+      // Re-serialize the FINANCIAL DATA only (NOT display params)
+      const financialJson = this.serializeFinancialData(signedReport.financialData);
 
       // Verify the hash matches
       const calculatedHash = createHash('sha256')
-        .update(reportJson)
+        .update(financialJson)
         .digest('hex');
 
       if (calculatedHash !== signedReport.reportHash) {
         return {
           valid: false,
-          error: 'Report hash mismatch - data may have been tampered with'
+          error: 'Financial data hash mismatch - data may have been tampered with'
         };
       }
 
       // Import the public key
       const publicKeyDer = Buffer.from(signedReport.publicKey, 'base64');
 
-      // Verify signature
+      // Verify signature (signature is on the hash, not the JSON)
       const verify = createVerify('SHA256');
-      verify.update(reportJson);
+      verify.update(signedReport.reportHash);
       verify.end();
 
       const isValid = verify.verify(
@@ -208,11 +225,13 @@ export class ReportSigningService {
   }
 
   /**
-   * Serialize report data deterministically for signing
+   * Serialize financial data deterministically for signing
    * Uses sorted keys to ensure consistent serialization
+   *
+   * SECURITY: Only financial data is serialized - display params are excluded
    */
-  private serializeReportData(reportData: ReportData): string {
-    return JSON.stringify(reportData, this.sortedReplacer);
+  private serializeFinancialData(financialData: SignedFinancialData): string {
+    return JSON.stringify(financialData, this.sortedReplacer);
   }
 
   /**
