@@ -115,15 +115,29 @@ export interface EarnMarketSnapshot {
 export type MarketType = 'spot' | 'swap' | 'future' | 'options' | 'margin' | 'earn';
 
 /**
+ * Exchanges where spot and swap share the same USDT pool (unified margin mode)
+ * For these, we only count swap to avoid double-counting
+ */
+const UNIFIED_MARGIN_EXCHANGES = new Set(['mexc']);
+
+/**
  * Get filtered market types for unified account exchanges
  * On unified accounts (Bitget, OKX, Bybit), 'swap' contains both swap and future data
  * We filter out 'future' and 'margin' to avoid duplication
+ * For MEXC: spot and swap share the same USDT pool, only count swap
  */
 export function getFilteredMarketTypes(
   exchangeId: string,
   detectedTypes: MarketType[]
 ): MarketType[] {
-  if (isUnifiedAccountExchange(exchangeId)) {
+  const exchangeLower = exchangeId.toLowerCase();
+
+  // MEXC: unified margin mode - spot and swap share same USDT, only count swap
+  if (UNIFIED_MARGIN_EXCHANGES.has(exchangeLower)) {
+    return detectedTypes.filter(t => !['future', 'margin', 'spot'].includes(t));
+  }
+
+  if (isUnifiedAccountExchange(exchangeLower)) {
     // Filter out 'future' and 'margin' to avoid duplication
     return detectedTypes.filter(t => !['future', 'margin'].includes(t));
   }
