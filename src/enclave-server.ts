@@ -645,6 +645,7 @@ export class EnclaveServer {
         base_currency: financialData.baseCurrency,
         benchmark: financialData.benchmark || '',
         data_points: financialData.dataPoints,
+        exchanges: financialData.exchanges || [],
 
         // Core metrics
         total_return: metrics.totalReturn,
