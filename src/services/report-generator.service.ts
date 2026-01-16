@@ -201,6 +201,11 @@ export class ReportGeneratorService {
         };
       }
 
+      // Extract unique exchanges from snapshots (sorted for deterministic signing)
+      const exchanges = Array.from(
+        new Set(snapshots.map(s => s.exchange || 'unknown'))
+      ).sort();
+
       const financialData: SignedFinancialData = {
         reportId: this.generateReportId(),
         userUid: request.userUid,
@@ -210,6 +215,7 @@ export class ReportGeneratorService {
         baseCurrency: request.baseCurrency || 'USD',
         benchmark: request.benchmark,
         dataPoints: dailyReturns.length,
+        exchanges, // Cryptographically signed proof of brokers used
         metrics,
         dailyReturns,
         monthlyReturns
@@ -223,6 +229,7 @@ export class ReportGeneratorService {
         dataPoints: financialData.dataPoints,
         periodStart: financialData.periodStart.toISOString(),
         periodEnd: financialData.periodEnd.toISOString(),
+        exchanges: financialData.exchanges,
         displayParams: { reportName: displayParams.reportName }
       });
 
