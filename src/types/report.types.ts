@@ -136,6 +136,10 @@ export interface SignedFinancialData {
   benchmark?: string;
   dataPoints: number;
 
+  // Connected exchanges (SIGNED) - proves which brokers were used
+  // This is cryptographically bound to the report via the signature
+  exchanges: string[];
+
   // Financial metrics (SIGNED)
   metrics: ReportMetrics;
 
