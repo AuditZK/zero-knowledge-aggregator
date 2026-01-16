@@ -236,6 +236,7 @@ message SignedReportResponse {
   string base_currency = 16;
   string benchmark = 17;
   int32 data_points = 18;
+  repeated string exchanges = 19;  // Connected exchanges (cryptographically signed)
 
   // Core metrics
   double total_return = 20;
