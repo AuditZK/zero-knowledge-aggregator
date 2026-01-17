@@ -161,7 +161,7 @@ export class PerformanceMetricsService {
     let previousEquity: number | null = null;
 
     // Sort dates chronologically
-    const sortedDates = Array.from(byDate.keys()).sort();
+    const sortedDates = Array.from(byDate.keys()).sort((a, b) => a.localeCompare(b));
 
     for (const dateKey of sortedDates) {
       const daySnapshots = byDate.get(dateKey);

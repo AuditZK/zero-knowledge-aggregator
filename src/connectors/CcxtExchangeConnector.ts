@@ -21,15 +21,15 @@ const MARKET_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 const SYMBOL_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 export class CcxtExchangeConnector extends CryptoExchangeConnector {
-  private exchange: ccxt.Exchange;
-  private exchangeName: string;
+  private readonly exchange: ccxt.Exchange;
+  private readonly exchangeName: string;
 
   /** Cached market types to avoid repeated loadMarkets() calls. */
   private cachedMarketTypes: MarketType[] | null = null;
   private marketTypesExpiry = 0;
 
   /** Cached active symbols by market type. */
-  private cachedSymbols: Map<string, { symbols: string[]; expiry: number }> = new Map();
+  private readonly cachedSymbols: Map<string, { symbols: string[]; expiry: number }> = new Map();
 
   constructor(exchangeId: string, credentials: ExchangeCredentials) {
     super(credentials);
@@ -224,7 +224,7 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
       for (const [currency, value] of Object.entries(balance)) {
         if (['info', 'free', 'used', 'total', 'debt', 'timestamp', 'datetime'].includes(currency)) {continue;}
         const holding = value as any;
-        if (holding && holding.total && Number(holding.total) > 0) {
+        if (holding?.total && Number(holding.total) > 0) {
           spotEquity += Number(holding.total) || 0;
         }
       }
@@ -455,7 +455,7 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
           for (const [currency, value] of Object.entries(balance)) {
             if (['info', 'free', 'used', 'total', 'debt', 'timestamp', 'datetime'].includes(currency)) {continue;}
             const holding = value as any;
-            if (holding && holding.total && Number(holding.total) > 0) {
+            if (holding?.total && Number(holding.total) > 0) {
               // For stablecoins, use direct value; for other assets, we'd need price conversion
               if (['USDT', 'USDC', 'USD', 'BUSD', 'DAI'].includes(currency)) {
                 earnEquity += Number(holding.total) || 0;

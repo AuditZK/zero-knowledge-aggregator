@@ -76,3 +76,6 @@ scripts/audit-project.py
 
 # Wiki (managed in separate .wiki repository)
 wiki/
+
+# SonarCloud
+.scannerwork/

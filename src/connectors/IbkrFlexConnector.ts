@@ -9,9 +9,9 @@ import { IbkrFlexService, FlexTrade, FlexAccountSummary } from '../external/ibkr
 import { ExchangeCredentials } from '../types';
 
 export class IbkrFlexConnector extends BaseExchangeConnector {
-  private flexService: IbkrFlexService;
-  private flexToken: string;
-  private queryId: string;
+  private readonly flexService: IbkrFlexService;
+  private readonly flexToken: string;
+  private readonly queryId: string;
 
   /**
    * @param credentials Exchange credentials (apiKey=token, apiSecret=queryId)

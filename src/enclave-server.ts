@@ -447,11 +447,12 @@ export class EnclaveServer {
 
       // Normalize gRPC defaults: convert empty strings and 0/"0" to undefined
       // Note: gRPC with longs:String returns "0" as string, not number
+      const isZeroOrEmpty = (val: unknown): boolean => !val || val === 0 || val === '0';
       const request = {
         user_uid: rawRequest.user_uid,
         exchange: rawRequest.exchange === '' ? undefined : rawRequest.exchange,
-        start_date: !rawRequest.start_date || rawRequest.start_date == 0 ? undefined : rawRequest.start_date,
-        end_date: !rawRequest.end_date || rawRequest.end_date == 0 ? undefined : rawRequest.end_date
+        start_date: isZeroOrEmpty(rawRequest.start_date) ? undefined : rawRequest.start_date,
+        end_date: isZeroOrEmpty(rawRequest.end_date) ? undefined : rawRequest.end_date
       };
 
       logger.info('Getting performance metrics', {

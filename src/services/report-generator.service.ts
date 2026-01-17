@@ -204,7 +204,7 @@ export class ReportGeneratorService {
       // Extract unique exchanges from snapshots (sorted for deterministic signing)
       const exchanges = Array.from(
         new Set(snapshots.map(s => s.exchange || 'unknown'))
-      ).sort();
+      ).sort((a, b) => a.localeCompare(b));
 
       const financialData: SignedFinancialData = {
         reportId: this.generateReportId(),
@@ -330,7 +330,7 @@ export class ReportGeneratorService {
     const exchangeFirstEquity = new Map<string, number>();
 
     // Sort dates chronologically
-    const sortedDates = Array.from(byDateAndExchange.keys()).sort();
+    const sortedDates = Array.from(byDateAndExchange.keys()).sort((a, b) => a.localeCompare(b));
     const isFirstDay = (dateKey: string) => dateKey === sortedDates[0];
 
     // Find first equity for each exchange

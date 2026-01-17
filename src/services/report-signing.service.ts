@@ -243,7 +243,7 @@ export class ReportSigningService {
     }
     if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
       return Object.keys(value as Record<string, unknown>)
-        .sort()
+        .sort((a, b) => a.localeCompare(b))
         .reduce((sorted: Record<string, unknown>, key: string) => {
           sorted[key] = (value as Record<string, unknown>)[key];
           return sorted;

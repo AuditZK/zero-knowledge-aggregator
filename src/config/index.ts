@@ -96,23 +96,23 @@ const parseCorsOrigin = (origin?: string): string | string[] => {
 };
 
 export const serverConfig: ServerConfig = {
-  port: parseInt(process.env.PORT || '3005', 10),
+  port: Number.parseInt(process.env.PORT || '3005', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
   apiPrefix: process.env.API_PREFIX || '/api/v1',
   corsOrigin: parseCorsOrigin(process.env.CORS_ORIGIN),
   jwtSecret: JWT_SECRET!,
-  bcryptRounds: parseInt(process.env.BCRYPT_ROUNDS || '12', 10),
+  bcryptRounds: Number.parseInt(process.env.BCRYPT_ROUNDS || '12', 10),
   logLevel: LOG_LEVEL || 'info',
-  rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
-  rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
-  dataRetentionDays: parseInt(process.env.DATA_RETENTION_DAYS || '30', 10),
+  rateLimitWindowMs: Number.parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
+  rateLimitMaxRequests: Number.parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
+  dataRetentionDays: Number.parseInt(process.env.DATA_RETENTION_DAYS || '30', 10),
 };
 
 export const databaseConfig: DatabaseConfig = {
   url: DATABASE_URL!,
   ssl: process.env.DB_SSL === 'true',
-  maxConnections: parseInt(process.env.DB_MAX_CONNECTIONS || '50', 10),
-  idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT_MS || '30000', 10),
+  maxConnections: Number.parseInt(process.env.DB_MAX_CONNECTIONS || '50', 10),
+  idleTimeoutMillis: Number.parseInt(process.env.DB_IDLE_TIMEOUT_MS || '30000', 10),
 };
 
 // Export encryption key for EncryptionService
