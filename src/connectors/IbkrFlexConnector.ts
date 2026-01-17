@@ -8,6 +8,17 @@ import {
 import { IbkrFlexService, FlexTrade, FlexAccountSummary } from '../external/ibkr-flex-service';
 import { ExchangeCredentials } from '../types';
 
+/** Trade metrics by asset category with guaranteed total field */
+interface IbkrTradeMetrics {
+  stocks: { volume: number; count: number; fees: number };
+  options: { volume: number; count: number; fees: number };
+  futures_commodities: { volume: number; count: number; fees: number };
+  cfd: { volume: number; count: number; fees: number };
+  forex: { volume: number; count: number; fees: number };
+  total: { volume: number; count: number; fees: number };
+  [key: string]: { volume: number; count: number; fees: number };
+}
+
 export class IbkrFlexConnector extends BaseExchangeConnector {
   private readonly flexService: IbkrFlexService;
   private readonly flexToken: string;
@@ -77,10 +88,10 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
   // IBKR asset categories for trade metrics: stocks, options, futures_commodities, cfd, forex
 
   // Trade metrics grouped by IBKR asset category
-  private groupTradesByDate(trades: FlexTrade[]): Map<string, Record<string, { volume: number; count: number; fees: number }>> {
-    const tradesByDate = new Map<string, Record<string, { volume: number; count: number; fees: number }>>();
+  private groupTradesByDate(trades: FlexTrade[]): Map<string, IbkrTradeMetrics> {
+    const tradesByDate = new Map<string, IbkrTradeMetrics>();
 
-    const createEmptyMetrics = () => ({
+    const createEmptyMetrics = (): IbkrTradeMetrics => ({
       stocks: { volume: 0, count: 0, fees: 0 },
       options: { volume: 0, count: 0, fees: 0 },
       futures_commodities: { volume: 0, count: 0, fees: 0 }, // FUT + CMDTY merged
@@ -119,9 +130,9 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
         categoryMetrics.count += 1;
         categoryMetrics.fees += fees;
       }
-      dayMetrics.total!.volume += volume;
-      dayMetrics.total!.count += 1;
-      dayMetrics.total!.fees += fees;
+      dayMetrics.total.volume += volume;
+      dayMetrics.total.count += 1;
+      dayMetrics.total.fees += fees;
     }
 
     return tradesByDate;
