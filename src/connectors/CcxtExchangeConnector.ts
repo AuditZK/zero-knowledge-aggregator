@@ -442,55 +442,83 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
    */
   async getEarnBalance(): Promise<MarketBalanceData> {
     return this.withErrorHandling('getEarnBalance', async () => {
-      let earnEquity = 0;
-
-      // Try different CCXT earn methods depending on exchange support
-      // Method 1: fetchBalance with type 'earn' or 'savings'
-      const earnTypes = ['earn', 'savings', 'funding'];
-
-      for (const earnType of earnTypes) {
-        try {
-          const balance = await this.exchange.fetchBalance({ type: earnType });
-
-          for (const [currency, value] of Object.entries(balance)) {
-            if (['info', 'free', 'used', 'total', 'debt', 'timestamp', 'datetime'].includes(currency)) {continue;}
-            const holding = value as any;
-            if (holding?.total && Number(holding.total) > 0) {
-              // For stablecoins, use direct value; for other assets, we'd need price conversion
-              if (['USDT', 'USDC', 'USD', 'BUSD', 'DAI'].includes(currency)) {
-                earnEquity += Number(holding.total) || 0;
-              }
-            }
-          }
-
-          if (earnEquity > 0) {
-            this.logger.info(`Earn balance (${earnType}): ${earnEquity.toFixed(2)} USD`);
-            return { equity: earnEquity, available_margin: 0 };
-          }
-        } catch (error) {
-          this.logger.debug(`${earnType} balance not available: ${extractErrorMessage(error)}`);
-        }
+      // Try standard CCXT earn methods first
+      const standardEquity = await this.tryStandardEarnMethods();
+      if (standardEquity > 0) {
+        return { equity: standardEquity, available_margin: 0 };
       }
 
-      // Method 2: Try Binance-specific Simple Earn API
-      if (this.exchangeName.toLowerCase() === 'binance') {
-        try {
-          // Binance Simple Earn - Flexible Products
-          const earnProducts = await (this.exchange as any).sapiGetSimpleEarnFlexiblePosition();
-          if (earnProducts?.rows) {
-            for (const product of earnProducts.rows) {
-              if (['USDT', 'USDC', 'BUSD'].includes(product.asset)) {
-                earnEquity += parseFloat(product.totalAmount || 0);
-              }
-            }
-          }
-        } catch {
-          this.logger.debug('Binance Simple Earn API not available');
-        }
-      }
-
-      this.logger.info(`Total earn balance: ${earnEquity.toFixed(2)} USD`);
-      return { equity: earnEquity, available_margin: 0 };
+      // Try exchange-specific methods
+      const specificEquity = await this.tryExchangeSpecificEarn();
+      this.logger.info(`Total earn balance: ${specificEquity.toFixed(2)} USD`);
+      return { equity: specificEquity, available_margin: 0 };
     });
+  }
+
+  private async tryStandardEarnMethods(): Promise<number> {
+    const earnTypes = ['earn', 'savings', 'funding'];
+
+    for (const earnType of earnTypes) {
+      const equity = await this.tryEarnType(earnType);
+      if (equity > 0) return equity;
+    }
+
+    return 0;
+  }
+
+  private async tryEarnType(earnType: string): Promise<number> {
+    try {
+      const balance = await this.exchange.fetchBalance({ type: earnType });
+      const equity = this.sumStablecoinBalances(balance);
+
+      if (equity > 0) {
+        this.logger.info(`Earn balance (${earnType}): ${equity.toFixed(2)} USD`);
+      }
+      return equity;
+    } catch (error) {
+      this.logger.debug(`${earnType} balance not available: ${extractErrorMessage(error)}`);
+      return 0;
+    }
+  }
+
+  private readonly STABLECOINS = ['USDT', 'USDC', 'USD', 'BUSD', 'DAI'];
+  private readonly BALANCE_META_KEYS = ['info', 'free', 'used', 'total', 'debt', 'timestamp', 'datetime'];
+
+  private sumStablecoinBalances(balance: Record<string, unknown>): number {
+    let total = 0;
+
+    for (const [currency, value] of Object.entries(balance)) {
+      if (this.BALANCE_META_KEYS.includes(currency)) continue;
+      if (!this.STABLECOINS.includes(currency)) continue;
+
+      const holding = value as { total?: number | string };
+      if (holding?.total && Number(holding.total) > 0) {
+        total += Number(holding.total) || 0;
+      }
+    }
+
+    return total;
+  }
+
+  private async tryExchangeSpecificEarn(): Promise<number> {
+    if (this.exchangeName.toLowerCase() !== 'binance') {
+      return 0;
+    }
+
+    return this.tryBinanceSimpleEarn();
+  }
+
+  private async tryBinanceSimpleEarn(): Promise<number> {
+    try {
+      const earnProducts = await (this.exchange as any).sapiGetSimpleEarnFlexiblePosition();
+      if (!earnProducts?.rows) return 0;
+
+      return earnProducts.rows
+        .filter((p: { asset: string }) => ['USDT', 'USDC', 'BUSD'].includes(p.asset))
+        .reduce((sum: number, p: { totalAmount?: string }) => sum + Number.parseFloat(p.totalAmount || '0'), 0);
+    } catch {
+      this.logger.debug('Binance Simple Earn API not available');
+      return 0;
+    }
   }
 }

@@ -113,58 +113,90 @@ export class TradeStationConnector extends RestBrokerConnector {
       await this.ensureAccountIds();
 
       const orders = await this.api.getHistoricalOrders(this.accountIds, startDate);
+      const filledOrders = orders.filter(order => this.isFilledOrderInRange(order, startDate, endDate));
 
-      // Filter to filled orders only and within date range
-      const filledOrders = orders.filter(order => {
-        if (order.Status !== 'Filled' && order.Status !== 'FLL') {
-          return false;
-        }
-
-        const orderDate = new Date(order.ClosedDateTime || order.OpenedDateTime);
-        return this.isInDateRange(orderDate, startDate, endDate);
-      });
-
-      // Convert orders to trades (handle multi-leg orders)
-      const trades: TradeData[] = [];
-
-      for (const order of filledOrders) {
-        // Handle legs (for options spreads, etc.)
-        for (const leg of order.Legs) {
-          if (leg.ExecQuantity && leg.ExecQuantity > 0) {
-            trades.push({
-              tradeId: `${order.OrderID}-${leg.Symbol}`,
-              symbol: leg.Symbol,
-              side: leg.BuyOrSell === 'Buy' ? 'buy' as const : 'sell' as const,
-              quantity: leg.ExecQuantity,
-              price: leg.ExecPrice || order.FilledPrice || 0,
-              fee: (order.Commission || 0) + (order.RoutingFee || 0),
-              feeCurrency: this.defaultCurrency,
-              timestamp: new Date(order.ClosedDateTime || order.OpenedDateTime),
-              orderId: order.OrderID,
-              realizedPnl: 0, // TradeStation doesn't provide per-trade PnL
-            });
-          }
-        }
-
-        // If no legs with execution, use order-level data
-        if (order.Legs.every(l => !l.ExecQuantity) && order.FilledQuantity) {
-          trades.push({
-            tradeId: order.OrderID,
-            symbol: order.Symbol,
-            side: order.Legs[0]?.BuyOrSell === 'Buy' ? 'buy' as const : 'sell' as const,
-            quantity: order.FilledQuantity,
-            price: order.FilledPrice || 0,
-            fee: (order.Commission || 0) + (order.RoutingFee || 0),
-            feeCurrency: this.defaultCurrency,
-            timestamp: new Date(order.ClosedDateTime || order.OpenedDateTime),
-            orderId: order.OrderID,
-            realizedPnl: 0,
-          });
-        }
-      }
-
-      return trades;
+      return filledOrders.flatMap(order => this.convertOrderToTrades(order));
     });
+  }
+
+  /** Check if order is filled and within date range */
+  private isFilledOrderInRange(order: { Status: string; ClosedDateTime?: string; OpenedDateTime: string }, startDate: Date, endDate: Date): boolean {
+    const isFilled = order.Status === 'Filled' || order.Status === 'FLL';
+    if (!isFilled) return false;
+
+    const orderDate = new Date(order.ClosedDateTime || order.OpenedDateTime);
+    return this.isInDateRange(orderDate, startDate, endDate);
+  }
+
+  /** Convert a TradeStation order to TradeData array (handles multi-leg orders) */
+  private convertOrderToTrades(order: {
+    OrderID: string;
+    Symbol: string;
+    Status: string;
+    FilledPrice?: number;
+    FilledQuantity?: number;
+    Commission?: number;
+    RoutingFee?: number;
+    ClosedDateTime?: string;
+    OpenedDateTime: string;
+    Legs: Array<{ Symbol: string; BuyOrSell: string; ExecQuantity?: number; ExecPrice?: number }>;
+  }): TradeData[] {
+    const trades: TradeData[] = [];
+    const timestamp = new Date(order.ClosedDateTime || order.OpenedDateTime);
+    const totalFee = (order.Commission || 0) + (order.RoutingFee || 0);
+
+    // Convert each executed leg to a trade
+    for (const leg of order.Legs) {
+      if (leg.ExecQuantity && leg.ExecQuantity > 0) {
+        trades.push(this.createTradeFromLeg(order, leg, timestamp, totalFee));
+      }
+    }
+
+    // Fallback: if no legs executed, use order-level data
+    if (trades.length === 0 && order.FilledQuantity) {
+      trades.push(this.createTradeFromOrder(order, timestamp, totalFee));
+    }
+
+    return trades;
+  }
+
+  private createTradeFromLeg(
+    order: { OrderID: string; FilledPrice?: number },
+    leg: { Symbol: string; BuyOrSell: string; ExecQuantity?: number; ExecPrice?: number },
+    timestamp: Date,
+    fee: number
+  ): TradeData {
+    return {
+      tradeId: `${order.OrderID}-${leg.Symbol}`,
+      symbol: leg.Symbol,
+      side: leg.BuyOrSell === 'Buy' ? 'buy' : 'sell',
+      quantity: leg.ExecQuantity || 0,
+      price: leg.ExecPrice || order.FilledPrice || 0,
+      fee,
+      feeCurrency: this.defaultCurrency,
+      timestamp,
+      orderId: order.OrderID,
+      realizedPnl: 0,
+    };
+  }
+
+  private createTradeFromOrder(
+    order: { OrderID: string; Symbol: string; FilledPrice?: number; FilledQuantity?: number; Legs: Array<{ BuyOrSell: string }> },
+    timestamp: Date,
+    fee: number
+  ): TradeData {
+    return {
+      tradeId: order.OrderID,
+      symbol: order.Symbol,
+      side: order.Legs[0]?.BuyOrSell === 'Buy' ? 'buy' : 'sell',
+      quantity: order.FilledQuantity || 0,
+      price: order.FilledPrice || 0,
+      fee,
+      feeCurrency: this.defaultCurrency,
+      timestamp,
+      orderId: order.OrderID,
+      realizedPnl: 0,
+    };
   }
 
   // ========================================

@@ -128,11 +128,8 @@ export class PerformanceMetricsService {
     return metrics;
   }
 
-  /**
-   * Aggregate snapshots into daily data points
-   * Handles intraday snapshots by grouping by date (00:00 UTC)
-   */
-  private aggregateToDailyData(snapshots: Array<{
+  /** Snapshot type for daily aggregation */
+  private readonly SnapshotType = {} as {
     timestamp: string;
     totalEquity: number;
     breakdown_by_market?: {
@@ -143,13 +140,36 @@ export class PerformanceMetricsService {
         funding_fees?: number;
       };
     };
-  }>): DailyDataPoint[] {
-    // Group snapshots by date (YYYY-MM-DD)
-    const byDate = new Map<string, typeof snapshots>();
+  };
+
+  /**
+   * Aggregate snapshots into daily data points
+   * Handles intraday snapshots by grouping by date (00:00 UTC)
+   */
+  private aggregateToDailyData(snapshots: Array<typeof this.SnapshotType>): DailyDataPoint[] {
+    const byDate = this.groupSnapshotsByDate(snapshots);
+    const sortedDates = Array.from(byDate.keys()).sort((a, b) => a.localeCompare(b));
+
+    const dailyData: DailyDataPoint[] = [];
+    let previousEquity: number | null = null;
+
+    for (const dateKey of sortedDates) {
+      const dataPoint = this.createDailyDataPoint(byDate.get(dateKey)!, dateKey, previousEquity);
+      if (dataPoint) {
+        dailyData.push(dataPoint);
+        previousEquity = dataPoint.closeEquity;
+      }
+    }
+
+    return dailyData;
+  }
+
+  private groupSnapshotsByDate(snapshots: Array<typeof this.SnapshotType>) {
+    const byDate = new Map<string, Array<typeof this.SnapshotType>>();
 
     for (const snapshot of snapshots) {
       const dateKey = new Date(snapshot.timestamp).toISOString().split('T')[0];
-      if (!dateKey) continue; // Skip invalid dates
+      if (!dateKey) continue;
 
       if (!byDate.has(dateKey)) {
         byDate.set(dateKey, []);
@@ -157,71 +177,57 @@ export class PerformanceMetricsService {
       byDate.get(dateKey)!.push(snapshot);
     }
 
-    const dailyData: DailyDataPoint[] = [];
-    let previousEquity: number | null = null;
+    return byDate;
+  }
 
-    // Sort dates chronologically
-    const sortedDates = Array.from(byDate.keys()).sort((a, b) => a.localeCompare(b));
+  private createDailyDataPoint(
+    daySnapshots: Array<typeof this.SnapshotType>,
+    dateKey: string,
+    previousEquity: number | null
+  ): DailyDataPoint | null {
+    if (daySnapshots.length === 0) return null;
 
-    for (const dateKey of sortedDates) {
-      const daySnapshots = byDate.get(dateKey);
-      if (!daySnapshots || daySnapshots.length === 0) continue;
+    daySnapshots.sort((a, b) =>
+      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
 
-      daySnapshots.sort((a, b) =>
-        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-      );
+    const openSnap = daySnapshots[0];
+    const closeSnap = daySnapshots.at(-1);
+    if (!openSnap || !closeSnap) return null;
 
-      // Open = first snapshot, Close = last snapshot
-      const openSnap = daySnapshots[0];
-      const closeSnap = daySnapshots[daySnapshots.length - 1];
+    const equities = daySnapshots.map(s => s.totalEquity);
+    const metrics = this.sumDayMetrics(daySnapshots);
 
-      if (!openSnap || !closeSnap) continue;
+    return {
+      date: new Date(dateKey + 'T00:00:00Z'),
+      openEquity: openSnap.totalEquity,
+      closeEquity: closeSnap.totalEquity,
+      highEquity: Math.max(...equities),
+      lowEquity: Math.min(...equities),
+      dailyReturnPct: this.calculateReturnPct(closeSnap.totalEquity, previousEquity),
+      dailyReturnUsd: previousEquity === null ? 0 : closeSnap.totalEquity - previousEquity,
+      ...metrics
+    };
+  }
 
-      // Extract metrics from breakdown
-      const equities = daySnapshots.map(s => s.totalEquity);
-      const highEquity = Math.max(...equities);
-      const lowEquity = Math.min(...equities);
+  private sumDayMetrics(daySnapshots: Array<typeof this.SnapshotType>) {
+    let volume = 0, trades = 0, fees = 0;
 
-      // Sum volume, trades, fees for the day
-      let totalVolume = 0;
-      let totalTrades = 0;
-      let totalFees = 0;
+    for (const snap of daySnapshots) {
+      const global = snap.breakdown_by_market?.global;
+      if (!global) continue;
 
-      for (const snap of daySnapshots) {
-        const breakdown = snap.breakdown_by_market;
-        if (breakdown?.global) {
-          totalVolume += breakdown.global.volume || 0;
-          totalTrades += breakdown.global.orders || 0;
-          totalFees += (breakdown.global.trading_fees || 0) + (breakdown.global.funding_fees || 0);
-        }
-      }
-
-      // Calculate daily return
-      const dailyReturnPct = previousEquity !== null && previousEquity > 0
-        ? ((closeSnap.totalEquity - previousEquity) / previousEquity) * 100
-        : 0;
-
-      const dailyReturnUsd = previousEquity !== null
-        ? closeSnap.totalEquity - previousEquity
-        : 0;
-
-      dailyData.push({
-        date: new Date(dateKey + 'T00:00:00Z'),
-        openEquity: openSnap.totalEquity,
-        closeEquity: closeSnap.totalEquity,
-        highEquity,
-        lowEquity,
-        dailyReturnPct,
-        dailyReturnUsd,
-        volume: totalVolume,
-        trades: totalTrades,
-        fees: totalFees
-      });
-
-      previousEquity = closeSnap.totalEquity;
+      volume += global.volume || 0;
+      trades += global.orders || 0;
+      fees += (global.trading_fees || 0) + (global.funding_fees || 0);
     }
 
-    return dailyData;
+    return { volume, trades, fees };
+  }
+
+  private calculateReturnPct(closeEquity: number, previousEquity: number | null): number {
+    if (previousEquity === null || previousEquity <= 0) return 0;
+    return ((closeEquity - previousEquity) / previousEquity) * 100;
   }
 
   /**
@@ -376,61 +382,76 @@ export class PerformanceMetricsService {
     maxDrawdownDuration: number;
     currentDrawdown: number;
   } {
-    if (dailyData.length === 0) {
-      return { maxDrawdownDuration: 0, currentDrawdown: 0 };
-    }
-
     const firstDay = dailyData[0];
     if (!firstDay) {
       return { maxDrawdownDuration: 0, currentDrawdown: 0 };
     }
 
-    let peak = firstDay.closeEquity;
-    let peakDate = firstDay.date;
-    let maxDrawdownDuration = 0;
-    let currentDrawdownStart: Date | null = null;
+    const state = this.initDrawdownState(firstDay);
 
     for (const day of dailyData) {
-      if (day.closeEquity >= peak) {
-        // New peak reached - end of drawdown period
-        if (currentDrawdownStart) {
-          const duration = Math.floor(
-            (day.date.getTime() - currentDrawdownStart.getTime()) / (1000 * 60 * 60 * 24)
-          );
-          if (duration > maxDrawdownDuration) {
-            maxDrawdownDuration = duration;
-          }
-          currentDrawdownStart = null;
-        }
-        peak = day.closeEquity;
-        peakDate = day.date;
-      } else {
-        // In drawdown
-        if (!currentDrawdownStart) {
-          currentDrawdownStart = peakDate;
-        }
-      }
+      this.updateDrawdownState(state, day);
     }
 
-    // Check if we're still in a drawdown at the end
-    const lastDay = dailyData[dailyData.length - 1];
+    return this.finalizeDrawdownResult(state, dailyData.at(-1));
+  }
+
+  private initDrawdownState(firstDay: DailyDataPoint) {
+    return {
+      peak: firstDay.closeEquity,
+      peakDate: firstDay.date,
+      maxDrawdownDuration: 0,
+      currentDrawdownStart: null as Date | null
+    };
+  }
+
+  private updateDrawdownState(
+    state: { peak: number; peakDate: Date; maxDrawdownDuration: number; currentDrawdownStart: Date | null },
+    day: DailyDataPoint
+  ) {
+    if (day.closeEquity >= state.peak) {
+      // New peak reached - end of drawdown period
+      state.maxDrawdownDuration = this.updateMaxDuration(
+        state.maxDrawdownDuration,
+        state.currentDrawdownStart,
+        day.date
+      );
+      state.currentDrawdownStart = null;
+      state.peak = day.closeEquity;
+      state.peakDate = day.date;
+    } else {
+      // Entering drawdown (if not already in one)
+      state.currentDrawdownStart ??= state.peakDate;
+    }
+  }
+
+  private updateMaxDuration(currentMax: number, startDate: Date | null, endDate: Date): number {
+    if (!startDate) return currentMax;
+    const duration = this.daysBetween(startDate, endDate);
+    return Math.max(currentMax, duration);
+  }
+
+  private daysBetween(start: Date, end: Date): number {
+    return Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+  }
+
+  private finalizeDrawdownResult(
+    state: { peak: number; maxDrawdownDuration: number; currentDrawdownStart: Date | null },
+    lastDay: DailyDataPoint | undefined
+  ) {
     if (!lastDay) {
-      return { maxDrawdownDuration, currentDrawdown: 0 };
+      return { maxDrawdownDuration: state.maxDrawdownDuration, currentDrawdown: 0 };
     }
 
-    const currentDrawdown = peak > 0
-      ? ((peak - lastDay.closeEquity) / peak) * 100
+    const currentDrawdown = state.peak > 0
+      ? ((state.peak - lastDay.closeEquity) / state.peak) * 100
       : 0;
 
-    // If still in drawdown, calculate current duration
-    if (currentDrawdownStart) {
-      const currentDuration = Math.floor(
-        (lastDay.date.getTime() - currentDrawdownStart.getTime()) / (1000 * 60 * 60 * 24)
-      );
-      if (currentDuration > maxDrawdownDuration) {
-        maxDrawdownDuration = currentDuration;
-      }
-    }
+    const maxDrawdownDuration = this.updateMaxDuration(
+      state.maxDrawdownDuration,
+      state.currentDrawdownStart,
+      lastDay.date
+    );
 
     return { maxDrawdownDuration, currentDrawdown };
   }
