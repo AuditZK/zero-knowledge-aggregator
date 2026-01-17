@@ -382,8 +382,8 @@ Reproducible builds allow verification that the binary running in production mat
 
 ```bash
 # Clone repository
-git clone https://github.com/Jimmy7892/track-return-enclave.git
-cd track-return-enclave
+git clone https://github.com/AuditZK/zero-knowledge-aggregator.git
+cd zero-knowledge-aggregator
 
 # Checkout specific version
 git checkout v1.0.0

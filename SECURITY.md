@@ -848,8 +848,8 @@ cron.schedule('0 0 * * *', async () => {
 
 ```bash
 # 1. Verify source code matches deployed binary
-git clone https://github.com/Jimmy7892/track-return-enclave.git
-cd track-return-enclave
+git clone https://github.com/AuditZK/zero-knowledge-aggregator.git
+cd zero-knowledge-aggregator
 git checkout v1.0.0
 npm ci
 npm run build
