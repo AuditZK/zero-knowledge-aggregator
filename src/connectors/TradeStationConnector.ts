@@ -22,9 +22,9 @@ import { ExchangeCredentials } from '../types';
  * - No capital flows via API (deposits/withdrawals not reliably exposed)
  */
 export class TradeStationConnector extends RestBrokerConnector {
-  private api: TradeStationApiService;
+  private readonly api: TradeStationApiService;
   private accountIds: string[] = [];
-  protected apiBaseUrl = 'https://api.tradestation.com';
+  protected readonly apiBaseUrl = 'https://api.tradestation.com';
 
   constructor(credentials: ExchangeCredentials) {
     super(credentials);

@@ -17,8 +17,8 @@ import { ExchangeCredentials } from '../types';
  * - No capital flows via API (deposits/withdrawals not available)
  */
 export class AlpacaConnector extends RestBrokerConnector {
-  private api: AlpacaApiService;
-  protected apiBaseUrl = 'https://api.alpaca.markets/v2';
+  private readonly api: AlpacaApiService;
+  protected readonly apiBaseUrl = 'https://api.alpaca.markets/v2';
 
   constructor(credentials: ExchangeCredentials) {
     super(credentials);

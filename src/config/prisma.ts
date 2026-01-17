@@ -115,4 +115,4 @@ export const testPrismaConnection = async (): Promise<boolean> => {
   }
 };
 
-export { prisma };
+// Note: prisma instance is accessed via getPrismaClient() - not exported directly
