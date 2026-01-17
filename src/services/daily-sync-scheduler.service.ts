@@ -70,96 +70,126 @@ export class DailySyncSchedulerService {
     });
 
     try {
-      // Get all users with active connections
-      const users = await this.userRepo.getAllUsers();
-      logger.info(`Found ${users.length} total users in database`);
-
-      let totalSynced = 0;
-      let totalFailed = 0;
-      let usersWithPartialFailure = 0;
-
-      for (const user of users) {
-        try {
-          // Get active connections for this user
-          const connections = await this.exchangeConnectionRepo.getConnectionsByUser(user.uid, true);
-
-          if (connections.length === 0) {
-            logger.info(`User ${user.uid}: No active exchange connections, skipping`);
-            continue;
-          }
-
-          logger.info(`User ${user.uid}: Found ${connections.length} active exchange(s), starting atomic sync`);
-
-          // ATOMIC SYNC: Build ALL snapshots in memory first
-          const snapshots: SnapshotData[] = [];
-          const failedExchanges: string[] = [];
-
-          for (const connection of connections) {
-            try {
-              // Build snapshot WITHOUT saving (memory only)
-              const snapshot = await this.snapshotAggregator.buildSnapshot(user.uid, connection.exchange);
-
-              if (snapshot) {
-                snapshots.push(snapshot);
-                logger.info(`User ${user.uid}/${connection.exchange}: Snapshot built successfully (pending atomic save)`);
-              } else {
-                failedExchanges.push(connection.exchange);
-                logger.warn(`User ${user.uid}/${connection.exchange}: No snapshot returned (no connector)`);
-              }
-
-              // Small delay between exchanges to avoid overwhelming APIs
-              await new Promise(resolve => setTimeout(resolve, 500));
-            } catch (error) {
-              failedExchanges.push(connection.exchange);
-              logger.error(`User ${user.uid}/${connection.exchange}: Failed to build snapshot`, error);
-            }
-          }
-
-          // ATOMIC SAVE: All-or-nothing per user
-          if (failedExchanges.length > 0) {
-            // At least one exchange failed - DO NOT save any snapshots for this user
-            logger.error(`User ${user.uid}: ATOMIC SYNC ABORTED - ${failedExchanges.length}/${connections.length} exchanges failed`, {
-              failed_exchanges: failedExchanges,
-              successful_exchanges: snapshots.map(s => s.exchange),
-              reason: 'Partial snapshots would corrupt performance metrics'
-            });
-            totalFailed += connections.length;
-            usersWithPartialFailure++;
-          } else if (snapshots.length > 0) {
-            // ALL exchanges succeeded - save atomically
-            try {
-              await this.snapshotDataRepo.upsertSnapshotsTransactional(snapshots);
-              logger.info(`User ${user.uid}: ATOMIC SYNC COMPLETED - ${snapshots.length} snapshots saved`, {
-                exchanges: snapshots.map(s => s.exchange),
-                total_equity: snapshots.reduce((sum, s) => sum + s.totalEquity, 0).toFixed(2)
-              });
-              totalSynced += snapshots.length;
-            } catch (saveError) {
-              logger.error(`User ${user.uid}: ATOMIC SAVE FAILED - transaction rolled back`, saveError);
-              totalFailed += snapshots.length;
-            }
-          }
-        } catch (error) {
-          logger.error(`User ${user.uid}: Failed to process user`, error);
-          totalFailed++;
-        }
-      }
-
-      const durationSec = ((Date.now() - startTime) / 1000).toFixed(2);
-
-      logger.info('Daily sync completed', {
-        snapshots_created: totalSynced,
-        failed: totalFailed,
-        users_with_partial_failure: usersWithPartialFailure,
-        duration_sec: durationSec,
-        completed_at: new Date().toISOString(),
-        strategy: 'atomic_multi_exchange'
-      });
+      const stats = await this.syncAllUsers();
+      this.logSyncCompletion(stats, startTime);
     } catch (error) {
       logger.error('DAILY SYNC FAILED', error);
     } finally {
       this.isRunning = false;
     }
+  }
+
+  private async syncAllUsers() {
+    const users = await this.userRepo.getAllUsers();
+    logger.info(`Found ${users.length} total users in database`);
+
+    const stats = { totalSynced: 0, totalFailed: 0, usersWithPartialFailure: 0 };
+
+    for (const user of users) {
+      const result = await this.syncUserExchanges(user.uid);
+      stats.totalSynced += result.synced;
+      stats.totalFailed += result.failed;
+      if (result.partialFailure) stats.usersWithPartialFailure++;
+    }
+
+    return stats;
+  }
+
+  private async syncUserExchanges(userUid: string): Promise<{ synced: number; failed: number; partialFailure: boolean }> {
+    try {
+      const connections = await this.exchangeConnectionRepo.getConnectionsByUser(userUid, true);
+
+      if (connections.length === 0) {
+        logger.info(`User ${userUid}: No active exchange connections, skipping`);
+        return { synced: 0, failed: 0, partialFailure: false };
+      }
+
+      logger.info(`User ${userUid}: Found ${connections.length} active exchange(s), starting atomic sync`);
+
+      const { snapshots, failedExchanges } = await this.buildUserSnapshots(userUid, connections);
+
+      return this.saveUserSnapshots(userUid, snapshots, failedExchanges, connections.length);
+    } catch (error) {
+      logger.error(`User ${userUid}: Failed to process user`, error);
+      return { synced: 0, failed: 1, partialFailure: false };
+    }
+  }
+
+  private async buildUserSnapshots(userUid: string, connections: Array<{ exchange: string }>) {
+    const snapshots: SnapshotData[] = [];
+    const failedExchanges: string[] = [];
+
+    for (const connection of connections) {
+      const snapshot = await this.buildExchangeSnapshot(userUid, connection.exchange);
+      if (snapshot) {
+        snapshots.push(snapshot);
+      } else {
+        failedExchanges.push(connection.exchange);
+      }
+      // Small delay between exchanges to avoid overwhelming APIs
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    return { snapshots, failedExchanges };
+  }
+
+  private async buildExchangeSnapshot(userUid: string, exchange: string): Promise<SnapshotData | null> {
+    try {
+      const snapshot = await this.snapshotAggregator.buildSnapshot(userUid, exchange);
+      if (snapshot) {
+        logger.info(`User ${userUid}/${exchange}: Snapshot built successfully (pending atomic save)`);
+        return snapshot;
+      }
+      logger.warn(`User ${userUid}/${exchange}: No snapshot returned (no connector)`);
+      return null;
+    } catch (error) {
+      logger.error(`User ${userUid}/${exchange}: Failed to build snapshot`, error);
+      return null;
+    }
+  }
+
+  private async saveUserSnapshots(
+    userUid: string,
+    snapshots: SnapshotData[],
+    failedExchanges: string[],
+    totalConnections: number
+  ): Promise<{ synced: number; failed: number; partialFailure: boolean }> {
+    if (failedExchanges.length > 0) {
+      logger.error(`User ${userUid}: ATOMIC SYNC ABORTED - ${failedExchanges.length}/${totalConnections} exchanges failed`, {
+        failed_exchanges: failedExchanges,
+        successful_exchanges: snapshots.map(s => s.exchange),
+        reason: 'Partial snapshots would corrupt performance metrics'
+      });
+      return { synced: 0, failed: totalConnections, partialFailure: true };
+    }
+
+    if (snapshots.length === 0) {
+      return { synced: 0, failed: 0, partialFailure: false };
+    }
+
+    try {
+      await this.snapshotDataRepo.upsertSnapshotsTransactional(snapshots);
+      logger.info(`User ${userUid}: ATOMIC SYNC COMPLETED - ${snapshots.length} snapshots saved`, {
+        exchanges: snapshots.map(s => s.exchange),
+        total_equity: snapshots.reduce((sum, s) => sum + s.totalEquity, 0).toFixed(2)
+      });
+      return { synced: snapshots.length, failed: 0, partialFailure: false };
+    } catch (saveError) {
+      logger.error(`User ${userUid}: ATOMIC SAVE FAILED - transaction rolled back`, saveError);
+      return { synced: 0, failed: snapshots.length, partialFailure: false };
+    }
+  }
+
+  private logSyncCompletion(stats: { totalSynced: number; totalFailed: number; usersWithPartialFailure: number }, startTime: number) {
+    const durationSec = ((Date.now() - startTime) / 1000).toFixed(2);
+    logger.info('Daily sync completed', {
+      snapshots_created: stats.totalSynced,
+      failed: stats.totalFailed,
+      users_with_partial_failure: stats.usersWithPartialFailure,
+      duration_sec: durationSec,
+      completed_at: new Date().toISOString(),
+      strategy: 'atomic_multi_exchange'
+    });
   }
 
   /** Admin-only manual trigger. Bypasses schedule, logged for audit. */

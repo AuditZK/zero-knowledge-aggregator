@@ -65,211 +65,209 @@ export class ReportGeneratorService {
    * - Signature proves the NUMBERS, not arbitrary text labels
    */
   async generateSignedReport(request: ReportRequest): Promise<GenerateReportResult> {
+    const displayParams = this.extractDisplayParams(request);
+
+    logger.info('Generating signed report', {
+      userUid: request.userUid,
+      startDate: request.startDate,
+      endDate: request.endDate,
+      benchmark: request.benchmark,
+      displayParams: { reportName: displayParams.reportName }
+    });
+
     try {
-      // Extract display parameters (NOT part of deduplication key)
-      const displayParams: DisplayParameters = request.displayParams || {
-        reportName: 'Track Record Report'
-      };
+      // Check cache first
+      const cachedResult = await this.checkCachedReport(request, displayParams);
+      if (cachedResult) return cachedResult;
 
-      logger.info('Generating signed report', {
-        userUid: request.userUid,
-        startDate: request.startDate,
-        endDate: request.endDate,
-        benchmark: request.benchmark,
-        displayParams: { reportName: displayParams.reportName }
-      });
-
-      // DEDUPLICATION CHECK: Look for existing report with same period
-      const startDate = request.startDate ? new Date(request.startDate) : undefined;
-      const endDate = request.endDate ? new Date(request.endDate) : undefined;
-
-      if (startDate && endDate) {
-        const existingReport = await this.reportRepo.findByPeriod(
-          request.userUid,
-          startDate,
-          endDate,
-          request.benchmark || null
-        );
-
-        if (existingReport) {
-          logger.info('Found cached financial data, applying new display parameters', {
-            reportId: existingReport.reportId,
-            originalCreatedAt: existingReport.createdAt.toISOString(),
-            newDisplayParams: { reportName: displayParams.reportName }
-          });
-
-          // Return cached report with NEW display parameters
-          const cachedReport = existingReport.reportData as unknown as SignedReport;
-
-          return {
-            success: true,
-            signedReport: {
-              ...cachedReport,
-              displayParams // Apply NEW display parameters
-            },
-            cached: true
-          };
-        }
-      }
-
-      // 1. Fetch snapshots from database
-      const snapshots = await this.snapshotRepo.getSnapshotData(
-        request.userUid,
-        request.startDate ? new Date(request.startDate) : undefined,
-        request.endDate ? new Date(request.endDate) : undefined
-      );
-
-      if (snapshots.length === 0) {
-        return {
-          success: false,
-          error: 'No snapshot data found for the specified period'
-        };
-      }
-
-      // 2. Convert snapshots to daily returns
-      const dailyReturns = this.convertSnapshotsToDailyReturns(snapshots);
-
-      if (dailyReturns.length < 2) {
-        return {
-          success: false,
-          error: 'Insufficient data for report generation (need at least 2 days)'
-        };
-      }
-
-      // 3. Aggregate to monthly returns
-      const monthlyReturns = this.aggregateToMonthlyReturns(dailyReturns);
-
-      // 4. Calculate core metrics
-      const coreMetrics = this.calculateCoreMetrics(dailyReturns);
-
-      // 5. Calculate optional metrics
-      const metrics: ReportMetrics = { ...coreMetrics };
-
-      if (request.includeRiskMetrics) {
-        metrics.riskMetrics = this.calculateRiskMetrics(dailyReturns);
-      }
-
-      if (request.includeDrawdown) {
-        metrics.drawdownData = this.calculateDrawdownData(dailyReturns);
-      }
-
-      // 6. Calculate benchmark metrics if requested
-      if (request.benchmark) {
-        const firstDay = dailyReturns[0];
-        const lastDay = dailyReturns[dailyReturns.length - 1];
-
-        if (!firstDay || !lastDay) {
-          return {
-            success: false,
-            error: 'Invalid daily returns data'
-          };
-        }
-
-        const benchmarkReturns = await this.fetchBenchmarkReturns(
-          request.benchmark,
-          firstDay.date,
-          lastDay.date
-        );
-
-        if (benchmarkReturns.length > 0) {
-          // Create a map for fast date-based lookup
-          const benchmarkMap = new Map(benchmarkReturns.map(b => [b.date, b.return]));
-
-          // Merge benchmark returns with daily returns
-          const mergedReturns = this.mergeBenchmarkReturns(dailyReturns, benchmarkReturns);
-          metrics.benchmarkMetrics = this.calculateBenchmarkMetrics(mergedReturns);
-
-          // Update daily returns with benchmark data (by date, not by index)
-          dailyReturns.forEach((dr) => {
-            const benchReturn = benchmarkMap.get(dr.date);
-            if (benchReturn !== undefined) {
-              dr.benchmarkReturn = benchReturn;
-              dr.outperformance = dr.netReturn - benchReturn;
-            }
-          });
-        }
-      }
-
-      // 7. Build financial data (this is what gets SIGNED and CACHED)
-      const reportFirstDay = dailyReturns[0];
-      const reportLastDay = dailyReturns[dailyReturns.length - 1];
-
-      if (!reportFirstDay || !reportLastDay) {
-        return {
-          success: false,
-          error: 'Invalid daily returns data for report'
-        };
-      }
-
-      // Extract unique exchanges from snapshots (sorted for deterministic signing)
-      const exchanges = Array.from(
-        new Set(snapshots.map(s => s.exchange || 'unknown'))
-      ).sort((a, b) => a.localeCompare(b));
-
-      const financialData: SignedFinancialData = {
-        reportId: this.generateReportId(),
-        userUid: request.userUid,
-        generatedAt: new Date(),
-        periodStart: new Date(reportFirstDay.date),
-        periodEnd: new Date(reportLastDay.date),
-        baseCurrency: request.baseCurrency || 'USD',
-        benchmark: request.benchmark,
-        dataPoints: dailyReturns.length,
-        exchanges, // Cryptographically signed proof of brokers used
-        metrics,
-        dailyReturns,
-        monthlyReturns
-      };
-
-      // 8. Sign the FINANCIAL DATA only (display params are NOT signed)
-      const signedReport = this.signingService.signFinancialData(financialData, displayParams);
-
-      logger.info('Signed report generated successfully', {
-        reportId: financialData.reportId,
-        dataPoints: financialData.dataPoints,
-        periodStart: financialData.periodStart.toISOString(),
-        periodEnd: financialData.periodEnd.toISOString(),
-        exchanges: financialData.exchanges,
-        displayParams: { reportName: displayParams.reportName }
-      });
-
-      // 9. Save report to database for deduplication
-      // NOTE: Display params are saved but can be overwritten on retrieval
-      try {
-        await this.reportRepo.save({
-          reportId: financialData.reportId,
-          userUid: request.userUid,
-          startDate: financialData.periodStart,
-          endDate: financialData.periodEnd,
-          benchmark: request.benchmark || null,
-          reportData: signedReport as unknown as Record<string, unknown>,
-          signature: signedReport.signature || '',
-          reportHash: signedReport.reportHash || '',
-          enclaveVersion: ENCLAVE_VERSION
-        });
-        logger.info('Report saved to database for deduplication', {
-          reportId: financialData.reportId
-        });
-      } catch (saveError) {
-        // Log but don't fail - report generation succeeded, just caching failed
-        logger.warn('Failed to save report for deduplication (report still valid)', {
-          error: saveError instanceof Error ? saveError.message : 'Unknown error'
-        });
-      }
-
-      return {
-        success: true,
-        signedReport
-      };
-
+      // Generate new report
+      return await this.generateNewReport(request, displayParams);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       logger.error('Failed to generate signed report', { error: errorMessage });
-
       return {
         success: false,
         error: errorMessage
       };
+    }
+  }
+
+  private extractDisplayParams(request: ReportRequest): DisplayParameters {
+    return request.displayParams || { reportName: 'Track Record Report' };
+  }
+
+  private async checkCachedReport(
+    request: ReportRequest,
+    displayParams: DisplayParameters
+  ): Promise<GenerateReportResult | null> {
+    const startDate = request.startDate ? new Date(request.startDate) : undefined;
+    const endDate = request.endDate ? new Date(request.endDate) : undefined;
+
+    if (!startDate || !endDate) return null;
+
+    const existingReport = await this.reportRepo.findByPeriod(
+      request.userUid,
+      startDate,
+      endDate,
+      request.benchmark || null
+    );
+
+    if (!existingReport) return null;
+
+    logger.info('Found cached financial data, applying new display parameters', {
+      reportId: existingReport.reportId,
+      originalCreatedAt: existingReport.createdAt.toISOString(),
+      newDisplayParams: { reportName: displayParams.reportName }
+    });
+
+    const cachedReport = existingReport.reportData as unknown as SignedReport;
+    return {
+      success: true,
+      signedReport: { ...cachedReport, displayParams },
+      cached: true
+    };
+  }
+
+  private async generateNewReport(
+    request: ReportRequest,
+    displayParams: DisplayParameters
+  ): Promise<GenerateReportResult> {
+    // 1. Fetch and validate snapshots
+    const snapshots = await this.snapshotRepo.getSnapshotData(
+      request.userUid,
+      request.startDate ? new Date(request.startDate) : undefined,
+      request.endDate ? new Date(request.endDate) : undefined
+    );
+
+    if (snapshots.length === 0) {
+      return { success: false, error: 'No snapshot data found for the specified period' };
+    }
+
+    // 2. Convert to daily returns
+    const dailyReturns = this.convertSnapshotsToDailyReturns(snapshots);
+    if (dailyReturns.length < 2) {
+      return { success: false, error: 'Insufficient data for report generation (need at least 2 days)' };
+    }
+
+    // 3. Calculate all metrics
+    const monthlyReturns = this.aggregateToMonthlyReturns(dailyReturns);
+    const metrics = this.buildMetrics(request, dailyReturns);
+
+    // 4. Process benchmark if requested
+    await this.processBenchmark(request, dailyReturns, metrics);
+
+    // 5. Build and sign the financial data
+    const financialData = this.buildFinancialData(request, snapshots, dailyReturns, monthlyReturns, metrics);
+    const signedReport = this.signingService.signFinancialData(financialData, displayParams);
+
+    this.logReportGeneration(financialData, displayParams);
+
+    // 6. Save for deduplication (non-blocking)
+    await this.saveReportForDeduplication(request, financialData, signedReport);
+
+    return { success: true, signedReport };
+  }
+
+  private buildMetrics(request: ReportRequest, dailyReturns: DailyReturn[]): ReportMetrics {
+    const metrics: ReportMetrics = { ...this.calculateCoreMetrics(dailyReturns) };
+
+    if (request.includeRiskMetrics) {
+      metrics.riskMetrics = this.calculateRiskMetrics(dailyReturns);
+    }
+    if (request.includeDrawdown) {
+      metrics.drawdownData = this.calculateDrawdownData(dailyReturns);
+    }
+
+    return metrics;
+  }
+
+  private async processBenchmark(
+    request: ReportRequest,
+    dailyReturns: DailyReturn[],
+    metrics: ReportMetrics
+  ): Promise<void> {
+    if (!request.benchmark) return;
+
+    const firstDay = dailyReturns[0];
+    const lastDay = dailyReturns.at(-1);
+    if (!firstDay || !lastDay) return;
+
+    const benchmarkReturns = await this.fetchBenchmarkReturns(request.benchmark, firstDay.date, lastDay.date);
+    if (benchmarkReturns.length === 0) return;
+
+    const benchmarkMap = new Map(benchmarkReturns.map(b => [b.date, b.return]));
+    const mergedReturns = this.mergeBenchmarkReturns(dailyReturns, benchmarkReturns);
+    metrics.benchmarkMetrics = this.calculateBenchmarkMetrics(mergedReturns);
+
+    dailyReturns.forEach((dr) => {
+      const benchReturn = benchmarkMap.get(dr.date);
+      if (benchReturn !== undefined) {
+        dr.benchmarkReturn = benchReturn;
+        dr.outperformance = dr.netReturn - benchReturn;
+      }
+    });
+  }
+
+  private buildFinancialData(
+    request: ReportRequest,
+    snapshots: Array<{ exchange?: string }>,
+    dailyReturns: DailyReturn[],
+    monthlyReturns: MonthlyReturn[],
+    metrics: ReportMetrics
+  ): SignedFinancialData {
+    const firstDay = dailyReturns[0]!;
+    const lastDay = dailyReturns.at(-1)!;
+    const exchanges = Array.from(new Set(snapshots.map(s => s.exchange || 'unknown'))).sort((a, b) => a.localeCompare(b));
+
+    return {
+      reportId: this.generateReportId(),
+      userUid: request.userUid,
+      generatedAt: new Date(),
+      periodStart: new Date(firstDay.date),
+      periodEnd: new Date(lastDay.date),
+      baseCurrency: request.baseCurrency || 'USD',
+      benchmark: request.benchmark,
+      dataPoints: dailyReturns.length,
+      exchanges,
+      metrics,
+      dailyReturns,
+      monthlyReturns
+    };
+  }
+
+  private logReportGeneration(financialData: SignedFinancialData, displayParams: DisplayParameters): void {
+    logger.info('Signed report generated successfully', {
+      reportId: financialData.reportId,
+      dataPoints: financialData.dataPoints,
+      periodStart: financialData.periodStart.toISOString(),
+      periodEnd: financialData.periodEnd.toISOString(),
+      exchanges: financialData.exchanges,
+      displayParams: { reportName: displayParams.reportName }
+    });
+  }
+
+  private async saveReportForDeduplication(
+    request: ReportRequest,
+    financialData: SignedFinancialData,
+    signedReport: SignedReport
+  ): Promise<void> {
+    try {
+      await this.reportRepo.save({
+        reportId: financialData.reportId,
+        userUid: request.userUid,
+        startDate: financialData.periodStart,
+        endDate: financialData.periodEnd,
+        benchmark: request.benchmark || null,
+        reportData: signedReport as unknown as Record<string, unknown>,
+        signature: signedReport.signature || '',
+        reportHash: signedReport.reportHash || '',
+        enclaveVersion: ENCLAVE_VERSION
+      });
+      logger.info('Report saved to database for deduplication', { reportId: financialData.reportId });
+    } catch (saveError) {
+      logger.warn('Failed to save report for deduplication (report still valid)', {
+        error: saveError instanceof Error ? saveError.message : 'Unknown error'
+      });
     }
   }
 
