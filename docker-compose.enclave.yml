@@ -37,6 +37,7 @@ services:
       - "9092"  # Prometheus scrapes internally via Docker network
     volumes:
       - ./certs:/etc/enclave:ro
+      - vcek_cache:/var/cache/enclave/certs  # Persistent VCEK certificate cache
     devices:
       - /dev/sev-guest:/dev/sev-guest
     privileged: true
@@ -117,6 +118,7 @@ networks:
 volumes:
   prometheus_data:
   grafana_data:
+  vcek_cache:  # Persistent VCEK certificate cache (avoids AMD KDS rate limits)
 
 # ==========================================
 # ARCHITECTURE
