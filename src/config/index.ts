@@ -5,11 +5,23 @@ import { getLogger } from '../utils/secure-enclave-logger';
 
 const logger = getLogger('Config');
 
+/** Validate GCP metadata key to prevent command injection */
+const VALID_METADATA_KEY_PATTERN = /^[a-z0-9-]+$/;
+
 /**
  * Load configuration from GCP VM Metadata
  * Used in production instead of .env files for enhanced security
+ *
+ * SECURITY: Keys are validated to only contain alphanumeric characters and hyphens
+ * to prevent command injection attacks.
  */
 function loadFromGcpMetadata(key: string): string | undefined {
+  // SECURITY: Validate key to prevent command injection
+  if (!VALID_METADATA_KEY_PATTERN.test(key)) {
+    logger.error('Invalid GCP metadata key (must be alphanumeric with hyphens only)', { key });
+    return undefined;
+  }
+
   try {
     const result = execSync(
       `curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/attributes/${key}`,

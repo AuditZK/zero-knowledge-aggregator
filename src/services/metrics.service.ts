@@ -17,7 +17,7 @@
  * Metrics are exposed at GET /metrics (port 9090, INTERNAL NETWORK ONLY)
  */
 
-import * as http from 'http';
+import * as http from 'node:http';
 import { getLogger } from '../utils/secure-enclave-logger';
 
 const logger = getLogger('MetricsService');
@@ -34,9 +34,9 @@ type MetricsCollector = () => Promise<void>;
 
 export class MetricsService {
   private static instance: MetricsService;
-  private metrics: Map<string, Metric> = new Map();
+  private readonly metrics: Map<string, Metric> = new Map();
   private server: http.Server | null = null;
-  private collectors: MetricsCollector[] = [];
+  private readonly collectors: MetricsCollector[] = [];
 
   private constructor() {
     this.initializeMetrics();
@@ -159,7 +159,7 @@ export class MetricsService {
    */
   incrementCounter(name: string, labels?: Record<string, string>): void {
     const metric = this.metrics.get(name);
-    if (!metric || metric.type !== 'counter') {
+    if (metric?.type !== 'counter') {
       logger.warn(`Counter metric ${name} not found`);
       return;
     }
@@ -178,7 +178,7 @@ export class MetricsService {
    */
   setGauge(name: string, value: number, labels?: Record<string, string>): void {
     const metric = this.metrics.get(name);
-    if (!metric || metric.type !== 'gauge') {
+    if (metric?.type !== 'gauge') {
       logger.warn(`Gauge metric ${name} not found`);
       return;
     }
@@ -196,7 +196,7 @@ export class MetricsService {
    */
   observeHistogram(name: string, value: number, labels?: Record<string, string>): void {
     const metric = this.metrics.get(name);
-    if (!metric || metric.type !== 'histogram') {
+    if (metric?.type !== 'histogram') {
       logger.warn(`Histogram metric ${name} not found`);
       return;
     }
@@ -259,22 +259,23 @@ export class MetricsService {
     const lines: string[] = [];
 
     for (const [name, metric] of this.metrics) {
-      // HELP line
-      lines.push(`# HELP ${name} ${metric.help}`);
-
-      // TYPE line
-      lines.push(`# TYPE ${name} ${metric.type}`);
+      // Collect all lines for this metric, then push once
+      const metricLines = [
+        `# HELP ${name} ${metric.help}`,
+        `# TYPE ${name} ${metric.type}`
+      ];
 
       // Metric values
       if (metric.value instanceof Map) {
         for (const [labels, value] of metric.value) {
-          lines.push(`${name}{${labels}} ${value}`);
+          metricLines.push(`${name}{${labels}} ${value}`);
         }
       } else {
-        lines.push(`${name} ${metric.value}`);
+        metricLines.push(`${name} ${metric.value}`);
       }
 
-      lines.push('');
+      metricLines.push('');
+      lines.push(...metricLines);
     }
 
     return lines.join('\n');

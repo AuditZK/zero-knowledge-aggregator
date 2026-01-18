@@ -1,4 +1,4 @@
-import * as crypto from 'crypto';
+import * as crypto from 'node:crypto';
 import { injectable } from 'tsyringe';
 import { getLogger, extractErrorMessage } from '../utils/secure-enclave-logger';
 

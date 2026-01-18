@@ -28,7 +28,8 @@
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
     "db:push:docker": "docker exec enclave_worker_dev npx prisma db push",
-    "sonar": "node -e \"require('sonarqube-scanner').default({ options: { 'sonar.token': process.env.SONAR_TOKEN } }, () => {})\""
+    "sonar:fix-paths": "node -e \"const fs=require('fs');const p='coverage/lcov.info';if(fs.existsSync(p)){const c=fs.readFileSync(p,'utf8').replace(/\\\\/g,'/');fs.writeFileSync(p,c);console.log('Fixed paths in lcov.info')}\"",
+    "sonar": "npm run sonar:fix-paths && node -e \"require('fs').readFileSync('.env','utf8').split('\\n').forEach(l=>{const[k,v]=l.split('=');if(k&&v)process.env[k.trim()]=v.trim()});require('sonarqube-scanner').default({ options: { 'sonar.token': process.env.SONAR_TOKEN } }, () => {})\""
   },
   "keywords": [
     "trading",
@@ -59,6 +60,7 @@
   "devDependencies": {
     "@types/dotenv": "^6.1.1",
     "@types/express": "^5.0.5",
+    "@types/jest": "^30.0.0",
     "@types/node": "^24.10.1",
     "@types/node-cron": "^3.0.11",
     "@typescript-eslint/eslint-plugin": "^8.48.0",
@@ -67,6 +69,7 @@
     "jest": "^30.2.0",
     "prisma": "^6.19.0",
     "sonarqube-scanner": "^4.3.4",
+    "ts-jest": "^29.4.6",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.9.3"
   },

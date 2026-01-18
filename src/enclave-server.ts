@@ -1,7 +1,7 @@
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
-import path from 'path';
-import fs from 'fs';
+import path from 'node:path';
+import fs from 'node:fs';
 import { container } from 'tsyringe';
 import { EnclaveWorker } from './enclave-worker';
 import { getLogger, extractErrorMessage } from './utils/secure-enclave-logger';
@@ -45,31 +45,31 @@ const enclaveProto = grpc.loadPackageDefinition(packageDefinition) as any;
  * - Uses mutual TLS for production deployments
  */
 export class EnclaveServer {
-  private server: grpc.Server;
-  private enclaveWorker: EnclaveWorker;
-  private reportGeneratorService: ReportGeneratorService;
-  private reportSigningService: ReportSigningService;
-  private port: number;
+  private readonly server: grpc.Server;
+  private readonly enclaveWorker: EnclaveWorker;
+  private readonly reportGeneratorService: ReportGeneratorService;
+  private readonly reportSigningService: ReportSigningService;
+  private readonly port: number;
 
   constructor() {
     this.server = new grpc.Server();
-    this.port = parseInt(process.env.ENCLAVE_PORT || '50051');
+    this.port = Number.parseInt(process.env.ENCLAVE_PORT || '50051', 10);
 
     // Get service instances from DI container
     this.enclaveWorker = container.resolve(EnclaveWorker);
     this.reportGeneratorService = container.resolve(ReportGeneratorService);
     this.reportSigningService = container.resolve(ReportSigningService);
 
-    // Add service implementation
+    // Add service implementation (wrap async handlers to return void)
     this.server.addService(enclaveProto.enclave.EnclaveService.service, {
-      ProcessSyncJob: this.processSyncJob.bind(this),
-      GetAggregatedMetrics: this.getAggregatedMetrics.bind(this),
-      GetSnapshotTimeSeries: this.getSnapshotTimeSeries.bind(this),
-      GetPerformanceMetrics: this.getPerformanceMetrics.bind(this),
-      CreateUserConnection: this.createUserConnection.bind(this),
-      HealthCheck: this.healthCheck.bind(this),
-      GenerateSignedReport: this.generateSignedReport.bind(this),
-      VerifyReportSignature: this.verifyReportSignature.bind(this)
+      ProcessSyncJob: (call: grpc.ServerUnaryCall<unknown, unknown>, cb: grpc.sendUnaryData<unknown>) => { void this.processSyncJob(call, cb); },
+      GetAggregatedMetrics: (call: grpc.ServerUnaryCall<unknown, unknown>, cb: grpc.sendUnaryData<unknown>) => { void this.getAggregatedMetrics(call, cb); },
+      GetSnapshotTimeSeries: (call: grpc.ServerUnaryCall<unknown, unknown>, cb: grpc.sendUnaryData<unknown>) => { void this.getSnapshotTimeSeries(call, cb); },
+      GetPerformanceMetrics: (call: grpc.ServerUnaryCall<unknown, unknown>, cb: grpc.sendUnaryData<unknown>) => { void this.getPerformanceMetrics(call, cb); },
+      CreateUserConnection: (call: grpc.ServerUnaryCall<unknown, unknown>, cb: grpc.sendUnaryData<unknown>) => { void this.createUserConnection(call, cb); },
+      HealthCheck: (call: grpc.ServerUnaryCall<unknown, unknown>, cb: grpc.sendUnaryData<unknown>) => { void this.healthCheck(call, cb); },
+      GenerateSignedReport: (call: grpc.ServerUnaryCall<unknown, unknown>, cb: grpc.sendUnaryData<unknown>) => { void this.generateSignedReport(call, cb); },
+      VerifyReportSignature: (call: grpc.ServerUnaryCall<unknown, unknown>, cb: grpc.sendUnaryData<unknown>) => { void this.verifyReportSignature(call, cb); }
     });
 
     logger.info('Enclave gRPC server initialized', {
@@ -808,7 +808,8 @@ export class EnclaveServer {
             return;
           }
 
-          this.server.start();
+          // Note: server.start() is deprecated in @grpc/grpc-js v1.9+
+          // The server automatically starts accepting connections after bindAsync
           logger.info(`Enclave gRPC server started on port ${port} with TLS`);
 
           // Log enclave attestation info if available

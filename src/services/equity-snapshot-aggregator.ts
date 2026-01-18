@@ -414,7 +414,10 @@ export class EquitySnapshotAggregator {
         ? await connector.getFundingFees(Array.from(swapSymbols), since)
         : [];
       return fundingData.reduce((sum: number, f: FundingFeeData) => sum + f.amount, 0);
-    } catch (error) {
+    } catch (error: unknown) {
+      logger.debug('Failed to fetch funding fees, returning 0', {
+        error: error instanceof Error ? error.message : String(error)
+      });
       return 0;
     }
   }
@@ -555,6 +558,9 @@ export class EquitySnapshotAggregator {
         }
       }
     } catch (posError: unknown) {
+      logger.debug('Failed to fetch positions, using breakdown data for unrealized PnL', {
+        error: posError instanceof Error ? posError.message : String(posError)
+      });
       // Fallback: use breakdown data if available
       totalUnrealizedPnl = Object.values(balancesByMarket).reduce(
         (sum, market) => sum + (market.unrealizedPnl || 0),
@@ -586,9 +592,9 @@ export class EquitySnapshotAggregator {
 
         if (globalEquity === 0) { skippedCount++; continue; }
 
-        const year = parseInt(entry.date.substring(0, 4));
-        const month = parseInt(entry.date.substring(4, 6)) - 1;
-        const day = parseInt(entry.date.substring(6, 8));
+        const year = Number.parseInt(entry.date.substring(0, 4), 10);
+        const month = Number.parseInt(entry.date.substring(4, 6), 10) - 1;
+        const day = Number.parseInt(entry.date.substring(6, 8), 10);
 
         // Create 1 daily snapshot per day in Flex report
         // IBKR Flex reports contain multiple days → we create 1 snapshot per day

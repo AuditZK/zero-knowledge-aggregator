@@ -1,6 +1,6 @@
 import express from 'express';
-import * as https from 'https';
-import * as fs from 'fs';
+import * as https from 'node:https';
+import * as fs from 'node:fs';
 import rateLimit from 'express-rate-limit';
 import { container } from 'tsyringe';
 import { EnclaveWorker } from './enclave-worker';
@@ -182,10 +182,11 @@ app.post('/api/v1/credentials/connect', credentialsRateLimiter, async (req, res)
     let decryptedJson: string;
     try {
       decryptedJson = e2eService.decrypt(req.body.encrypted);
-    } catch (decryptError) {
+    } catch (decryptError: unknown) {
       logger.warn('[REST] E2E decryption failed - invalid encrypted payload', {
         user_uid: req.body.user_uid,
-        exchange: req.body.exchange
+        exchange: req.body.exchange,
+        error: extractErrorMessage(decryptError)
       });
       return res.status(400).json({
         success: false,
@@ -292,8 +293,10 @@ async function loadTlsCredentials(): Promise<https.ServerOptions> {
       key: credentials.privateKey,
       cert: credentials.certificate
     };
-  } catch (error) {
-    logger.warn('[REST] Failed to load enclave-generated TLS credentials, falling back to file-based certs');
+  } catch (error: unknown) {
+    logger.warn('[REST] Failed to load enclave-generated TLS credentials, falling back to file-based certs', {
+      error: extractErrorMessage(error)
+    });
 
     // Fallback to file-based certs for development
     const certPath = process.env.TLS_CERT_PATH || '/app/certs/cert.pem';

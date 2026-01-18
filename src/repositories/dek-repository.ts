@@ -26,7 +26,7 @@ export interface WrappedDEK {
 @injectable()
 export class DEKRepository {
   constructor(
-    @inject('PrismaClient') private prisma: PrismaClient
+    @inject('PrismaClient') private readonly prisma: PrismaClient
   ) {}
 
   /**

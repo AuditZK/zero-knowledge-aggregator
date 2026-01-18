@@ -1,6 +1,6 @@
-import * as fs from 'fs';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import * as fs from 'node:fs';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { getLogger, extractErrorMessage } from '../utils/secure-enclave-logger';
 
 const logger = getLogger('SevSnpAttestation');
@@ -179,8 +179,10 @@ export class SevSnpAttestationService {
       try {
         await execAsync(`/usr/bin/snpguest fetch vcek pem milan ${certsDir} ${reportPath}`);
         logger.info('Successfully fetched VCEK certificate from AMD KDS');
-      } catch (certError) {
-        logger.warn('Failed to fetch VCEK from AMD KDS, will use cached cert if available');
+      } catch (certError: unknown) {
+        logger.warn('Failed to fetch VCEK from AMD KDS, will use cached cert if available', {
+          error: extractErrorMessage(certError)
+        });
       }
 
       // Fetch CA chain from AMD KDS
@@ -220,36 +222,13 @@ export class SevSnpAttestationService {
   }
 
   private parseSnpguestOutput(output: string, requestPath: string): SevSnpReport {
-    const report: SevSnpReport = {
-      measurement: '',
-      signature: '',
-    };
-
-    // Parse snpguest display output - handles multiline hex values
+    const report: SevSnpReport = { measurement: '', signature: '' };
     const lines = output.split('\n');
     let currentField = '';
     let hexBuffer: string[] = [];
 
-    const saveHexBuffer = () => {
-      if (currentField && hexBuffer.length > 0) {
-        const hexValue = hexBuffer.join('').replace(/\s+/g, '');
-        if (currentField === 'measurement') {
-          report.measurement = hexValue;
-        } else if (currentField === 'report_data') {
-          report.reportData = hexValue;
-        } else if (currentField === 'chip_id') {
-          report.chip_id = hexValue;
-        } else if (currentField === 'signature_r') {
-          report.signature = hexValue;
-        }
-      }
-      hexBuffer = [];
-    };
-
     for (const line of lines) {
       const trimmedLine = line.trim();
-
-      // Check if line is a hex dump (starts with hex bytes pattern)
       const isHexLine = /^[0-9a-f]{2}\s+[0-9a-f]{2}/i.test(trimmedLine);
 
       if (isHexLine && currentField) {
@@ -257,48 +236,84 @@ export class SevSnpAttestationService {
         continue;
       }
 
-      // Check for field headers
-      if (trimmedLine.startsWith('Version:')) {
-        saveHexBuffer();
-        currentField = '';
-        const value = trimmedLine.split(':')[1]?.trim();
-        if (value) report.version = parseInt(value, 10) || 0;
-      } else if (trimmedLine.startsWith('Guest SVN:')) {
-        saveHexBuffer();
-        currentField = '';
-        const value = trimmedLine.split(':')[1]?.trim();
-        if (value) report.guest_svn = parseInt(value, 10) || 0;
-      } else if (trimmedLine.startsWith('Guest Policy')) {
-        saveHexBuffer();
-        currentField = '';
-        const match = /\(0x([0-9a-f]+)\)/i.exec(trimmedLine);
-        if (match && match[1]) report.policy = parseInt(match[1], 16) || 0;
-      } else if (trimmedLine.startsWith('Measurement:')) {
-        saveHexBuffer();
-        currentField = 'measurement';
-      } else if (trimmedLine.startsWith('Report Data:')) {
-        saveHexBuffer();
-        currentField = 'report_data';
-      } else if (trimmedLine.startsWith('Chip ID:')) {
-        saveHexBuffer();
-        currentField = 'chip_id';
-      } else if (trimmedLine.startsWith('R:')) {
-        saveHexBuffer();
-        currentField = 'signature_r';
-      } else if (trimmedLine.startsWith('S:')) {
-        saveHexBuffer();
-        currentField = 'signature_s';
-      } else if (trimmedLine.includes(':') && !isHexLine) {
-        // New field, save previous hex buffer
-        saveHexBuffer();
-        currentField = '';
+      hexBuffer = this.saveHexBufferToReport(currentField, hexBuffer, report);
+      currentField = this.parseFieldHeader(trimmedLine, report, isHexLine);
+    }
+
+    this.saveHexBufferToReport(currentField, hexBuffer, report);
+    this.readRequestDataFile(requestPath, report);
+
+    if (!report.measurement) {
+      throw new Error('Failed to parse measurement from snpguest output');
+    }
+
+    return report;
+  }
+
+  private saveHexBufferToReport(
+    currentField: string,
+    hexBuffer: string[],
+    report: SevSnpReport
+  ): string[] {
+    if (!currentField || hexBuffer.length === 0) return [];
+
+    const hexValue = hexBuffer.join('').replaceAll(/\s+/g, '');
+    const fieldMapping: Record<string, keyof SevSnpReport> = {
+      'measurement': 'measurement',
+      'report_data': 'reportData',
+      'chip_id': 'chip_id',
+      'signature_r': 'signature'
+    };
+
+    const reportKey = fieldMapping[currentField];
+    if (reportKey) {
+      (report as Record<string, unknown>)[reportKey] = hexValue;
+    }
+
+    return [];
+  }
+
+  private parseFieldHeader(line: string, report: SevSnpReport, isHexLine: boolean): string {
+    const fieldParsers: Array<{ prefix: string; handler: () => string }> = [
+      { prefix: 'Version:', handler: () => { this.parseIntField(line, report, 'version'); return ''; } },
+      { prefix: 'Guest SVN:', handler: () => { this.parseIntField(line, report, 'guest_svn'); return ''; } },
+      { prefix: 'Guest Policy', handler: () => { this.parsePolicyField(line, report); return ''; } },
+      { prefix: 'Measurement:', handler: () => 'measurement' },
+      { prefix: 'Report Data:', handler: () => 'report_data' },
+      { prefix: 'Chip ID:', handler: () => 'chip_id' },
+      { prefix: 'R:', handler: () => 'signature_r' },
+      { prefix: 'S:', handler: () => 'signature_s' }
+    ];
+
+    for (const parser of fieldParsers) {
+      if (line.startsWith(parser.prefix)) {
+        return parser.handler();
       }
     }
 
-    // Save any remaining hex buffer
-    saveHexBuffer();
+    // New field with colon, reset current field
+    if (line.includes(':') && !isHexLine) {
+      return '';
+    }
 
-    // Read request data if available (overrides parsed report_data)
+    return '';
+  }
+
+  private parseIntField(line: string, report: SevSnpReport, field: 'version' | 'guest_svn'): void {
+    const value = line.split(':')[1]?.trim();
+    if (value) {
+      report[field] = Number.parseInt(value, 10) || 0;
+    }
+  }
+
+  private parsePolicyField(line: string, report: SevSnpReport): void {
+    const match = /\(0x([0-9a-f]+)\)/i.exec(line);
+    if (match?.[1]) {
+      report.policy = Number.parseInt(match[1], 16) || 0;
+    }
+  }
+
+  private readRequestDataFile(requestPath: string, report: SevSnpReport): void {
     try {
       if (fs.existsSync(requestPath)) {
         report.reportData = fs.readFileSync(requestPath).toString('hex');
@@ -306,12 +321,6 @@ export class SevSnpAttestationService {
     } catch {
       // Ignore read errors
     }
-
-    if (!report.measurement) {
-      throw new Error('Failed to parse measurement from snpguest output');
-    }
-
-    return report;
   }
 
   private async getAzureAttestation(): Promise<SevSnpReport> {

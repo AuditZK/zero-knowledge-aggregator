@@ -13,12 +13,12 @@
  * - 1: Unhealthy
  */
 
-import { createConnection } from 'net';
+import { createConnection } from 'node:net';
 import { PrismaClient } from '@prisma/client';
 import { extractErrorMessage } from './utils/secure-enclave-logger';
 
-const GRPC_PORT = parseInt(process.env.ENCLAVE_PORT || '50051', 10);
-const TIMEOUT_MS = parseInt(process.env.HEALTH_CHECK_TIMEOUT_MS || '5000', 10);
+const GRPC_PORT = Number.parseInt(process.env.ENCLAVE_PORT || '50051', 10);
+const TIMEOUT_MS = Number.parseInt(process.env.HEALTH_CHECK_TIMEOUT_MS || '5000', 10);
 const CHECK_DATABASE = process.env.HEALTH_CHECK_DATABASE === 'true';
 
 interface HealthCheckResult {
@@ -159,9 +159,7 @@ async function main() {
     checkDatabase()
   ]);
 
-  results.push(grpcResult);
-  results.push(dbResult);
-  results.push(checkMemory());
+  results.push(grpcResult, dbResult, checkMemory());
 
   // Determine overall health
   const failed = results.filter(r => r.status === 'fail');
@@ -188,7 +186,9 @@ async function main() {
 }
 
 // Run health check
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error('Health check failed:', error);
   process.exit(1);
-});
+}

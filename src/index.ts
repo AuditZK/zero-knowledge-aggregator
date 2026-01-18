@@ -35,7 +35,7 @@ const startEnclave = async () => {
     const tlsService = diContainer.resolve(TlsKeyGeneratorService);
     const tlsCredentials = await tlsService.getCredentials();
 
-    const fingerprintHex = tlsCredentials.fingerprint.replace(/:/g, '');
+    const fingerprintHex = tlsCredentials.fingerprint.replaceAll(':', '');
     const fingerprintBuffer = Buffer.from(fingerprintHex, 'hex');
 
     const { SevSnpAttestationService } = await import('./services/sev-snp-attestation.service');
@@ -88,7 +88,7 @@ const startEnclave = async () => {
 
     // 8. REST server
     const { startRestServer } = await import('./rest-server');
-    const restPort = parseInt(process.env.REST_PORT || '3050', 10);
+    const restPort = Number.parseInt(process.env.REST_PORT || '3050', 10);
     const restServer = await startRestServer(restPort);
 
     // 9. HTTP log server (SSE)
@@ -100,7 +100,7 @@ const startEnclave = async () => {
     // 10. Prometheus metrics
     if (process.env.METRICS_ENABLED === 'true') {
       const { metricsService } = await import('./services/metrics.service');
-      const metricsPort = parseInt(process.env.METRICS_PORT || '9090', 10);
+      const metricsPort = Number.parseInt(process.env.METRICS_PORT || '9090', 10);
       metricsService.startMetricsServer(metricsPort);
 
       const { ExchangeConnectionRepository } = await import('./core/repositories/exchange-connection-repository');

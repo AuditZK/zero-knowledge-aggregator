@@ -1,5 +1,5 @@
 import express, { Request, Response, NextFunction } from 'express';
-import http from 'http';
+import http from 'node:http';
 import { container } from 'tsyringe';
 import { getLogBuffer, clearLogBuffer, getLogger, extractErrorMessage } from './utils/secure-enclave-logger';
 import { SevSnpAttestationService } from './services/sev-snp-attestation.service';
@@ -57,15 +57,15 @@ const requireApiKey = (req: Request, res: Response, next: NextFunction): void =>
   next();
 };
 export class HttpLogServer {
-  private app: express.Application;
-  private port: number;
+  private readonly app: express.Application;
+  private readonly port: number;
   private server: http.Server | null = null;
-  private sseClients: Set<express.Response> = new Set();
+  private readonly sseClients: Set<express.Response> = new Set();
 
   constructor() {
     this.app = express();
     // Use PORT (Cloud Run) or HTTP_LOG_PORT (Docker), default to 50052
-    this.port = parseInt(process.env.PORT || process.env.HTTP_LOG_PORT || '50052');
+    this.port = Number.parseInt(process.env.PORT || process.env.HTTP_LOG_PORT || '50052', 10);
 
     this.setupRoutes();
   }
@@ -173,7 +173,9 @@ export class HttpLogServer {
       try {
         client.write(`data: ${log}\n\n`);
       } catch (error) {
-        // Client disconnected, will be cleaned up by 'close' event
+        logger.debug('[HTTP] Failed to write to SSE client (likely disconnected)', {
+          error: extractErrorMessage(error)
+        });
       }
     });
   }
