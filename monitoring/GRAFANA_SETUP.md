@@ -9,21 +9,34 @@ Guide pour configurer Grafana **sans leak de données sensibles**.
 ### Option 1 : Docker Compose (Recommandé)
 
 ```bash
-# Décommenter la section grafana dans docker-compose.prod.yml
 cd /opt/track-record-enclave
-sudo nano docker-compose.prod.yml
 
-# Décommenter les lignes grafana (lignes 150-175 environ)
+# Définir le mot de passe Grafana (OBLIGATOIRE - pas de défaut)
+export GRAFANA_PASSWORD="$(openssl rand -base64 32)"
+echo "Sauvegardez ce mot de passe: $GRAFANA_PASSWORD"
 
-# Restart
-sudo systemctl restart enclave
+# Démarrer la stack complète (enclave + prometheus + grafana)
+docker compose -f docker-compose.enclave.yml up -d
 
-# Vérifier
-sudo docker ps | grep grafana
+# Vérifier que tous les services tournent
+docker compose -f docker-compose.enclave.yml ps
+
+# Vérifier les logs si besoin
+docker logs grafana
+docker logs prometheus
 ```
 
-Accès : `http://<VM_IP>:3000`
-Login : `admin` / `admin` (changer le mot de passe au premier login)
+**Accès via SSH tunnel** (Grafana n'est PAS exposé sur internet) :
+```bash
+# Depuis votre machine locale
+ssh -L 3000:127.0.0.1:3000 user@enclave-server
+
+# Puis ouvrir dans le navigateur
+http://localhost:3000
+# Login: admin / $GRAFANA_PASSWORD
+```
+
+Le dashboard est **auto-provisionné** : il apparaît automatiquement dans Grafana.
 
 ### Option 2 : Installation native
 
@@ -47,20 +60,29 @@ sudo systemctl status grafana-server
 
 ## 📊 Configuration Prometheus Data Source
 
-### 1. Ajouter Prometheus
+### Avec Docker Compose (Auto-provisionné)
+
+Si vous utilisez `docker-compose.enclave.yml`, **tout est configuré automatiquement** :
+- ✅ Prometheus data source déjà configuré
+- ✅ Dashboard déjà importé
+- ✅ Scrape de l'enclave sur `enclave-service:9092`
+
+Après `docker compose up -d`, allez simplement sur `http://<VM_IP>:3000` et le dashboard est prêt.
+
+### Configuration Manuelle (Installation native)
 
 1. Aller sur `http://<VM_IP>:3000`
-2. Login (`admin` / `admin`)
+2. Login (`admin` / votre mot de passe)
 3. Menu → Configuration → Data Sources → Add data source
 4. Sélectionner **Prometheus**
 5. Configurer :
-   - **URL** : `http://enclave:9090` (Docker) ou `http://localhost:9090` (native)
+   - **URL** : `http://localhost:9090`
    - **Access** : Server (default)
    - **Scrape interval** : 15s
 
 6. Cliquer **Save & Test** → Doit afficher "Data source is working"
 
-### 2. Importer le Dashboard Sécurisé
+### Importer le Dashboard Manuellement
 
 1. Menu → Dashboards → Import
 2. Cliquer **Upload JSON file**
@@ -355,26 +377,41 @@ cat monitoring/grafana-dashboards/enclave-dashboard.json | grep -i "balance" && 
 ## 🎯 Quick Start
 
 ```bash
-# 1. Démarrer Grafana
-sudo systemctl start grafana-server
+# 1. Définir le mot de passe Grafana (OBLIGATOIRE - pas de défaut)
+export GRAFANA_PASSWORD="$(openssl rand -base64 32)"
+echo "Grafana password: $GRAFANA_PASSWORD"  # Notez-le !
 
-# 2. Accès
-http://localhost:3000 (admin / admin)
+# 2. Démarrer la stack complète
+docker compose -f docker-compose.enclave.yml up -d
 
-# 3. Ajouter Prometheus data source
-URL: http://localhost:9090
+# 3. Vérifier que tout tourne
+docker compose -f docker-compose.enclave.yml ps
 
-# 4. Importer dashboard
-monitoring/grafana-dashboards/enclave-dashboard.json
+# 4. Accès Grafana via SSH tunnel (depuis votre machine locale)
+ssh -L 3000:127.0.0.1:3000 user@enclave-server
+# Puis ouvrir http://localhost:3000 (admin / $GRAFANA_PASSWORD)
 
-# 5. Vérifier les metrics
-curl http://localhost:9090/metrics | grep grpc_requests_total
+# 5. Vérifier que Prometheus scrape l'enclave (depuis le serveur)
+docker exec prometheus wget -qO- http://localhost:9090/api/v1/targets | jq '.data.activeTargets[].health'
 
 # 6. Audit de sécurité
-curl http://localhost:9090/metrics | grep -i "user_uid" && echo "⚠️ LEAK" || echo "✅ SAFE"
+docker exec enclave_service wget -qO- http://localhost:9092/metrics | grep -i "user_uid" && echo "⚠️ LEAK" || echo "✅ SAFE"
 ```
 
-**Dashboard prêt à l'emploi en 5 minutes !** 🚀
+**Dashboard prêt à l'emploi en 2 minutes !** 🚀
+
+## 🔐 Architecture Sécurisée
+
+```
+Internet ──X──> Prometheus (port 9090 non exposé)
+Internet ──X──> Grafana (127.0.0.1:3000 uniquement)
+
+SSH Tunnel ───> localhost:3000 ───> Grafana ───> Prometheus ───> Enclave metrics
+```
+
+- **Prometheus** : Aucun port exposé à l'extérieur, communication interne uniquement
+- **Grafana** : Bind sur 127.0.0.1, accessible uniquement via SSH tunnel
+- **Mot de passe** : Obligatoire, pas de valeur par défaut
 
 ---
 

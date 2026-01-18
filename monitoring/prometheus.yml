@@ -44,7 +44,7 @@ scrape_configs:
     # Static targets
     static_configs:
       - targets:
-          - 'enclave:9090'  # Docker Compose service name
+          - 'enclave-service:9092'  # Docker Compose service name + metrics port
 
         labels:
           instance: 'enclave-worker'
