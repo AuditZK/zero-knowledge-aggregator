@@ -41,6 +41,11 @@ export class SevSnpAttestationService {
   // NOSONAR: GCP Metadata Server only supports HTTP - internal DNS is VM-internal only
   private readonly GCP_METADATA_ENDPOINT = 'http://metadata.google.internal/computeMetadata/v1/instance/confidential-computing/attestation-report'; // NOSONAR
 
+  // Persistent cache directory for VCEK certificates (avoids AMD KDS rate limits)
+  private readonly VCEK_CACHE_DIR = '/var/cache/enclave/certs';
+  // Cache validity: 7 days (VCEK certs are tied to chip, rarely change)
+  private readonly VCEK_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
   private tlsFingerprint: Buffer | null = null;
 
   /** Binds TLS fingerprint to attestation reportData field. */
@@ -179,34 +184,23 @@ export class SevSnpAttestationService {
         logger.warn('Generated attestation with random data (no TLS binding)');
       }
 
-      // Fetch VCEK certificate from AMD KDS using the report
-      // snpguest 0.6.0 syntax: fetch vcek <encoding> <processor_model> <certs_dir> <att_report_path>
-      try {
-        await execAsync(`/usr/bin/snpguest fetch vcek pem milan ${certsDir} ${reportPath}`);
-        logger.info('Successfully fetched VCEK certificate from AMD KDS');
-      } catch (certError: unknown) {
-        logger.warn('Failed to fetch VCEK from AMD KDS, will use cached cert if available', {
-          error: extractErrorMessage(certError)
-        });
-      }
-
-      // Fetch CA chain from AMD KDS
-      // snpguest 0.6.0 syntax: fetch ca <encoding> <processor_model> <certs_dir> --endorser <vcek|vlek>
-      try {
-        await execAsync(`/usr/bin/snpguest fetch ca pem milan ${certsDir} --endorser vcek`);
-        logger.info('Successfully fetched CA chain from AMD KDS');
-      } catch (caError) {
-        logger.warn('Failed to fetch CA chain from AMD KDS');
-      }
+      // Fetch VCEK certificates with caching (avoids AMD KDS rate limits)
+      const certsAvailable = await this.fetchVcekWithCache(reportPath, certsDir);
 
       // Verify the attestation report using VCEK certificate chain
       let vcekVerified = false;
-      try {
-        await execAsync(`/usr/bin/snpguest verify attestation ${certsDir} ${reportPath}`);
-        logger.info('snpguest VCEK verification successful - attestation cryptographically verified');
-        vcekVerified = true;
-      } catch (verifyError) {
-        logger.warn('snpguest verify failed - attestation NOT cryptographically verified');
+      if (certsAvailable) {
+        try {
+          await execAsync(`/usr/bin/snpguest verify attestation ${certsDir} ${reportPath}`);
+          logger.info('snpguest VCEK verification successful - attestation cryptographically verified');
+          vcekVerified = true;
+        } catch (verifyError) {
+          logger.warn('snpguest verify failed - attestation NOT cryptographically verified', {
+            error: extractErrorMessage(verifyError)
+          });
+        }
+      } else {
+        logger.warn('VCEK certificates unavailable - skipping cryptographic verification');
       }
 
       // Display the report and parse the output
@@ -404,5 +398,99 @@ export class SevSnpAttestationService {
       vcekVerified: false,
       errorMessage
     };
+  }
+
+  /** Ensures VCEK cache directory exists with secure permissions */
+  private ensureCacheDir(): void {
+    if (!fs.existsSync(this.VCEK_CACHE_DIR)) {
+      fs.mkdirSync(this.VCEK_CACHE_DIR, { recursive: true, mode: 0o700 });
+      logger.info('Created VCEK cache directory', { path: this.VCEK_CACHE_DIR });
+    }
+  }
+
+  /** Checks if cached VCEK certificates are valid and recent */
+  private isCacheValid(): boolean {
+    const vcekPath = path.join(this.VCEK_CACHE_DIR, 'vcek.pem');
+    const arkPath = path.join(this.VCEK_CACHE_DIR, 'ark.pem');
+    const askPath = path.join(this.VCEK_CACHE_DIR, 'ask.pem');
+
+    // All three certificates must exist
+    if (!fs.existsSync(vcekPath) || !fs.existsSync(arkPath) || !fs.existsSync(askPath)) {
+      return false;
+    }
+
+    // Check VCEK age (most specific cert, if it's valid others should be too)
+    try {
+      const stats = fs.statSync(vcekPath);
+      const ageMs = Date.now() - stats.mtimeMs;
+      if (ageMs > this.VCEK_CACHE_MAX_AGE_MS) {
+        logger.info('VCEK cache expired', { ageHours: Math.round(ageMs / 3600000) });
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private readonly VCEK_CERT_FILES = ['vcek.pem', 'ark.pem', 'ask.pem'] as const;
+
+  /** Copies certificate files between directories */
+  private copyCertFiles(srcDir: string, dstDir: string): boolean {
+    for (const certFile of this.VCEK_CERT_FILES) {
+      const srcPath = path.join(srcDir, certFile);
+      const dstPath = path.join(dstDir, certFile);
+      if (fs.existsSync(srcPath)) {
+        fs.copyFileSync(srcPath, dstPath);
+      }
+    }
+    return true;
+  }
+
+  /** Fetches fresh certificates from AMD KDS */
+  private async fetchFromAmdKds(reportPath: string, targetDir: string): Promise<void> {
+    await execAsync(`/usr/bin/snpguest fetch vcek pem milan ${targetDir} ${reportPath}`);
+    logger.info('Successfully fetched VCEK certificate from AMD KDS');
+    await execAsync(`/usr/bin/snpguest fetch ca pem milan ${targetDir} --endorser vcek`);
+    logger.info('Successfully fetched CA chain from AMD KDS');
+  }
+
+  /** Fetches VCEK certificates from AMD KDS with caching */
+  private async fetchVcekWithCache(reportPath: string, targetDir: string): Promise<boolean> {
+    this.ensureCacheDir();
+
+    // Try cached certificates first
+    if (this.isCacheValid()) {
+      logger.info('Using cached VCEK certificates');
+      try {
+        return this.copyCertFiles(this.VCEK_CACHE_DIR, targetDir);
+      } catch (copyError) {
+        logger.warn('Failed to copy cached certs', { error: extractErrorMessage(copyError) });
+      }
+    }
+
+    // Cache miss - fetch from AMD KDS
+    logger.info('Fetching VCEK certificates from AMD KDS');
+    try {
+      await this.fetchFromAmdKds(reportPath, targetDir);
+      this.copyCertFiles(targetDir, this.VCEK_CACHE_DIR);
+      logger.info('Updated VCEK cache with fresh certificates');
+      return true;
+    } catch (fetchError) {
+      logger.warn('Failed to fetch VCEK from AMD KDS (rate limited?)', {
+        error: extractErrorMessage(fetchError)
+      });
+      return this.tryExpiredCacheFallback(targetDir);
+    }
+  }
+
+  /** Attempts to use expired cache as fallback when AMD KDS is unavailable */
+  private tryExpiredCacheFallback(targetDir: string): boolean {
+    const vcekPath = path.join(this.VCEK_CACHE_DIR, 'vcek.pem');
+    if (!fs.existsSync(vcekPath)) {
+      return false;
+    }
+    logger.info('Using expired cache as fallback');
+    return this.copyCertFiles(this.VCEK_CACHE_DIR, targetDir);
   }
 }
