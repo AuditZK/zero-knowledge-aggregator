@@ -186,9 +186,11 @@ async function main() {
 }
 
 // Run health check
-try {
-  await main();
-} catch (error) {
-  console.error('Health check failed:', error);
-  process.exit(1);
-}
+(async () => {
+  try {
+    await main();
+  } catch (error) {
+    console.error('Health check failed:', error);
+    process.exit(1);
+  }
+})();
