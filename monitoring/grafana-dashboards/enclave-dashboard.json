@@ -398,8 +398,6 @@
             "spanNulls": true
           },
           "mappings": [],
-          "max": 10,
-          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
