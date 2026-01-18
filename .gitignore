@@ -74,6 +74,7 @@ scripts/seed-test-data.ts
 scripts/migrate-to-hardware-keys.ts
 scripts/audit-project.py
 scripts/test-mexc-balance.py
+scripts\test\test-mexc-balance.py
 
 # Wiki (managed in separate .wiki repository)
 wiki/
