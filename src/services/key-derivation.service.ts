@@ -1,4 +1,4 @@
-import * as crypto from 'crypto';
+import * as crypto from 'node:crypto';
 import { injectable, inject } from 'tsyringe';
 import { SevSnpAttestationService } from './sev-snp-attestation.service';
 import { getLogger, extractErrorMessage } from '../utils/secure-enclave-logger';
@@ -16,7 +16,7 @@ export class KeyDerivationService {
   private readonly KEY_LENGTH = 32;
 
   constructor(
-    @inject(SevSnpAttestationService) private attestationService: SevSnpAttestationService
+    @inject(SevSnpAttestationService) private readonly attestationService: SevSnpAttestationService
   ) { }
 
   /** Derives master key from SEV-SNP measurement using HKDF-SHA256. */

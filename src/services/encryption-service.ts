@@ -1,4 +1,4 @@
-import * as crypto from 'crypto';
+import * as crypto from 'node:crypto';
 import { injectable, inject } from 'tsyringe';
 import { KeyManagementService } from './key-management.service';
 import { getLogger, extractErrorMessage } from '../utils/secure-enclave-logger';
@@ -13,7 +13,7 @@ export class EncryptionService {
   private static readonly TAG_LENGTH = 16;
 
   constructor(
-    @inject(KeyManagementService) private keyManagement: KeyManagementService
+    @inject(KeyManagementService) private readonly keyManagement: KeyManagementService
   ) {}
 
   private async getKey(): Promise<Buffer> {

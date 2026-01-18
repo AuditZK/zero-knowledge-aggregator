@@ -39,8 +39,8 @@ export class AlpacaConnector extends RestBrokerConnector {
    */
   protected async getAuthHeaders(): Promise<Record<string, string>> {
     return {
-      'APCA-API-KEY-ID': this.credentials.apiKey!,
-      'APCA-API-SECRET-KEY': this.credentials.apiSecret!,
+      'APCA-API-KEY-ID': this.credentials.apiKey,
+      'APCA-API-SECRET-KEY': this.credentials.apiSecret,
     };
   }
 
@@ -72,12 +72,12 @@ export class AlpacaConnector extends RestBrokerConnector {
       const alpacaPositions = await this.api.getCurrentPositions();
 
       return alpacaPositions.map(pos => {
-        const side = pos.side === 'long' ? 'long' : 'short';
+        const side: 'long' | 'short' = pos.side === 'long' ? 'long' : 'short';
         const size = this.parseFloat(pos.qty);
 
         return {
           symbol: pos.symbol,
-          side: side as 'long' | 'short',
+          side,
           size,
           entryPrice: this.parseFloat(pos.avg_entry_price || '0'),
           markPrice: this.parseFloat(pos.current_price || '0'),

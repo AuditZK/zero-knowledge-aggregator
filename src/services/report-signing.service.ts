@@ -1,5 +1,5 @@
 import { injectable } from 'tsyringe';
-import { createHash, createSign, createVerify, generateKeyPairSync, KeyObject } from 'crypto';
+import { createHash, createSign, createVerify, generateKeyPairSync, KeyObject } from 'node:crypto';
 import { getLogger } from '../utils/secure-enclave-logger';
 import {
   SignedFinancialData,

@@ -350,7 +350,7 @@ export class SecureEnclaveLogger {
    * Log ERROR level message (highest severity)
    * Goes to stderr
    */
-  error(message: string, error?: Error | unknown, metadata?: Record<string, unknown>): void {
+  error(message: string, error?: unknown, metadata?: Record<string, unknown>): void {
     const enrichedMeta: Record<string, unknown> = { ...metadata };
 
     if (error instanceof Error) {
@@ -359,8 +359,9 @@ export class SecureEnclaveLogger {
         message: error.message,
         stack: error.stack,
       };
-    } else if (error) {
-      enrichedMeta.error = String(error);
+    } else if (error !== undefined && error !== null) {
+      // Handle non-Error values: strings pass through, all others get JSON stringified
+      enrichedMeta.error = typeof error === 'string' ? error : JSON.stringify(error);
     }
 
     this.emit(LogLevel.ERROR, message, enrichedMeta);

@@ -1,4 +1,4 @@
-import * as crypto from 'crypto';
+import * as crypto from 'node:crypto';
 import { injectable } from 'tsyringe';
 import { getLogger } from '../utils/secure-enclave-logger';
 
@@ -153,32 +153,27 @@ export class TlsKeyGeneratorService {
     notAfter: Date;
     serialNumber: string;
   }): Buffer {
-    const parts: Buffer[] = [];
-
-    // Version (v3 = 2)
-    parts.push(Buffer.from([0xa0, 0x03, 0x02, 0x01, 0x02]));
-
     // Serial number
     const serialBytes = Buffer.from(options.serialNumber, 'hex');
-    parts.push(this.wrapAsn1(0x02, serialBytes));
-
-    // Signature algorithm (ecdsa-with-SHA256)
-    parts.push(Buffer.from([
-      0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02
-    ]));
-
-    // Issuer (same as subject for self-signed)
-    parts.push(this.buildName(options.subject));
-
-    // Validity
-    parts.push(this.buildValidity(options.notBefore, options.notAfter));
-
-    // Subject
-    parts.push(this.buildName(options.subject));
-
-    // Subject Public Key Info
     const pubKeyDer = this.pemToDer(options.publicKey);
-    parts.push(pubKeyDer);
+
+    // Build all parts
+    const parts: Buffer[] = [
+      // Version (v3 = 2)
+      Buffer.from([0xa0, 0x03, 0x02, 0x01, 0x02]),
+      // Serial number
+      this.wrapAsn1(0x02, serialBytes),
+      // Signature algorithm (ecdsa-with-SHA256)
+      Buffer.from([0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02]),
+      // Issuer (same as subject for self-signed)
+      this.buildName(options.subject),
+      // Validity
+      this.buildValidity(options.notBefore, options.notAfter),
+      // Subject
+      this.buildName(options.subject),
+      // Subject Public Key Info
+      pubKeyDer
+    ];
 
     // Wrap as SEQUENCE
     return this.wrapAsn1(0x30, Buffer.concat(parts));
@@ -205,8 +200,8 @@ export class TlsKeyGeneratorService {
     const formatTime = (d: Date) => {
       // ISO: 2025-12-29T00:40:30.000Z -> UTCTime: 251229004030Z
       const str = d.toISOString()
-        .replace(/[-:T]/g, '')  // Remove dashes, colons, and T separator
-        .replace(/\.\d{3}/, ''); // Remove milliseconds
+        .replaceAll(/[-:T]/g, '')  // Remove dashes, colons, and T separator
+        .replace(/\.\d{3}/, ''); // Remove milliseconds (single occurrence)
       return Buffer.from(str.slice(2, 14) + 'Z', 'ascii'); // YYMMDDHHMMSSZ
     };
     const nb = this.wrapAsn1(0x17, formatTime(notBefore));
@@ -271,7 +266,7 @@ export class TlsKeyGeneratorService {
     const base64 = pem
       .replace(/-----BEGIN.*-----/, '')
       .replace(/-----END.*-----/, '')
-      .replace(/\s/g, '');
+      .replaceAll(/\s/g, '');
     return Buffer.from(base64, 'base64');
   }
 

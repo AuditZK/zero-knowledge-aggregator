@@ -3,7 +3,7 @@ import { IExchangeConnector } from '../../external/interfaces/IExchangeConnector
 import { ExchangeConnectorFactory } from '../../external/factories/ExchangeConnectorFactory';
 import { ExchangeCredentials } from '../../types';
 import { getLogger } from '../../utils/secure-enclave-logger';
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 
 const logger = getLogger('UniversalConnectorCache');
 
@@ -52,8 +52,8 @@ interface CacheStats {
  */
 @injectable()
 export class UniversalConnectorCacheService {
-  private cache = new Map<string, CachedConnector>();
-  private stats: CacheStats = {
+  private readonly cache = new Map<string, CachedConnector>();
+  private readonly stats: CacheStats = {
     hits: 0,
     misses: 0,
     evictions: 0,

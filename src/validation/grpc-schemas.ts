@@ -1,15 +1,19 @@
 import { z } from 'zod';
 
 // Accept Clerk user IDs (user_xxx), UUIDs, and CUIDs
-// Clerk format: user_[a-zA-Z0-9]{20,40}
+// Clerk format: user_[a-zA-Z0-9]{10,50}
 // UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 // CUID format: c[a-z0-9]{20,30}
-const userUidSchema = z.string().min(1).max(100).regex(
-  /^(user_[a-zA-Z0-9]{10,50}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|c[a-z0-9]{20,30})$/i,
+const CLERK_ID_PATTERN = /^user_[a-z0-9]{10,50}$/i;
+const UUID_PATTERN = /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i;
+const CUID_PATTERN = /^c[a-z0-9]{20,30}$/;
+
+const userUidSchema = z.string().min(1).max(100).refine(
+  (val) => CLERK_ID_PATTERN.test(val) || UUID_PATTERN.test(val) || CUID_PATTERN.test(val),
   'Invalid user UID format (expected Clerk ID, UUID, or CUID)'
 );
 const exchangeSchema = z.string().min(1).max(50).regex(/^[a-z0-9_-]+$/);
-const timestampSchema = z.string().regex(/^\d+$/).transform(val => parseInt(val, 10))
+const timestampSchema = z.string().regex(/^\d+$/).transform(val => Number.parseInt(val, 10))
   .refine(val => val > 0 && val < Date.now() + 86400000);
 
 /**
@@ -60,11 +64,12 @@ export type ValidatedCreateUserConnectionRequest = z.infer<typeof CreateUserConn
 export type ValidatedHealthCheckRequest = z.infer<typeof HealthCheckRequestSchema>;
 
 export function formatValidationError(error: z.ZodError): string {
-  const errors = error?.issues ?? [];
-  if (errors.length === 0) {
+  const issues = error?.issues ?? [];
+  if (issues.length === 0) {
     return 'Validation failed: Unknown error';
   }
-  return `Validation failed: ${errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')}`;
+  const errorMessages = issues.map(e => `${e.path.join('.')}: ${e.message}`);
+  return `Validation failed: ${errorMessages.join(', ')}`;
 }
 
 export function validateRequest<T>(schema: z.ZodSchema<T>, data: unknown):

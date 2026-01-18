@@ -186,9 +186,15 @@ export class ExchangeConnectionRepository {
         try {
           apiKey = updates.apiKey || await this.encryptionService.decrypt(connection.encryptedApiKey);
           apiSecret = updates.apiSecret || await this.encryptionService.decrypt(connection.encryptedApiSecret);
-          passphrase = updates.passphrase !== undefined
-            ? updates.passphrase
-            : (connection.encryptedPassphrase ? await this.encryptionService.decrypt(connection.encryptedPassphrase) : undefined);
+
+          // Extract nested ternary for clarity
+          if (updates.passphrase !== undefined) {
+            passphrase = updates.passphrase;
+          } else if (connection.encryptedPassphrase) {
+            passphrase = await this.encryptionService.decrypt(connection.encryptedPassphrase);
+          } else {
+            passphrase = undefined;
+          }
 
           updateData.credentialsHash = this.encryptionService.createCredentialsHash(apiKey, apiSecret, passphrase);
         } finally {

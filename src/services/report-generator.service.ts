@@ -1,5 +1,5 @@
 import { injectable, inject } from 'tsyringe';
-import { randomBytes } from 'crypto';
+import { randomBytes } from 'node:crypto';
 import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repository';
 import { SignedReportRepository } from '../core/repositories/signed-report-repository';
 import { ReportSigningService } from './report-signing.service';
@@ -297,8 +297,33 @@ export class ReportGeneratorService {
     withdrawals: number;
     exchange?: string;
   }>): DailyReturn[] {
-    // Group snapshots by date AND exchange
-    // Map<dateKey, Map<exchange, snapshot[]>>
+    const byDateAndExchange = this.groupSnapshotsByDateAndExchange(snapshots);
+    const sortedDates = Array.from(byDateAndExchange.keys()).sort((a, b) => a.localeCompare(b));
+    const exchangeFirstEquity = this.findFirstEquityPerExchange(byDateAndExchange, sortedDates);
+
+    const state = this.initDailyReturnState(sortedDates);
+    const dailyReturns: DailyReturn[] = [];
+
+    for (const dateKey of sortedDates) {
+      const exchangeMap = byDateAndExchange.get(dateKey)!;
+      const dayData = this.aggregateDailyEquityAndCashflows(
+        exchangeMap, dateKey, state, exchangeFirstEquity
+      );
+
+      const result = this.calculateDailyReturnForDate(dateKey, dayData, state);
+      dailyReturns.push(result);
+    }
+
+    return dailyReturns;
+  }
+
+  private groupSnapshotsByDateAndExchange(snapshots: Array<{
+    timestamp: string;
+    totalEquity: number;
+    deposits: number;
+    withdrawals: number;
+    exchange?: string;
+  }>): Map<string, Map<string, typeof snapshots>> {
     const byDateAndExchange = new Map<string, Map<string, typeof snapshots>>();
 
     for (const snapshot of snapshots) {
@@ -318,97 +343,106 @@ export class ReportGeneratorService {
       exchangeMap.get(exchange)!.push(snapshot);
     }
 
-    const dailyReturns: DailyReturn[] = [];
-    let previousCloseEquity: number | null = null;
-    let cumulativeReturn = 1.0;
+    return byDateAndExchange;
+  }
 
-    // Track seen exchanges and their last known equity (for forward-fill)
-    const seenExchanges = new Set<string>();
-    const lastKnownEquity = new Map<string, number>();
+  private findFirstEquityPerExchange(
+    byDateAndExchange: Map<string, Map<string, Array<{ timestamp: string; totalEquity: number }>>>,
+    sortedDates: string[]
+  ): Map<string, number> {
     const exchangeFirstEquity = new Map<string, number>();
 
-    // Sort dates chronologically
-    const sortedDates = Array.from(byDateAndExchange.keys()).sort((a, b) => a.localeCompare(b));
-    const isFirstDay = (dateKey: string) => dateKey === sortedDates[0];
-
-    // Find first equity for each exchange
     for (const dateKey of sortedDates) {
       const exchangeMap = byDateAndExchange.get(dateKey)!;
       for (const [exchange, daySnapshots] of exchangeMap.entries()) {
-        if (!exchangeFirstEquity.has(exchange) && daySnapshots.length > 0) {
-          const sorted = [...daySnapshots].sort((a, b) =>
-            new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-          );
-          exchangeFirstEquity.set(exchange, sorted[0]!.totalEquity);
-        }
-      }
-    }
+        if (exchangeFirstEquity.has(exchange) || daySnapshots.length === 0) continue;
 
-    for (const dateKey of sortedDates) {
-      const exchangeMap = byDateAndExchange.get(dateKey)!;
-
-      // Aggregate equity, deposits, withdrawals across ALL exchanges for this day
-      let totalEquity = 0;
-      let totalDeposits = 0;
-      let totalWithdrawals = 0;
-      let virtualDeposit = 0;
-
-      // First, add data from exchanges that have snapshots today
-      for (const [exchange, daySnapshots] of exchangeMap.entries()) {
-        // Sort and take last snapshot of the day for this exchange
         const sorted = [...daySnapshots].sort((a, b) =>
           new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
         );
-        const closeSnap = sorted[sorted.length - 1]!;
-
-        totalEquity += closeSnap.totalEquity;
-        totalDeposits += closeSnap.deposits;
-        totalWithdrawals += closeSnap.withdrawals;
-
-        // Update last known equity for this exchange
-        lastKnownEquity.set(exchange, closeSnap.totalEquity);
-
-        // Check if this is a NEW exchange appearing after the first day
-        if (!seenExchanges.has(exchange)) {
-          seenExchanges.add(exchange);
-          if (!isFirstDay(dateKey)) {
-            // New exchange after first day - treat initial equity as virtual deposit
-            const firstEquity = exchangeFirstEquity.get(exchange) || closeSnap.totalEquity;
-            virtualDeposit += firstEquity;
-          }
-        }
+        exchangeFirstEquity.set(exchange, sorted[0]!.totalEquity);
       }
-
-      // Forward-fill: add last known equity for exchanges not present today
-      for (const [exchange, equity] of lastKnownEquity.entries()) {
-        if (!exchangeMap.has(exchange)) {
-          totalEquity += equity;
-        }
-      }
-
-      // TWR formula aligned with Analytics:
-      const netDeposits = totalDeposits - totalWithdrawals + virtualDeposit;
-
-      let dailyReturnPct = 0;
-      if (previousCloseEquity !== null && previousCloseEquity > 0) {
-        const adjustedReturn = totalEquity - previousCloseEquity - netDeposits;
-        dailyReturnPct = (adjustedReturn / previousCloseEquity) * 100;
-        cumulativeReturn *= (1 + dailyReturnPct / 100);
-      }
-
-      dailyReturns.push({
-        date: dateKey,
-        netReturn: dailyReturnPct,
-        benchmarkReturn: 0,
-        outperformance: dailyReturnPct,
-        cumulativeReturn,
-        nav: totalEquity
-      });
-
-      previousCloseEquity = totalEquity;
     }
 
-    return dailyReturns;
+    return exchangeFirstEquity;
+  }
+
+  private initDailyReturnState(sortedDates: string[]) {
+    return {
+      seenExchanges: new Set<string>(),
+      lastKnownEquity: new Map<string, number>(),
+      previousCloseEquity: null as number | null,
+      cumulativeReturn: 1,
+      firstDateKey: sortedDates[0] || ''
+    };
+  }
+
+  private aggregateDailyEquityAndCashflows(
+    exchangeMap: Map<string, Array<{ timestamp: string; totalEquity: number; deposits: number; withdrawals: number }>>,
+    dateKey: string,
+    state: { seenExchanges: Set<string>; lastKnownEquity: Map<string, number>; firstDateKey: string },
+    exchangeFirstEquity: Map<string, number>
+  ): { totalEquity: number; netDeposits: number } {
+    let totalEquity = 0;
+    let totalDeposits = 0;
+    let totalWithdrawals = 0;
+    let virtualDeposit = 0;
+
+    for (const [exchange, daySnapshots] of exchangeMap.entries()) {
+      const sorted = [...daySnapshots].sort((a, b) =>
+        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      );
+      const closeSnap = sorted.at(-1)!;
+
+      totalEquity += closeSnap.totalEquity;
+      totalDeposits += closeSnap.deposits;
+      totalWithdrawals += closeSnap.withdrawals;
+      state.lastKnownEquity.set(exchange, closeSnap.totalEquity);
+
+      if (!state.seenExchanges.has(exchange)) {
+        state.seenExchanges.add(exchange);
+        if (dateKey !== state.firstDateKey) {
+          virtualDeposit += exchangeFirstEquity.get(exchange) || closeSnap.totalEquity;
+        }
+      }
+    }
+
+    // Forward-fill: add last known equity for exchanges not present today
+    for (const [exchange, equity] of state.lastKnownEquity.entries()) {
+      if (!exchangeMap.has(exchange)) {
+        totalEquity += equity;
+      }
+    }
+
+    return {
+      totalEquity,
+      netDeposits: totalDeposits - totalWithdrawals + virtualDeposit
+    };
+  }
+
+  private calculateDailyReturnForDate(
+    dateKey: string,
+    dayData: { totalEquity: number; netDeposits: number },
+    state: { previousCloseEquity: number | null; cumulativeReturn: number }
+  ): DailyReturn {
+    let dailyReturnPct = 0;
+
+    if (state.previousCloseEquity !== null && state.previousCloseEquity > 0) {
+      const adjustedReturn = dayData.totalEquity - state.previousCloseEquity - dayData.netDeposits;
+      dailyReturnPct = (adjustedReturn / state.previousCloseEquity) * 100;
+      state.cumulativeReturn *= (1 + dailyReturnPct / 100);
+    }
+
+    state.previousCloseEquity = dayData.totalEquity;
+
+    return {
+      date: dateKey,
+      netReturn: dailyReturnPct,
+      benchmarkReturn: 0,
+      outperformance: dailyReturnPct,
+      cumulativeReturn: state.cumulativeReturn,
+      nav: dayData.totalEquity
+    };
   }
 
   /**
@@ -430,9 +464,9 @@ export class ReportGeneratorService {
     monthlyMap.forEach((dailyData, monthKey) => {
       if (dailyData.length === 0) return;
 
-      const sortedData = dailyData.sort((a, b) => a.date.localeCompare(b.date));
+      const sortedData = [...dailyData].sort((a, b) => a.date.localeCompare(b.date));
       const firstDay = sortedData[0];
-      const lastDay = sortedData[sortedData.length - 1];
+      const lastDay = sortedData.at(-1);
 
       if (!firstDay || !lastDay) return;
 
@@ -465,7 +499,7 @@ export class ReportGeneratorService {
     const returns = dailyReturns.map(d => d.netReturn / 100);
 
     // Total return
-    const lastDay = dailyReturns[dailyReturns.length - 1];
+    const lastDay = dailyReturns.at(-1);
     const totalReturn = lastDay ? (lastDay.cumulativeReturn - 1) * 100 : 0;
 
     // Annualized return
@@ -633,65 +667,95 @@ export class ReportGeneratorService {
    * ALIGNED with Analytics: uses NAV (equity) for consistency
    */
   private calculateDrawdownData(dailyReturns: DailyReturn[]): DrawdownData {
-    let peak = dailyReturns[0]?.nav || 0;
-    let maxDrawdownDepth = 0;
-    let maxDrawdownDuration = 0;
-    let currentDrawdownStart: number | null = null;
-    const drawdownPeriods: DrawdownPeriod[] = [];
+    const state = this.initDrawdownCalcState(dailyReturns);
 
     for (let i = 0; i < dailyReturns.length; i++) {
       const currentDay = dailyReturns[i];
       if (!currentDay) continue;
 
-      const current = currentDay.nav;
-
-      if (current >= peak) {
-        // New peak - end of drawdown period
-        if (currentDrawdownStart !== null) {
-          const duration = i - currentDrawdownStart;
-          if (duration > maxDrawdownDuration) {
-            maxDrawdownDuration = duration;
-          }
-
-          const startDay = dailyReturns[currentDrawdownStart];
-          if (startDay) {
-            const slicedNavs = dailyReturns.slice(currentDrawdownStart, i + 1).map(d => d.nav);
-            drawdownPeriods.push({
-              startDate: startDay.date,
-              endDate: currentDay.date,
-              depth: ((peak - Math.min(...slicedNavs)) / peak) * 100,
-              duration,
-              recovered: true
-            });
-          }
-
-          currentDrawdownStart = null;
-        }
-        peak = current;
-      } else {
-        // In drawdown
-        if (currentDrawdownStart === null) {
-          currentDrawdownStart = i - 1;
-        }
-
-        const drawdown = ((peak - current) / peak) * 100;
-        if (drawdown > maxDrawdownDepth) {
-          maxDrawdownDepth = drawdown;
-        }
-      }
+      this.processDrawdownDay(dailyReturns, i, currentDay, state);
     }
 
-    // Handle ongoing drawdown
-    const lastReturn = dailyReturns[dailyReturns.length - 1];
+    return this.finalizeDrawdownData(dailyReturns, state);
+  }
+
+  private initDrawdownCalcState(dailyReturns: DailyReturn[]) {
+    return {
+      peak: dailyReturns[0]?.nav || 0,
+      maxDrawdownDepth: 0,
+      maxDrawdownDuration: 0,
+      currentDrawdownStart: null as number | null,
+      drawdownPeriods: [] as DrawdownPeriod[]
+    };
+  }
+
+  private processDrawdownDay(
+    dailyReturns: DailyReturn[],
+    index: number,
+    currentDay: DailyReturn,
+    state: ReturnType<typeof this.initDrawdownCalcState>
+  ): void {
+    const current = currentDay.nav;
+
+    if (current >= state.peak) {
+      this.handleNewPeak(dailyReturns, index, currentDay, state);
+    } else {
+      this.handleDrawdown(index, current, state);
+    }
+  }
+
+  private handleNewPeak(
+    dailyReturns: DailyReturn[],
+    index: number,
+    currentDay: DailyReturn,
+    state: ReturnType<typeof this.initDrawdownCalcState>
+  ): void {
+    if (state.currentDrawdownStart !== null) {
+      const duration = index - state.currentDrawdownStart;
+      state.maxDrawdownDuration = Math.max(state.maxDrawdownDuration, duration);
+
+      const startDay = dailyReturns[state.currentDrawdownStart];
+      if (startDay) {
+        const slicedNavs = dailyReturns.slice(state.currentDrawdownStart, index + 1).map(d => d.nav);
+        state.drawdownPeriods.push({
+          startDate: startDay.date,
+          endDate: currentDay.date,
+          depth: ((state.peak - Math.min(...slicedNavs)) / state.peak) * 100,
+          duration,
+          recovered: true
+        });
+      }
+
+      state.currentDrawdownStart = null;
+    }
+    state.peak = currentDay.nav;
+  }
+
+  private handleDrawdown(
+    index: number,
+    current: number,
+    state: ReturnType<typeof this.initDrawdownCalcState>
+  ): void {
+    state.currentDrawdownStart ??= index - 1;
+
+    const drawdown = ((state.peak - current) / state.peak) * 100;
+    state.maxDrawdownDepth = Math.max(state.maxDrawdownDepth, drawdown);
+  }
+
+  private finalizeDrawdownData(
+    dailyReturns: DailyReturn[],
+    state: ReturnType<typeof this.initDrawdownCalcState>
+  ): DrawdownData {
+    const lastReturn = dailyReturns.at(-1);
     const currentDrawdown = lastReturn
-      ? ((peak - lastReturn.nav) / peak) * 100
+      ? ((state.peak - lastReturn.nav) / state.peak) * 100
       : 0;
 
-    if (currentDrawdownStart !== null) {
-      const duration = dailyReturns.length - currentDrawdownStart;
-      const ddStartDay = dailyReturns[currentDrawdownStart];
+    if (state.currentDrawdownStart !== null) {
+      const duration = dailyReturns.length - state.currentDrawdownStart;
+      const ddStartDay = dailyReturns[state.currentDrawdownStart];
       if (ddStartDay) {
-        drawdownPeriods.push({
+        state.drawdownPeriods.push({
           startDate: ddStartDay.date,
           endDate: lastReturn?.date || '',
           depth: currentDrawdown,
@@ -702,9 +766,9 @@ export class ReportGeneratorService {
     }
 
     return {
-      maxDrawdownDuration,
+      maxDrawdownDuration: state.maxDrawdownDuration,
       currentDrawdown,
-      drawdownPeriods: drawdownPeriods.slice(-5) // Keep last 5 drawdown periods
+      drawdownPeriods: state.drawdownPeriods.slice(-5)
     };
   }
 
@@ -741,8 +805,8 @@ export class ReportGeneratorService {
         return [];
       }
 
-      // Convert to daily returns
-      const prices = result.data.data.sort((a, b) =>
+      // Convert to daily returns (sort without mutating original)
+      const prices = [...result.data.data].sort((a, b) =>
         new Date(a.date).getTime() - new Date(b.date).getTime()
       );
 

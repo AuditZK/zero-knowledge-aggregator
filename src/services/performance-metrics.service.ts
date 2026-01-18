@@ -283,16 +283,23 @@ export class PerformanceMetricsService {
     const losses = dailyReturns.filter(r => r < 0);
     const totalGains = gains.reduce((sum, r) => sum + r, 0);
     const totalLosses = Math.abs(losses.reduce((sum, r) => sum + r, 0));
-    const profitFactor = totalLosses > 0
-      ? totalGains / totalLosses
-      : (totalGains > 0 ? null : 0); // null = infinite profit factor
+
+    // Calculate profit factor (sum of gains / sum of losses)
+    let profitFactor: number | null;
+    if (totalLosses > 0) {
+      profitFactor = totalGains / totalLosses;
+    } else if (totalGains > 0) {
+      profitFactor = null; // infinite profit factor
+    } else {
+      profitFactor = 0;
+    }
 
     // Average win and loss
     const avgWin = gains.length > 0 ? totalGains / gains.length : 0;
     const avgLoss = losses.length > 0 ? totalLosses / losses.length : 0;
 
     const firstDay = dailyData[0];
-    const lastDay = dailyData[dailyData.length - 1];
+    const lastDay = dailyData.at(-1);
 
     if (!firstDay || !lastDay) {
       throw new Error('Invalid daily data: missing first or last day');

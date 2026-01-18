@@ -60,7 +60,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
       if (summaries.length === 0) {throw new Error('No account data found in Flex report');}
 
       summaries.sort((a, b) => a.date.localeCompare(b.date));
-      const latest = summaries[summaries.length - 1]!;
+      const latest = summaries.at(-1)!;
       return this.createBalanceData(latest.cash, latest.netLiquidationValue, 'USD');
     });
   }
@@ -211,7 +211,7 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
       if (summaries.length === 0) {throw new Error('No account data found in Flex report');}
 
       summaries.sort((a, b) => a.date.localeCompare(b.date));
-      const latest = summaries[summaries.length - 1]!;
+      const latest = summaries.at(-1)!;
       const tradesByDate = this.groupTradesByDate(trades);
       return this.mapSummaryToBreakdown(latest, tradesByDate.get(latest.date));
     });
@@ -221,9 +221,9 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
     return this.withErrorHandling('getCurrentPositions', async () => {
       const flexPositions = await this.fetchFlexData(xml => this.flexService.parsePositions(xml));
       return flexPositions.map(pos => {
-        const side = pos.position > 0 ? 'long' : 'short';
+        const side: 'long' | 'short' = pos.position > 0 ? 'long' : 'short';
         return {
-          symbol: pos.symbol, side: side as 'long' | 'short', size: Math.abs(pos.position),
+          symbol: pos.symbol, side, size: Math.abs(pos.position),
           entryPrice: pos.costBasisPrice, markPrice: pos.markPrice,
           unrealizedPnl: pos.fifoPnlUnrealized, realizedPnl: 0, leverage: 1,
         };

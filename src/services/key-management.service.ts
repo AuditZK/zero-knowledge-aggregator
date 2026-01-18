@@ -14,8 +14,8 @@ export class KeyManagementService {
   private cachedDEK: Buffer | null = null;
 
   constructor(
-    @inject(KeyDerivationService) private keyDerivation: KeyDerivationService,
-    @inject(DEKRepository) private dekRepo: DEKRepository
+    @inject(KeyDerivationService) private readonly keyDerivation: KeyDerivationService,
+    @inject(DEKRepository) private readonly dekRepo: DEKRepository
   ) { }
 
   /** Returns current DEK, initializing or unwrapping as needed. */

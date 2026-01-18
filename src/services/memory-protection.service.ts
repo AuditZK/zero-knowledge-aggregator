@@ -1,8 +1,8 @@
 import { getLogger, extractErrorMessage } from '../utils/secure-enclave-logger';
-import * as fs from 'fs';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import crypto from 'crypto';
+import * as fs from 'node:fs';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
+import crypto from 'node:crypto';
 
 const logger = getLogger('MemoryProtection');
 const execAsync = promisify(exec);
@@ -69,7 +69,8 @@ export class MemoryProtectionService {
     try {
       if (process.platform === 'linux' && fs.existsSync('/proc/self/status')) {
         const status = fs.readFileSync('/proc/self/status', 'utf8');
-        if (status.match(/VmLck:\s+(\d+)/)) {
+        const mlockPattern = /VmLck:\s+(\d+)/;
+        if (mlockPattern.exec(status)) {
           this.mlockSupported = true;
           logger.info('mlock available');
         } else {
@@ -142,8 +143,10 @@ export class MemoryProtectionService {
     if (!this.ptraceProtected) {recs.push('Set kernel.yama.ptrace_scope=2');}
     if (!this.mlockSupported) {recs.push('Add CAP_IPC_LOCK or systemd LockPersonality=yes');}
     if (process.platform === 'linux') {
-      recs.push('Run in AMD SEV-SNP VM for hardware memory encryption');
-      recs.push('Enable ASLR and seccomp');
+      recs.push(
+        'Run in AMD SEV-SNP VM for hardware memory encryption',
+        'Enable ASLR and seccomp'
+      );
     }
     return recs;
   }

@@ -54,12 +54,12 @@ done
 
 echo -e "${GREEN}[1/4] Generating encryption key...${NC}"
 
-if [ -f .env ]; then
+if [[ -f .env ]]; then
   # Check if ENCRYPTION_KEY already exists and is not the example key
   EXISTING_KEY=$(grep -E '^ENCRYPTION_KEY=' .env | cut -d '=' -f 2- | tr -d '"' || echo "")
   EXAMPLE_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-  if [ -n "$EXISTING_KEY" ] && [ "$EXISTING_KEY" != "$EXAMPLE_KEY" ]; then
+  if [[ -n "$EXISTING_KEY" && "$EXISTING_KEY" != "$EXAMPLE_KEY" ]]; then
     echo -e "${YELLOW}  ⚠ ENCRYPTION_KEY already exists in .env${NC}"
     echo -e "${YELLOW}  ⚠ Changing this key will make existing encrypted data unrecoverable${NC}"
     read -p "  Do you want to regenerate it? (y/N) " -n 1 -r
@@ -87,10 +87,14 @@ fi
 # 2. Generate JWT Secret
 #############################################################################
 
-echo -e "${GREEN}[2/4] Generating JWT secret...${NC}"
+echo -e "${GREEN}[2/4] Generating JWT secret and database password...${NC}"
 
 JWT_SECRET=$(openssl rand -hex 32)
 echo -e "${GREEN}  ✓ Generated JWT_SECRET${NC}"
+
+# Generate secure database password (base64 for compatibility with connection strings)
+DB_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=')
+echo -e "${GREEN}  ✓ Generated DB_PASSWORD${NC}"
 
 #############################################################################
 # 3. Generate TLS Certificates
@@ -99,13 +103,13 @@ echo -e "${GREEN}  ✓ Generated JWT_SECRET${NC}"
 echo -e "${GREEN}[3/4] Generating TLS certificates...${NC}"
 
 TLS_DIR="/etc/enclave"
-if [ "$ENVIRONMENT" = "development" ]; then
+if [[ "$ENVIRONMENT" == "development" ]]; then
   TLS_DIR="./certs"
 fi
 
 mkdir -p "$TLS_DIR"
 
-if [ "$ENVIRONMENT" = "production" ]; then
+if [[ "$ENVIRONMENT" == "production" ]]; then
   echo -e "${YELLOW}  ⚠ PRODUCTION mode${NC}"
   echo -e "${YELLOW}  ⚠ You should use certificates from a trusted CA${NC}"
   echo -e "${YELLOW}  ⚠ Self-signed certificates are NOT recommended for production${NC}"
@@ -122,9 +126,9 @@ if [ "$ENVIRONMENT" = "production" ]; then
   fi
 fi
 
-if [ "${SKIP_TLS:-false}" != "true" ]; then
+if [[ "${SKIP_TLS:-false}" != "true" ]]; then
   # Generate CA certificate (self-signed root)
-  if [ ! -f "$TLS_DIR/ca.crt" ]; then
+  if [[ ! -f "$TLS_DIR/ca.crt" ]]; then
     openssl req -x509 -newkey rsa:4096 \
       -keyout "$TLS_DIR/ca.key" \
       -out "$TLS_DIR/ca.crt" \
@@ -138,7 +142,7 @@ if [ "${SKIP_TLS:-false}" != "true" ]; then
   fi
 
   # Generate server certificate signed by CA
-  if [ ! -f "$TLS_DIR/server.crt" ]; then
+  if [[ ! -f "$TLS_DIR/server.crt" ]]; then
     # Generate server private key
     openssl genrsa -out "$TLS_DIR/server.key" 4096 2>/dev/null
 
@@ -182,7 +186,7 @@ fi
 echo -e "${GREEN}[4/4] Creating .env configuration...${NC}"
 
 # Backup existing .env if it exists
-if [ -f .env ]; then
+if [[ -f .env ]]; then
   cp .env .env.backup.$(date +%Y%m%d_%H%M%S)
   echo -e "${YELLOW}  ⚠ Backed up existing .env${NC}"
 fi
@@ -206,8 +210,8 @@ ENCLAVE_PORT=50051
 # -----------------------------------------------------------------------------
 # DATABASE (Enclave User - Full Access)
 # -----------------------------------------------------------------------------
-DATABASE_URL="postgresql://enclave_user:enclavepass123@localhost:5434/aggregator_db"
-POSTGRES_PASSWORD="enclavepass123"
+DATABASE_URL="postgresql://enclave_user:${DB_PASSWORD}@localhost:5434/aggregator_db"
+POSTGRES_PASSWORD="${DB_PASSWORD}"
 
 # -----------------------------------------------------------------------------
 # SECURITY (CRITICAL - AUTO-GENERATED)
@@ -251,10 +255,10 @@ echo -e "${GREEN}✓ Enclave initialized successfully${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 echo -e "${YELLOW}SECURITY CHECKLIST:${NC}"
-echo -e "  [$([ -f .env ] && echo '✓' || echo '✗')] .env file created"
-echo -e "  [$([ -n "${ENCRYPTION_KEY}" ] && [ "${ENCRYPTION_KEY}" != "${EXAMPLE_KEY:-}" ] && echo '✓' || echo '✗')] Strong ENCRYPTION_KEY generated"
-echo -e "  [$([ -f "${TLS_DIR}/ca.crt" ] && echo '✓' || echo '✗')] TLS certificates present"
-echo -e "  [$([ $(stat -c %a .env 2>/dev/null || stat -f %A .env 2>/dev/null) = "600" ] && echo '✓' || echo '?')] .env permissions secured"
+echo -e "  [$([[ -f .env ]] && echo '✓' || echo '✗')] .env file created"
+echo -e "  [$([[ -n "${ENCRYPTION_KEY}" && "${ENCRYPTION_KEY}" != "${EXAMPLE_KEY:-}" ]] && echo '✓' || echo '✗')] Strong ENCRYPTION_KEY generated"
+echo -e "  [$([[ -f "${TLS_DIR}/ca.crt" ]] && echo '✓' || echo '✗')] TLS certificates present"
+echo -e "  [$([[ $(stat -c %a .env 2>/dev/null || stat -f %A .env 2>/dev/null) == "600" ]] && echo '✓' || echo '?')] .env permissions secured"
 echo ""
 echo -e "${YELLOW}NEXT STEPS:${NC}"
 echo -e "  1. Review .env configuration"
