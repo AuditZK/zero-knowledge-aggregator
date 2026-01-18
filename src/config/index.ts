@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { ServerConfig, DatabaseConfig } from '../types';
 import { getLogger } from '../utils/secure-enclave-logger';
 
@@ -23,11 +23,20 @@ function loadFromGcpMetadata(key: string): string | undefined {
   }
 
   try {
-    const result = execSync(
-      `curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/attributes/${key}`,
-      { encoding: 'utf-8', timeout: 5000 }
-    );
-    return result.trim() || undefined;
+    // SECURITY: Use absolute path to prevent PATH manipulation attacks
+    const result = spawnSync('/usr/bin/curl', [
+      '-sf',
+      '-H', 'Metadata-Flavor: Google',
+      `http://metadata.google.internal/computeMetadata/v1/instance/attributes/${key}`
+    ], { encoding: 'utf-8', timeout: 5000 });
+
+    if (result.error) {
+      throw result.error;
+    }
+    if (result.status !== 0) {
+      return undefined;
+    }
+    return result.stdout.trim() || undefined;
   } catch (error) {
     // Metadata not available (not on GCP or key doesn't exist)
     logger.debug(`GCP metadata key '${key}' not found or not on GCP`, { error });
