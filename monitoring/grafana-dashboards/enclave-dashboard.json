@@ -398,14 +398,14 @@
             "spanNulls": true
           },
           "mappings": [],
-          "max": 20,
+          "max": 10,
           "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               { "color": "green", "value": null },
-              { "color": "yellow", "value": 10 },
-              { "color": "red", "value": 15 }
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 8 }
             ]
           },
           "unit": "percent"
