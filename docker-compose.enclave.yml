@@ -7,6 +7,8 @@ services:
   # Enclave Service (gRPC + AMD SEV-SNP)
   # ==========================================
   enclave-service:
+    networks:
+      - enclave-network
     build:
       context: .
       dockerfile: Dockerfile
@@ -24,13 +26,15 @@ services:
       SKIP_ATTESTATION: ${SKIP_ATTESTATION:-false}
       ENABLE_ENCLAVE_LOG_STREAMING: "true"
       LOG_SERVER_API_KEY: ${LOG_SERVER_API_KEY:-}
-      # VPS benchmark service URL
-      BENCHMARK_SERVICE_URL: http://87.106.4.85
+      # VPS benchmark service URL (set via environment)
+      BENCHMARK_SERVICE_URL: ${BENCHMARK_SERVICE_URL:-}
     ports:
       - "50051:50051"  # gRPC Server
       - "50052:50052"  # HTTP Log Server (SSE)
       - "3050:3050"    # REST API (Auditable credential submission)
-      - "9092:9092"    # Prometheus Metrics
+      # SECURITY: Metrics NOT exposed externally - only via enclave-network
+    expose:
+      - "9092"  # Prometheus scrapes internally via Docker network
     volumes:
       - ./certs:/etc/enclave:ro
     devices:
@@ -42,6 +46,77 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # ==========================================
+  # Prometheus (Metrics Collection)
+  # ==========================================
+  # SECURITY: Internal only - not exposed to internet
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: prometheus
+    restart: unless-stopped
+    networks:
+      - enclave-network
+    # NO external port exposure - only accessible via enclave-network
+    # Access via: docker exec -it prometheus wget -qO- http://localhost:9090/api/v1/targets
+    expose:
+      - "9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--web.listen-address=0.0.0.0:9090'
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ==========================================
+  # Grafana (Dashboards & Visualization)
+  # ==========================================
+  # SECURITY: Bind to localhost only - use SSH tunnel or reverse proxy for access
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    restart: unless-stopped
+    networks:
+      - enclave-network
+    ports:
+      - "127.0.0.1:3000:3000"  # Localhost only - requires SSH tunnel
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      # REQUIRED: No default password - must be set explicitly
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:?GRAFANA_PASSWORD is required}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_SECURITY_DISABLE_GRAVATAR=true
+      - GF_SECURITY_COOKIE_SECURE=true
+      - GF_SECURITY_STRICT_TRANSPORT_SECURITY=true
+    volumes:
+      - ./monitoring/grafana-provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana-dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  enclave-network:
+    driver: bridge
+
+volumes:
+  prometheus_data:
+  grafana_data:
 
 # ==========================================
 # ARCHITECTURE
