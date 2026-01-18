@@ -1,4 +1,6 @@
 import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getLogger, extractErrorMessage } from '../utils/secure-enclave-logger';
@@ -34,8 +36,10 @@ interface SevSnpReport {
 
 export class SevSnpAttestationService {
   private readonly SEV_GUEST_DEVICE = '/dev/sev-guest';
-  private readonly AZURE_IMDS_ENDPOINT = 'http://169.254.169.254/metadata/attested/document';
-  private readonly GCP_METADATA_ENDPOINT = 'http://metadata.google.internal/computeMetadata/v1/instance/confidential-computing/attestation-report';
+  // NOSONAR: Azure IMDS only supports HTTP - link-local address (169.254.x.x) is VM-internal only
+  private readonly AZURE_IMDS_ENDPOINT = 'http://169.254.169.254/metadata/attested/document'; // NOSONAR
+  // NOSONAR: GCP Metadata Server only supports HTTP - internal DNS is VM-internal only
+  private readonly GCP_METADATA_ENDPOINT = 'http://metadata.google.internal/computeMetadata/v1/instance/confidential-computing/attestation-report'; // NOSONAR
 
   private tlsFingerprint: Buffer | null = null;
 
@@ -151,13 +155,14 @@ export class SevSnpAttestationService {
   }
 
   private async getSnpguestAttestation(): Promise<SevSnpReport> {
-    const tmpDir = '/tmp/snp-attestation';
-    const reportPath = `${tmpDir}/report.bin`;
-    const requestPath = `${tmpDir}/request.bin`;
-    const certsDir = `${tmpDir}/certs`;
+    // SECURITY: Use mkdtempSync to create unique directory with unpredictable name
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'snp-attestation-'));
+    const reportPath = path.join(tmpDir, 'report.bin');
+    const requestPath = path.join(tmpDir, 'request.bin');
+    const certsDir = path.join(tmpDir, 'certs');
 
-    // Create temp directory
-    await execAsync(`mkdir -p ${tmpDir} ${certsDir}`);
+    // Create certs subdirectory
+    fs.mkdirSync(certsDir, { mode: 0o700 });
 
     try {
       // Generate attestation report with TLS fingerprint as request data (for TLS binding)
@@ -214,7 +219,7 @@ export class SevSnpAttestationService {
     } finally {
       // Cleanup temp files
       try {
-        await execAsync(`rm -rf ${tmpDir}`);
+        fs.rmSync(tmpDir, { recursive: true, force: true });
       } catch {
         // Ignore cleanup errors
       }
@@ -342,7 +347,8 @@ export class SevSnpAttestationService {
 
   private async isAzure(): Promise<boolean> {
     try {
-      const response = await fetch('http://169.254.169.254/metadata/instance?api-version=2021-02-01', {
+      // NOSONAR: Azure IMDS only supports HTTP - link-local address is VM-internal only
+      const response = await fetch('http://169.254.169.254/metadata/instance?api-version=2021-02-01', { // NOSONAR
         headers: { 'Metadata': 'true' },
         signal: AbortSignal.timeout(2000)
       });
@@ -356,7 +362,8 @@ export class SevSnpAttestationService {
 
   private async isGcp(): Promise<boolean> {
     try {
-      const response = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/attributes/', {
+      // NOSONAR: GCP Metadata Server only supports HTTP - internal DNS is VM-internal only
+      const response = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/attributes/', { // NOSONAR
         headers: { 'Metadata-Flavor': 'Google' },
         signal: AbortSignal.timeout(2000)
       });
