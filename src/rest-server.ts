@@ -9,6 +9,7 @@ import { getLogger, extractErrorMessage } from './utils/secure-enclave-logger';
 import { TlsKeyGeneratorService } from './services/tls-key-generator.service';
 import { SevSnpAttestationService } from './services/sev-snp-attestation.service';
 import { E2EEncryptionService } from './services/e2e-encryption.service';
+import { metricsService } from './services/metrics.service';
 
 const logger = getLogger('REST-Server');
 const app = express();
@@ -95,6 +96,13 @@ app.get('/api/v1/attestation', async (_req, res) => {
     const e2ePublicKey = e2eService.getPublicKey();
     const e2ePublicKeyFingerprint = e2eService.getPublicKeyFingerprint();
 
+    // Update Prometheus metrics
+    if (attestation.verified) {
+      metricsService.incrementCounter('enclave_attestation_success_total');
+    } else {
+      metricsService.incrementCounter('enclave_attestation_failure_total');
+    }
+
     return res.json({
       attestation: {
         verified: attestation.verified,
@@ -125,6 +133,7 @@ app.get('/api/v1/attestation', async (_req, res) => {
       }
     });
   } catch (error: unknown) {
+    metricsService.incrementCounter('enclave_attestation_failure_total');
     logger.error('[REST] Attestation request failed:', error);
     return res.status(500).json({ error: extractErrorMessage(error) });
   }
