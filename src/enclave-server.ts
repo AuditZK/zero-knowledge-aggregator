@@ -640,9 +640,16 @@ export class EnclaveServer {
         report_id: financialData.reportId,
         user_uid: financialData.userUid,
         report_name: signedReport.displayParams.reportName || 'Track Record Report',
-        generated_at: financialData.generatedAt.toISOString(),
-        period_start: financialData.periodStart.toISOString(),
-        period_end: financialData.periodEnd.toISOString(),
+        // Handle both Date objects (new reports) and strings (cached reports from JSON)
+        generated_at: financialData.generatedAt instanceof Date
+          ? financialData.generatedAt.toISOString()
+          : String(financialData.generatedAt),
+        period_start: financialData.periodStart instanceof Date
+          ? financialData.periodStart.toISOString()
+          : String(financialData.periodStart),
+        period_end: financialData.periodEnd instanceof Date
+          ? financialData.periodEnd.toISOString()
+          : String(financialData.periodEnd),
         base_currency: financialData.baseCurrency,
         benchmark: financialData.benchmark || '',
         data_points: financialData.dataPoints,
