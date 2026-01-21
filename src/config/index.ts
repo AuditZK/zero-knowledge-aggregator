@@ -79,6 +79,7 @@ const DATABASE_URL = getEnvVar('database-url', 'DATABASE_URL') || process.env.DA
 const JWT_SECRET = getEnvVar('jwt-secret', 'JWT_SECRET') || process.env.JWT_SECRET;
 const _ENCRYPTION_KEY = getEnvVar('encryption-key', 'ENCRYPTION_KEY') || process.env.ENCRYPTION_KEY;
 const LOG_LEVEL = getEnvVar('log-level', 'LOG_LEVEL') || process.env.LOG_LEVEL;
+const BENCHMARK_SERVICE_URL = getEnvVar('benchmark-service-url', 'BENCHMARK_SERVICE_URL') || process.env.BENCHMARK_SERVICE_URL;
 
 // CRITICAL: All required environment variables for production
 const requiredEnvVars: Record<string, string | undefined> = {
@@ -138,6 +139,9 @@ export const databaseConfig: DatabaseConfig = {
 
 // Export encryption key for EncryptionService
 export const ENCRYPTION_KEY = _ENCRYPTION_KEY!;
+
+// Export benchmark service URL for report generation
+export const benchmarkServiceUrl = BENCHMARK_SERVICE_URL || 'http://localhost:8080';
 
 export const isDevelopment = serverConfig.nodeEnv === 'development';
 export const isProduction = serverConfig.nodeEnv === 'production';
