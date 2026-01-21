@@ -4,6 +4,7 @@ import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repos
 import { SignedReportRepository } from '../core/repositories/signed-report-repository';
 import { ReportSigningService } from './report-signing.service';
 import { getLogger } from '../utils/secure-enclave-logger';
+import { benchmarkServiceUrl } from '../config';
 import {
   ReportRequest,
   SignedFinancialData,
@@ -781,7 +782,6 @@ export class ReportGeneratorService {
     endDate: string
   ): Promise<Array<{ date: string; return: number }>> {
     try {
-      const benchmarkServiceUrl = process.env.BENCHMARK_SERVICE_URL || 'http://localhost:8080';
       const backendSymbol = symbol === 'BTC-USD' ? 'BTCUSDT' : symbol;
 
       const url = `${benchmarkServiceUrl}/api/v1/benchmarks/${backendSymbol}/daily?startDate=${startDate}&endDate=${endDate}`;
