@@ -1,0 +1,352 @@
+package connector
+
+import (
+	"context"
+	"encoding/xml"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	ibkrFlexURL    = "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest"
+	ibkrFlexGetURL = "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.GetStatement"
+)
+
+// IBKR implements Connector for Interactive Brokers via Flex Query
+type IBKR struct {
+	token   string // Flex Web Service Token
+	queryID string // Flex Query ID
+	client  *http.Client
+}
+
+// NewIBKR creates a new IBKR connector
+func NewIBKR(creds *Credentials) *IBKR {
+	return &IBKR{
+		token:   creds.APIKey,
+		queryID: creds.APISecret,
+		client:  &http.Client{Timeout: 120 * time.Second}, // Flex can be slow
+	}
+}
+
+func (i *IBKR) Exchange() string {
+	return "ibkr"
+}
+
+func (i *IBKR) TestConnection(ctx context.Context) error {
+	_, err := i.requestFlexReport(ctx)
+	return err
+}
+
+func (i *IBKR) requestFlexReport(ctx context.Context) (string, error) {
+	url := fmt.Sprintf("%s?t=%s&q=%s&v=3", ibkrFlexURL, i.token, i.queryID)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := i.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	// Parse XML response
+	var result struct {
+		XMLName       xml.Name `xml:"FlexStatementResponse"`
+		Status        string   `xml:"Status"`
+		ReferenceCode string   `xml:"ReferenceCode"`
+		ErrorCode     string   `xml:"ErrorCode"`
+		ErrorMessage  string   `xml:"ErrorMessage"`
+	}
+
+	if err := xml.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("parse flex response: %w", err)
+	}
+
+	if result.Status != "Success" {
+		return "", fmt.Errorf("flex request failed: %s - %s", result.ErrorCode, result.ErrorMessage)
+	}
+
+	return result.ReferenceCode, nil
+}
+
+func (i *IBKR) getFlexReport(ctx context.Context, refCode string) ([]byte, error) {
+	url := fmt.Sprintf("%s?t=%s&q=%s&v=3", ibkrFlexGetURL, i.token, refCode)
+
+	// Poll with retries (Flex reports can take time to generate)
+	for attempt := 0; attempt < 10; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		resp, err := i.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+
+		// Check if still processing
+		if strings.Contains(string(body), "Statement generation in progress") {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		return body, nil
+	}
+
+	return nil, fmt.Errorf("flex report timeout after 10 attempts")
+}
+
+func (i *IBKR) GetBalance(ctx context.Context) (*Balance, error) {
+	refCode, err := i.requestFlexReport(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	report, err := i.getFlexReport(ctx, refCode)
+	if err != nil {
+		return nil, err
+	}
+
+	return i.parseBalanceFromReport(report)
+}
+
+func (i *IBKR) parseBalanceFromReport(report []byte) (*Balance, error) {
+	var flex struct {
+		XMLName        xml.Name `xml:"FlexQueryResponse"`
+		FlexStatements struct {
+			FlexStatement struct {
+				EquitySummaryInBase struct {
+					EquitySummaryByReportDateInBase []struct {
+						Total         string `xml:"total,attr"`
+						Cash          string `xml:"cash,attr"`
+						Stock         string `xml:"stock,attr"`
+						Commodities   string `xml:"commodities,attr"`
+						UnrealizedPnL string `xml:"unrealizedPnL,attr"`
+					} `xml:"EquitySummaryByReportDateInBase"`
+				} `xml:"EquitySummaryInBase"`
+			} `xml:"FlexStatement"`
+		} `xml:"FlexStatements"`
+	}
+
+	if err := xml.Unmarshal(report, &flex); err != nil {
+		return nil, fmt.Errorf("parse flex report: %w", err)
+	}
+
+	summaries := flex.FlexStatements.FlexStatement.EquitySummaryInBase.EquitySummaryByReportDateInBase
+	if len(summaries) == 0 {
+		return &Balance{Currency: "USD"}, nil
+	}
+
+	summary := summaries[len(summaries)-1] // Latest
+	total, _ := strconv.ParseFloat(summary.Total, 64)
+	cash, _ := strconv.ParseFloat(summary.Cash, 64)
+	unrealized, _ := strconv.ParseFloat(summary.UnrealizedPnL, 64)
+
+	return &Balance{
+		Available:     cash,
+		Equity:        total,
+		UnrealizedPnL: unrealized,
+		Currency:      "USD",
+	}, nil
+}
+
+func (i *IBKR) GetPositions(ctx context.Context) ([]*Position, error) {
+	refCode, err := i.requestFlexReport(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	report, err := i.getFlexReport(ctx, refCode)
+	if err != nil {
+		return nil, err
+	}
+
+	return i.parsePositionsFromReport(report)
+}
+
+func (i *IBKR) parsePositionsFromReport(report []byte) ([]*Position, error) {
+	var flex struct {
+		XMLName        xml.Name `xml:"FlexQueryResponse"`
+		FlexStatements struct {
+			FlexStatement struct {
+				OpenPositions struct {
+					OpenPosition []struct {
+						Symbol           string `xml:"symbol,attr"`
+						Position         string `xml:"position,attr"`
+						MarkPrice        string `xml:"markPrice,attr"`
+						CostBasisMoney   string `xml:"costBasisMoney,attr"`
+						FifoPnlUnrealized string `xml:"fifoPnlUnrealized,attr"`
+						AssetCategory    string `xml:"assetCategory,attr"`
+					} `xml:"OpenPosition"`
+				} `xml:"OpenPositions"`
+			} `xml:"FlexStatement"`
+		} `xml:"FlexStatements"`
+	}
+
+	if err := xml.Unmarshal(report, &flex); err != nil {
+		return nil, fmt.Errorf("parse flex positions: %w", err)
+	}
+
+	var positions []*Position
+	for _, p := range flex.FlexStatements.FlexStatement.OpenPositions.OpenPosition {
+		size, _ := strconv.ParseFloat(p.Position, 64)
+		if size == 0 {
+			continue
+		}
+
+		mark, _ := strconv.ParseFloat(p.MarkPrice, 64)
+		costBasis, _ := strconv.ParseFloat(p.CostBasisMoney, 64)
+		unrealized, _ := strconv.ParseFloat(p.FifoPnlUnrealized, 64)
+
+		side := "long"
+		if size < 0 {
+			side = "short"
+			size = -size
+		}
+
+		entryPrice := 0.0
+		if size > 0 {
+			entryPrice = costBasis / size
+		}
+
+		marketType := "stocks"
+		switch p.AssetCategory {
+		case "FUT":
+			marketType = "futures"
+		case "OPT":
+			marketType = "options"
+		case "CFD":
+			marketType = "cfd"
+		case "CASH":
+			marketType = "forex"
+		}
+
+		positions = append(positions, &Position{
+			Symbol:        p.Symbol,
+			Side:          side,
+			Size:          size,
+			EntryPrice:    entryPrice,
+			MarkPrice:     mark,
+			UnrealizedPnL: unrealized,
+			MarketType:    marketType,
+		})
+	}
+
+	return positions, nil
+}
+
+func (i *IBKR) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade, error) {
+	refCode, err := i.requestFlexReport(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	report, err := i.getFlexReport(ctx, refCode)
+	if err != nil {
+		return nil, err
+	}
+
+	return i.parseTradesFromReport(report, start, end)
+}
+
+func (i *IBKR) parseTradesFromReport(report []byte, start, end time.Time) ([]*Trade, error) {
+	var flex struct {
+		XMLName        xml.Name `xml:"FlexQueryResponse"`
+		FlexStatements struct {
+			FlexStatement struct {
+				Trades struct {
+					Trade []struct {
+						TradeID       string `xml:"tradeID,attr"`
+						Symbol        string `xml:"symbol,attr"`
+						BuySell       string `xml:"buySell,attr"`
+						TradePrice    string `xml:"tradePrice,attr"`
+						Quantity      string `xml:"quantity,attr"`
+						IbCommission  string `xml:"ibCommission,attr"`
+						Currency      string `xml:"currency,attr"`
+						DateTime      string `xml:"dateTime,attr"`
+						AssetCategory string `xml:"assetCategory,attr"`
+						FifoPnlRealized string `xml:"fifoPnlRealized,attr"`
+					} `xml:"Trade"`
+				} `xml:"Trades"`
+			} `xml:"FlexStatement"`
+		} `xml:"FlexStatements"`
+	}
+
+	if err := xml.Unmarshal(report, &flex); err != nil {
+		return nil, fmt.Errorf("parse flex trades: %w", err)
+	}
+
+	var trades []*Trade
+	for _, t := range flex.FlexStatements.FlexStatement.Trades.Trade {
+		// Parse datetime (format: YYYYMMDD;HHMMSS)
+		ts, err := time.Parse("20060102;150405", t.DateTime)
+		if err != nil {
+			continue
+		}
+
+		// Filter by date range
+		if ts.Before(start) || ts.After(end) {
+			continue
+		}
+
+		price, _ := strconv.ParseFloat(t.TradePrice, 64)
+		qty, _ := strconv.ParseFloat(t.Quantity, 64)
+		if qty < 0 {
+			qty = -qty
+		}
+		fee, _ := strconv.ParseFloat(t.IbCommission, 64)
+		if fee < 0 {
+			fee = -fee
+		}
+		pnl, _ := strconv.ParseFloat(t.FifoPnlRealized, 64)
+
+		side := "buy"
+		if t.BuySell == "SELL" {
+			side = "sell"
+		}
+
+		marketType := "stocks"
+		switch t.AssetCategory {
+		case "FUT":
+			marketType = "futures"
+		case "OPT":
+			marketType = "options"
+		case "CFD":
+			marketType = "cfd"
+		case "CASH":
+			marketType = "forex"
+		}
+
+		trades = append(trades, &Trade{
+			ID:          t.TradeID,
+			Symbol:      t.Symbol,
+			Side:        side,
+			Price:       price,
+			Quantity:    qty,
+			Fee:         fee,
+			FeeCurrency: t.Currency,
+			RealizedPnL: pnl,
+			Timestamp:   ts,
+			MarketType:  marketType,
+		})
+	}
+
+	return trades, nil
+}

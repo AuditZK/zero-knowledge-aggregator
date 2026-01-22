@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  enclave:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: enclave_service
+    ports:
+      - "8080:8080"
+      - "50051:50051"
+    environment:
+      - ENV=production
+      - PORT=8080
+      - GRPC_PORT=50051
+      - DATABASE_URL=${DATABASE_URL}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    # SEV-SNP device access (AMD confidential computing)
+    devices:
+      - /dev/sev-guest:/dev/sev-guest
+    # Security settings
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    networks:
+      - enclave-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+networks:
+  enclave-network:
+    driver: bridge

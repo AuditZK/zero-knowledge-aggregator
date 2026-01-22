@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  enclave:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: enclave_service
+    ports:
+      - "8080:8080"
+      - "50051:50051"
+    environment:
+      - ENV=production
+      - PORT=8080
+      - GRPC_PORT=50051
+      - DATABASE_URL=postgres://enclave:enclave@db:5432/enclave?sslmode=disable
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - enclave-network
+
+  db:
+    image: postgres:16-alpine
+    container_name: enclave_db
+    environment:
+      POSTGRES_USER: enclave
+      POSTGRES_PASSWORD: enclave
+      POSTGRES_DB: enclave
+    ports:
+      - "5436:5432"
+    volumes:
+      - enclave-db-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U enclave -d enclave"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - enclave-network
+
+volumes:
+  enclave-db-data:
+
+networks:
+  enclave-network:
+    driver: bridge

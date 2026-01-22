@@ -1,0 +1,189 @@
+syntax = "proto3";
+
+package enclave;
+
+option go_package = "github.com/trackrecord/enclave/api/proto";
+
+service EnclaveService {
+  rpc ProcessSyncJob(SyncJobRequest) returns (SyncJobResponse);
+  rpc GetAggregatedMetrics(AggregatedMetricsRequest) returns (AggregatedMetricsResponse);
+  rpc GetSnapshotTimeSeries(SnapshotTimeSeriesRequest) returns (SnapshotTimeSeriesResponse);
+  rpc CreateUserConnection(CreateUserConnectionRequest) returns (CreateUserConnectionResponse);
+  rpc GetPerformanceMetrics(PerformanceMetricsRequest) returns (PerformanceMetricsResponse);
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  rpc GenerateSignedReport(ReportRequest) returns (SignedReportResponse);
+  rpc VerifyReportSignature(VerifySignatureRequest) returns (VerifySignatureResponse);
+}
+
+message SyncJobRequest {
+  string user_uid = 1;
+  string exchange = 2;
+}
+
+message SyncJobResponse {
+  bool success = 1;
+  string user_uid = 2;
+  string exchange = 3;
+  int32 synced = 4;
+  int32 snapshots_generated = 5;
+  Snapshot latest_snapshot = 6;
+  string error = 7;
+}
+
+message Snapshot {
+  double balance = 1;
+  double equity = 2;
+  int64 timestamp = 3;
+}
+
+message AggregatedMetricsRequest {
+  string user_uid = 1;
+  string exchange = 2;
+}
+
+message AggregatedMetricsResponse {
+  double total_balance = 1;
+  double total_equity = 2;
+  double total_realized_pnl = 3;
+  double total_unrealized_pnl = 4;
+  double total_fees = 5;
+  int32 total_trades = 6;
+  int64 last_sync = 7;
+}
+
+message SnapshotTimeSeriesRequest {
+  string user_uid = 1;
+  string exchange = 2;
+  int64 start_date = 3;
+  int64 end_date = 4;
+}
+
+message SnapshotTimeSeriesResponse {
+  repeated DailySnapshot snapshots = 1;
+}
+
+message DailySnapshot {
+  string user_uid = 1;
+  string exchange = 2;
+  int64 timestamp = 3;
+  double total_equity = 4;
+  double realized_balance = 5;
+  double unrealized_pnl = 6;
+  double deposits = 7;
+  double withdrawals = 8;
+  MarketBreakdown breakdown = 9;
+}
+
+message MarketBreakdown {
+  MarketMetrics global = 1;
+  MarketMetrics spot = 2;
+  MarketMetrics swap = 3;
+  MarketMetrics options = 4;
+  MarketMetrics stocks = 5;
+  MarketMetrics futures = 6;
+  MarketMetrics cfd = 7;
+  MarketMetrics forex = 8;
+  MarketMetrics commodities = 9;
+}
+
+message MarketMetrics {
+  double equity = 1;
+  double available_margin = 2;
+  double volume = 3;
+  int32 trades = 4;
+  double trading_fees = 5;
+  double funding_fees = 6;
+}
+
+message CreateUserConnectionRequest {
+  string user_uid = 1;
+  string exchange = 2;
+  string label = 3;
+  string api_key = 4;
+  string api_secret = 5;
+  string passphrase = 6;
+}
+
+message CreateUserConnectionResponse {
+  bool success = 1;
+  string user_uid = 2;
+  string error = 3;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;
+  string version = 2;
+  int64 timestamp = 3;
+  int64 uptime_seconds = 4;
+  bool database = 5;
+}
+
+message PerformanceMetricsRequest {
+  string user_uid = 1;
+  string exchange = 2;
+  int64 start_date = 3;
+  int64 end_date = 4;
+}
+
+message PerformanceMetricsResponse {
+  double sharpe_ratio = 1;
+  double sortino_ratio = 2;
+  double calmar_ratio = 3;
+  double volatility = 4;
+  double downside_deviation = 5;
+  double max_drawdown = 6;
+  int32 max_drawdown_duration = 7;
+  double current_drawdown = 8;
+  double win_rate = 9;
+  double profit_factor = 10;
+  double avg_win = 11;
+  double avg_loss = 12;
+  int64 period_start = 13;
+  int64 period_end = 14;
+  int32 data_points = 15;
+  bool success = 16;
+  string error = 17;
+}
+
+message ReportRequest {
+  string user_uid = 1;
+  string start_date = 2;
+  string end_date = 3;
+  string benchmark = 4;
+  bool include_risk_metrics = 5;
+  bool include_drawdown = 6;
+  string report_name = 7;
+  string base_currency = 8;
+}
+
+message SignedReportResponse {
+  bool success = 1;
+  string error = 2;
+  string report_id = 10;
+  string user_uid = 11;
+  string report_name = 12;
+  string generated_at = 13;
+  string period_start = 14;
+  string period_end = 15;
+  double total_return = 20;
+  double sharpe_ratio = 23;
+  double max_drawdown = 25;
+  string signature = 70;
+  string public_key = 71;
+  string signature_algorithm = 72;
+  string report_hash = 73;
+  string enclave_version = 80;
+}
+
+message VerifySignatureRequest {
+  string report_hash = 1;
+  string signature = 2;
+  string public_key = 3;
+}
+
+message VerifySignatureResponse {
+  bool valid = 1;
+  string error = 2;
+}
