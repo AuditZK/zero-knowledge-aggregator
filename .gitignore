@@ -76,6 +76,13 @@ scripts/audit-project.py
 scripts/test-mexc-balance.py
 scripts\test\test-mexc-balance.py
 
+# Temporary test scripts (root level)
+ss.py
+test_*.py
+test-*.py
+test_*.ts
+test-*.ts
+
 # Wiki (managed in separate .wiki repository)
 wiki/
 
