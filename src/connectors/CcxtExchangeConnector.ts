@@ -12,7 +12,6 @@ import {
   ExecutedOrderData,
   FundingFeeData,
   MarketType,
-  isUnifiedAccountExchange,
   getFilteredMarketTypes,
 } from '../types/snapshot-breakdown';
 
@@ -201,10 +200,12 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
 
   async getBalanceByMarket(marketType: MarketType): Promise<MarketBalanceData> {
     return this.withErrorHandling('getBalanceByMarket', async () => {
-      if (isUnifiedAccountExchange(this.exchangeName)) {
-        return this.getBalanceForUnifiedAccount(marketType);
+      // For spot markets, calculate USD value of all assets (including altcoins)
+      if (marketType === 'spot') {
+        return this.getSpotBalanceWithUsdConversion();
       }
 
+      // For derivatives (swap/future), just get stablecoin balance
       this.exchange.options['defaultType'] = marketType;
       const balance = await this.exchange.fetchBalance();
       const usdtBalance = balance['USDT'] || balance['USD'] || balance['USDC'];
@@ -215,41 +216,96 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
     });
   }
 
-  private async getBalanceForUnifiedAccount(marketType: MarketType): Promise<MarketBalanceData> {
-    if (marketType === 'spot') {
-      this.exchange.options['defaultType'] = 'spot';
-      const balance = await this.exchange.fetchBalance({ type: 'spot' });
+  /**
+   * Get spot balance with USD conversion for all assets (stablecoins + altcoins)
+   * Uses fetchTickers() to get all prices in a single API call
+   */
+  private async getSpotBalanceWithUsdConversion(): Promise<MarketBalanceData> {
+    this.exchange.options['defaultType'] = 'spot';
+    const balance = await this.exchange.fetchBalance({ type: 'spot' });
 
-      let spotEquity = 0;
-      for (const [currency, value] of Object.entries(balance)) {
-        if (['info', 'free', 'used', 'total', 'debt', 'timestamp', 'datetime'].includes(currency)) {continue;}
-        const holding = value as any;
-        if (holding?.total && Number(holding.total) > 0) {
-          spotEquity += Number(holding.total) || 0;
+    // Collect altcoins that need price conversion
+    const altcoins: { currency: string; total: number }[] = [];
+    let totalUsdValue = 0;
+
+    for (const [currency, value] of Object.entries(balance)) {
+      if (this.BALANCE_META_KEYS.includes(currency)) continue;
+
+      const holding = value as { total?: number | string };
+      const total = Number(holding?.total) || 0;
+      if (total <= 0) continue;
+
+      if (this.STABLECOINS.includes(currency)) {
+        totalUsdValue += total;
+      } else {
+        altcoins.push({ currency, total });
+      }
+    }
+
+    // Fetch all prices in one call if we have altcoins
+    if (altcoins.length > 0) {
+      const prices = await this.fetchAltcoinPrices(altcoins.map(a => a.currency));
+
+      for (const { currency, total } of altcoins) {
+        const price = prices.get(currency) || 0;
+        if (price > 0) {
+          const usdValue = total * price;
+          totalUsdValue += usdValue;
+          this.logger.debug(`${currency}: ${total} @ $${price} = $${usdValue.toFixed(2)}`);
         }
       }
-
-      this.logger.info(`Spot wallet equity: ${spotEquity.toFixed(2)} USDT`);
-      return { equity: spotEquity, available_margin: 0 };
-
-    } else if (marketType === 'swap' || marketType === 'future') {
-      this.exchange.options['defaultType'] = 'swap';
-      const balance = await this.exchange.fetchBalance();
-      const usdtBalance = balance['USDT'] || balance['USD'] || balance['USDC'];
-
-      if (!usdtBalance) {
-        this.logger.warn(`No USDT balance found in swap/unified account for ${this.exchangeName}`);
-        return { equity: 0, available_margin: 0 };
-      }
-
-      const equity = usdtBalance.total || 0;
-      const availableMargin = usdtBalance.free || 0;
-      this.logger.info(`SWAP/Unified account equity: ${equity.toFixed(2)} USDT, margin: ${availableMargin.toFixed(2)} USDT`);
-
-      return { equity, available_margin: availableMargin };
-    } else {
-      return { equity: 0, available_margin: 0 };
     }
+
+    this.logger.info(`Spot wallet total: $${totalUsdValue.toFixed(2)} USD`);
+    return { equity: totalUsdValue, available_margin: 0 };
+  }
+
+  /**
+   * Fetch prices for multiple altcoins in a single API call using fetchTickers()
+   */
+  private async fetchAltcoinPrices(currencies: string[]): Promise<Map<string, number>> {
+    const prices = new Map<string, number>();
+
+    // Build symbols list (try USDT pairs first)
+    const symbols = currencies.map(c => `${c}/USDT`);
+
+    try {
+      const tickers = await this.exchange.fetchTickers(symbols);
+
+      for (const currency of currencies) {
+        const symbol = `${currency}/USDT`;
+        const ticker = tickers[symbol];
+        if (ticker?.last) {
+          prices.set(currency, Number(ticker.last));
+        }
+      }
+    } catch {
+      // Fallback: fetch individually for missing prices
+      this.logger.debug('fetchTickers failed, falling back to individual fetches');
+      for (const currency of currencies) {
+        if (!prices.has(currency)) {
+          const price = await this.fetchSinglePrice(currency);
+          if (price > 0) prices.set(currency, price);
+        }
+      }
+    }
+
+    return prices;
+  }
+
+  /**
+   * Fallback: fetch price for a single asset
+   */
+  private async fetchSinglePrice(currency: string): Promise<number> {
+    for (const quote of ['USDT', 'USDC', 'USD']) {
+      try {
+        const ticker = await this.exchange.fetchTicker(`${currency}/${quote}`);
+        if (ticker?.last) return Number(ticker.last);
+      } catch {
+        // Try next quote currency
+      }
+    }
+    return 0;
   }
 
   async getExecutedOrders(marketType: MarketType, since: Date): Promise<ExecutedOrderData[]> {
