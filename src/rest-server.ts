@@ -9,6 +9,7 @@ import { getLogger, extractErrorMessage } from './utils/secure-enclave-logger';
 import { TlsKeyGeneratorService } from './services/tls-key-generator.service';
 import { SevSnpAttestationService } from './services/sev-snp-attestation.service';
 import { E2EEncryptionService } from './services/e2e-encryption.service';
+import { ReportSigningService } from './services/report-signing.service';
 import { metricsService } from './services/metrics.service';
 
 const logger = getLogger('REST-Server');
@@ -90,11 +91,14 @@ app.get('/api/v1/attestation', async (_req, res) => {
     const attestationService = container.resolve(SevSnpAttestationService);
     const tlsService = container.resolve(TlsKeyGeneratorService);
     const e2eService = container.resolve(E2EEncryptionService);
+    const reportSigningService = container.resolve(ReportSigningService);
 
     const attestation = await attestationService.getAttestationReport();
     const fingerprint = tlsService.getFingerprint();
     const e2ePublicKey = e2eService.getPublicKey();
     const e2ePublicKeyFingerprint = e2eService.getPublicKeyFingerprint();
+    const reportSigningPublicKey = reportSigningService.getPublicKey();
+    const reportSigningFingerprint = reportSigningService.getPublicKeyFingerprint();
 
     // Update Prometheus metrics
     if (attestation.verified) {
@@ -123,6 +127,12 @@ app.get('/api/v1/attestation', async (_req, res) => {
         publicKeyFingerprint: e2ePublicKeyFingerprint,
         algorithm: 'ECIES (ECDH P-256 + AES-256-GCM)',
         usage: 'Encrypt credentials with this key before sending for maximum security'
+      },
+      reportSigning: {
+        publicKey: reportSigningPublicKey,
+        publicKeyFingerprint: reportSigningFingerprint,
+        algorithm: 'ECDSA P-256 (secp256r1) with SHA-256',
+        usage: 'Verify track record reports are signed by this enclave'
       },
       security: {
         tlsMitmProtection: attestation.reportData !== null,
@@ -291,9 +301,27 @@ app.post('/api/v1/credentials/connect', credentialsRateLimiter, async (req, res)
 });
 
 /**
- * Load TLS credentials from enclave memory
+ * Load TLS credentials - prioritize Let's Encrypt over self-signed
  */
 async function loadTlsCredentials(): Promise<https.ServerOptions> {
+  // Try Let's Encrypt certificates first (production)
+  const certPath = process.env.TLS_CERT_PATH || '/app/certs/cert.pem';
+  const keyPath = process.env.TLS_KEY_PATH || '/app/certs/key.pem';
+
+  if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+    logger.info('[REST] Using Let\'s Encrypt certificates from filesystem', {
+      certPath,
+      keyPath
+    });
+    return {
+      key: fs.readFileSync(keyPath),
+      cert: fs.readFileSync(certPath)
+    };
+  }
+
+  // Fallback to enclave-generated self-signed certificates
+  logger.warn('[REST] Let\'s Encrypt certs not found, using enclave-generated self-signed certificates');
+
   try {
     const tlsService = container.resolve(TlsKeyGeneratorService);
     const credentials = await tlsService.getCredentials();
@@ -303,22 +331,8 @@ async function loadTlsCredentials(): Promise<https.ServerOptions> {
       cert: credentials.certificate
     };
   } catch (error: unknown) {
-    logger.warn('[REST] Failed to load enclave-generated TLS credentials, falling back to file-based certs', {
-      error: extractErrorMessage(error)
-    });
-
-    // Fallback to file-based certs for development
-    const certPath = process.env.TLS_CERT_PATH || '/app/certs/cert.pem';
-    const keyPath = process.env.TLS_KEY_PATH || '/app/certs/key.pem';
-
-    if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
-      return {
-        key: fs.readFileSync(keyPath),
-        cert: fs.readFileSync(certPath)
-      };
-    }
-
-    throw new Error('No TLS credentials available (neither enclave-generated nor file-based)');
+    logger.error('[REST] Failed to load TLS credentials', { error: extractErrorMessage(error) });
+    throw new Error('No TLS credentials available (neither Let\'s Encrypt nor enclave-generated)');
   }
 }
 
