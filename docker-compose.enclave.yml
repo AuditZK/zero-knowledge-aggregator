@@ -28,6 +28,9 @@ services:
       LOG_SERVER_API_KEY: ${LOG_SERVER_API_KEY:-}
       # VPS benchmark service URL (set via environment)
       BENCHMARK_SERVICE_URL: ${BENCHMARK_SERVICE_URL:-}
+      # Let's Encrypt certificates (production TLS)
+      TLS_CERT_PATH: /etc/letsencrypt/live/enclave.auditzk.com/fullchain.pem
+      TLS_KEY_PATH: /etc/letsencrypt/live/enclave.auditzk.com/privkey.pem
     ports:
       - "50051:50051"  # gRPC Server
       - "50052:50052"  # HTTP Log Server (SSE)
@@ -37,6 +40,7 @@ services:
       - "9092"  # Prometheus scrapes internally via Docker network
     volumes:
       - ./certs:/etc/enclave:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro  # Let's Encrypt certificates
       - vcek_cache:/var/cache/enclave/certs  # Persistent VCEK certificate cache
     devices:
       - /dev/sev-guest:/dev/sev-guest
