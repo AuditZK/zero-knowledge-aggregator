@@ -3,7 +3,7 @@ import 'reflect-metadata';
 
 import { setupEnclaveContainer, verifyEnclaveIsolation } from './config/enclave-container';
 import { startEnclaveServer } from './enclave-server';
-import { getPrismaClient } from './config/prisma';
+import { connectWithRetry } from './config/prisma';
 import { getLogger } from './utils/secure-enclave-logger';
 import { MemoryProtectionService } from './services/memory-protection.service';
 
@@ -72,14 +72,14 @@ const startEnclave = async () => {
       }
     }
 
-    // 6. Database
-    const prisma = getPrismaClient();
+    // 6. Database (with two-phase retry: fast then slow over ~1 hour)
+    let prisma;
     try {
-      await prisma.$queryRaw`SELECT 1`;
-      const snapshotCount = await prisma.snapshotData.count();
+      const { client, snapshotCount } = await connectWithRetry();
+      prisma = client;
       logger.info('Database connected', { snapshotCount });
     } catch (error) {
-      logger.error('Database connection failed', error);
+      logger.error('Database connection failed after all retries (~1 hour)', error);
       process.exit(1);
     }
 

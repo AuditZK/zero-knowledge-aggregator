@@ -15,22 +15,27 @@ services:
     container_name: enclave_service
     restart: unless-stopped
     environment:
-      # Production mode: secrets loaded from GCP VM metadata
+      # Core settings
       NODE_ENV: production
       ENCLAVE_MODE: "true"
       ENCLAVE_PORT: 50051
       REST_PORT: 3050
-      LOG_LEVEL: info
       METRICS_ENABLED: "true"
       METRICS_PORT: 9092
       SKIP_ATTESTATION: ${SKIP_ATTESTATION:-false}
       ENABLE_ENCLAVE_LOG_STREAMING: "true"
-      LOG_SERVER_API_KEY: ${LOG_SERVER_API_KEY:-}
-      # VPS benchmark service URL (set via environment)
+      HTTP_LOG_PORT: 50052
+      # Secrets (loaded from GCP metadata via start-enclave.sh)
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      # Optional config (from GCP metadata via start-enclave.sh)
       BENCHMARK_SERVICE_URL: ${BENCHMARK_SERVICE_URL:-}
-      # Let's Encrypt certificates (production TLS)
-      TLS_CERT_PATH: /etc/letsencrypt/live/enclave.auditzk.com/fullchain.pem
-      TLS_KEY_PATH: /etc/letsencrypt/live/enclave.auditzk.com/privkey.pem
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_SERVER_API_KEY: ${LOG_SERVER_API_KEY:-}
+      # TLS certificates (Let's Encrypt or custom)
+      TLS_CERT_PATH: ${TLS_CERT_PATH:-/etc/letsencrypt/live/${ENCLAVE_DOMAIN:-localhost}/fullchain.pem}
+      TLS_KEY_PATH: ${TLS_KEY_PATH:-/etc/letsencrypt/live/${ENCLAVE_DOMAIN:-localhost}/privkey.pem}
     ports:
       - "50051:50051"  # gRPC Server
       - "50052:50052"  # HTTP Log Server (SSE)
@@ -144,11 +149,21 @@ volumes:
 # ==========================================
 # USAGE
 # ==========================================
-# Production (on SEV-SNP server):
-#   DATABASE_URL="postgresql://enclave_user:xxx@VPS_IP:5436/enclave_db" \
-#   JWT_SECRET="..." \
-#   ENCRYPTION_KEY="..." \
-#   docker compose -f docker-compose.enclave.yml up -d
+# Production (on GCP SEV-SNP VM):
+#   1. Configure GCP VM metadata (secrets stored securely in GCP):
+#      gcloud compute instances add-metadata INSTANCE_NAME \
+#        --zone=ZONE \
+#        --metadata=database-url=postgresql://user:pass@host:5436/db \
+#        --metadata=encryption-key=YOUR_64_HEX_CHAR_KEY \
+#        --metadata=jwt-secret=YOUR_JWT_SECRET \
+#        --metadata=benchmark-service-url=http://YOUR_VPS_IP \
+#        --metadata=enclave-domain=enclave.yourdomain.com
 #
-# Push schema to VPS postgres-enclave:
-#   DATABASE_URL="postgresql://enclave_user:xxx@VPS_IP:5436/enclave_db" npx prisma db push
+#   2. Start enclave (reads secrets from GCP metadata):
+#      ./scripts/start-enclave.sh
+#
+#   3. Restart enclave:
+#      ./scripts/start-enclave.sh --restart
+#
+# Push schema to postgres:
+#   DATABASE_URL="postgresql://user:pass@host:5436/db" npx prisma db push

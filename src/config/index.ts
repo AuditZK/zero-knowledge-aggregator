@@ -1,85 +1,38 @@
 import dotenv from 'dotenv';
-import { spawnSync } from 'node:child_process';
 import { ServerConfig, DatabaseConfig } from '../types';
 import { getLogger } from '../utils/secure-enclave-logger';
 
 const logger = getLogger('Config');
 
-/** Validate GCP metadata key to prevent command injection */
-const VALID_METADATA_KEY_PATTERN = /^[a-z0-9-]+$/;
-
 /**
- * Load configuration from GCP VM Metadata
- * Used in production instead of .env files for enhanced security
+ * Configuration Loading Architecture:
  *
- * SECURITY: Keys are validated to only contain alphanumeric characters and hyphens
- * to prevent command injection attacks.
+ * PRODUCTION (GCP SEV-SNP VM):
+ * 1. scripts/start-enclave.sh reads secrets from GCP VM metadata
+ * 2. Exports them as shell environment variables
+ * 3. docker-compose passes them to the container via ${VAR}
+ * 4. Container reads from process.env
+ *
+ * DEVELOPMENT:
+ * - Reads from .env file via dotenv
+ *
+ * This avoids .env files in production and keeps secrets in GCP metadata.
  */
-function loadFromGcpMetadata(key: string): string | undefined {
-  // SECURITY: Validate key to prevent command injection
-  if (!VALID_METADATA_KEY_PATTERN.test(key)) {
-    logger.error('Invalid GCP metadata key (must be alphanumeric with hyphens only)', { key });
-    return undefined;
-  }
 
-  try {
-    // SECURITY: Use absolute path to prevent PATH manipulation attacks
-    const result = spawnSync('/usr/bin/curl', [
-      '-sf',
-      '-H', 'Metadata-Flavor: Google',
-      `http://metadata.google.internal/computeMetadata/v1/instance/attributes/${key}`
-    ], { encoding: 'utf-8', timeout: 5000 });
-
-    if (result.error) {
-      throw result.error;
-    }
-    if (result.status !== 0) {
-      return undefined;
-    }
-    return result.stdout.trim() || undefined;
-  } catch (error) {
-    // Metadata not available (not on GCP or key doesn't exist)
-    logger.debug(`GCP metadata key '${key}' not found or not on GCP`, { error });
-    return undefined;
-  }
-}
-
-/**
- * Get environment variable with fallback to GCP metadata in production
- * - Production: GCP Metadata ONLY (no .env)
- * - Development: .env file
- */
-function getEnvVar(key: string, envKey?: string): string | undefined {
-  const actualKey = envKey || key;
-
-  if (process.env.NODE_ENV === 'production') {
-    // Production: Read from GCP metadata only
-    const value = loadFromGcpMetadata(key);
-    if (value) {
-      logger.info(`Loaded ${actualKey} from GCP metadata`, { source: 'gcp-metadata' });
-    }
-    return value;
-  } else {
-    // Development: Use .env file
-    dotenv.config();
-    return process.env[actualKey];
-  }
-}
-
-// Load configuration based on environment
+// Load .env in development only
 if (process.env.NODE_ENV === 'production') {
-  logger.info('Production mode: Loading configuration from GCP VM metadata');
+  logger.info('Production mode: Loading configuration from environment (via start-enclave.sh)');
 } else {
   logger.info('Development mode: Loading configuration from .env file');
   dotenv.config();
 }
 
 // Load all environment variables
-const DATABASE_URL = getEnvVar('database-url', 'DATABASE_URL') || process.env.DATABASE_URL;
-const JWT_SECRET = getEnvVar('jwt-secret', 'JWT_SECRET') || process.env.JWT_SECRET;
-const _ENCRYPTION_KEY = getEnvVar('encryption-key', 'ENCRYPTION_KEY') || process.env.ENCRYPTION_KEY;
-const LOG_LEVEL = getEnvVar('log-level', 'LOG_LEVEL') || process.env.LOG_LEVEL;
-const BENCHMARK_SERVICE_URL = getEnvVar('benchmark-service-url', 'BENCHMARK_SERVICE_URL') || process.env.BENCHMARK_SERVICE_URL;
+const DATABASE_URL = process.env.DATABASE_URL;
+const JWT_SECRET = process.env.JWT_SECRET;
+const _ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
+const LOG_LEVEL = process.env.LOG_LEVEL;
+const BENCHMARK_SERVICE_URL = process.env.BENCHMARK_SERVICE_URL;
 
 // CRITICAL: All required environment variables for production
 const requiredEnvVars: Record<string, string | undefined> = {
@@ -96,13 +49,13 @@ if (missingVars.length > 0) {
   logger.error('FATAL: Missing required environment variables', undefined, {
     missing_vars: missingVars,
     environment: process.env.NODE_ENV || 'development',
-    config_source: process.env.NODE_ENV === 'production' ? 'GCP Metadata' : '.env file'
+    config_source: process.env.NODE_ENV === 'production' ? 'start-enclave.sh' : '.env file'
   });
   logger.error('Please configure all required environment variables before starting the service');
 
   if (process.env.NODE_ENV === 'production') {
-    logger.error('For production, add variables to GCP VM metadata:');
-    logger.error('  gcloud compute instances add-metadata <INSTANCE> --metadata=encryption-key=<VALUE>');
+    logger.error('For production, use: ./scripts/start-enclave.sh');
+    logger.error('Ensure GCP VM metadata contains: database-url, encryption-key, jwt-secret');
   }
 
   process.exit(1);

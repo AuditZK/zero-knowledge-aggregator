@@ -1,6 +1,7 @@
-import { injectable } from 'tsyringe';
+import { injectable, inject } from 'tsyringe';
 import { createHash, createSign, createVerify, generateKeyPairSync, KeyObject } from 'node:crypto';
 import { getLogger } from '../utils/secure-enclave-logger';
+import { SevSnpAttestationService } from './sev-snp-attestation.service';
 import {
   SignedFinancialData,
   DisplayParameters,
@@ -28,8 +29,11 @@ export class ReportSigningService {
   private readonly privateKey: KeyObject;
   private readonly publicKeyBase64: string;
   private readonly algorithm = 'ECDSA-P256-SHA256';
+  private cachedMeasurement: string | null = null;
 
-  constructor() {
+  constructor(
+    @inject(SevSnpAttestationService) private readonly attestationService: SevSnpAttestationService
+  ) {
     // Generate ephemeral key pair at startup
     const keyPair = generateKeyPairSync('ec', {
       namedCurve: 'P-256'
@@ -47,6 +51,29 @@ export class ReportSigningService {
       algorithm: this.algorithm,
       publicKeyFingerprint: this.getPublicKeyFingerprint()
     });
+
+    // Fetch and cache measurement at startup (async, non-blocking)
+    this.fetchAndCacheMeasurement();
+  }
+
+  /**
+   * Fetch SEV-SNP measurement and cache it
+   * This runs at startup and caches the result for all reports
+   */
+  private async fetchAndCacheMeasurement(): Promise<void> {
+    try {
+      const attestation = await this.attestationService.getAttestationReport();
+      if (attestation.measurement) {
+        this.cachedMeasurement = attestation.measurement;
+        logger.info('SEV-SNP measurement cached for report signing', {
+          measurementPrefix: attestation.measurement.substring(0, 32) + '...'
+        });
+      }
+    } catch (error) {
+      logger.warn('Could not fetch SEV-SNP measurement (non-critical)', {
+        error: error instanceof Error ? error.message : 'Unknown'
+      });
+    }
   }
 
   /**
@@ -87,6 +114,7 @@ export class ReportSigningService {
       enclaveVersion: process.env.ENCLAVE_VERSION || '1.0.0',
       attestationId: attestationId || undefined,
       enclaveMode: isProduction ? 'production' : 'development',
+      measurement: this.cachedMeasurement || undefined,
       reportHash
     };
 
