@@ -334,3 +334,103 @@ export interface IConnectorWithBalance {
     [key: string]: unknown;
   }>;
 }
+
+// cTrader types
+export interface CTraderAccount {
+  ctidTraderAccountId: number;
+  isLive: boolean;
+  traderLogin: number;
+  balance: number;
+  brokerName: string;
+  brokerTitle: string;
+}
+
+export interface CTraderPosition {
+  positionId: number;
+  symbolId: number;
+  symbolName?: string;
+  volume: number;
+  tradeSide: 'BUY' | 'SELL';
+  entryPrice: number;
+  unrealizedPnl: number;
+  swap: number;
+  commission: number;
+}
+
+export interface CTraderDeal {
+  dealId: number;
+  orderId: number;
+  symbolId: number;
+  symbolName?: string;
+  volume: number;
+  executionPrice: number;
+  tradeSide: 'BUY' | 'SELL';
+  executionTimestamp: number;
+  commission: number;
+  realizedPnl?: number;
+}
+
+// Hyperliquid types
+export interface HyperliquidCredentials {
+  walletAddress: string;  // 0x... format
+  privateKey?: string;    // Optional, only needed for trading
+}
+
+export interface HyperliquidMarginSummary {
+  accountValue: string;
+  totalNtlPos: string;
+  totalRawUsd: string;
+  totalMarginUsed: string;
+}
+
+export interface HyperliquidPositionInfo {
+  coin: string;
+  entryPx: string | null;
+  leverage: {
+    type: string;
+    value: number;
+  };
+  liquidationPx: string | null;
+  marginUsed: string;
+  positionValue: string;
+  returnOnEquity: string;
+  szi: string;
+  unrealizedPnl: string;
+}
+
+export interface HyperliquidAssetPosition {
+  position: HyperliquidPositionInfo;
+  type: string;
+}
+
+export interface HyperliquidClearinghouseState {
+  marginSummary: HyperliquidMarginSummary;
+  crossMarginSummary: HyperliquidMarginSummary;
+  withdrawable: string;
+  assetPositions: HyperliquidAssetPosition[];
+}
+
+export interface HyperliquidSpotBalance {
+  coin: string;
+  token: number;
+  total: string;
+  hold: string;
+  entryNtl: string;
+}
+
+export interface HyperliquidFill {
+  coin: string;
+  px: string;
+  sz: string;
+  side: 'A' | 'B';
+  time: number;
+  startPosition: string;
+  dir: string;
+  closedPnl: string;
+  hash: string;
+  oid: number;
+  crossed: boolean;
+  fee: string;
+  tid: number;
+  feeToken: string;
+}

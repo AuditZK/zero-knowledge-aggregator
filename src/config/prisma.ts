@@ -1,8 +1,82 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { getLogger } from '../utils/secure-enclave-logger';
 import { databaseConfig } from './index';
 
 const dbLogger = getLogger('Database');
+
+// Transient error codes that warrant retry (PostgreSQL + Prisma)
+const TRANSIENT_ERROR_CODES = new Set([
+  'P1001', // Can't reach database server
+  'P1002', // Database server timed out
+  'P1008', // Operations timed out
+  'P1017', // Server closed the connection
+  'P2024', // Timed out fetching connection from pool
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'ENOTFOUND',
+]);
+
+const isTransientError = (error: unknown): boolean => {
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    return TRANSIENT_ERROR_CODES.has(error.code);
+  }
+  if (error instanceof Prisma.PrismaClientInitializationError) {
+    return error.message.includes("Can't reach database") ||
+           error.message.includes('timed out') ||
+           error.message.includes('ECONNREFUSED');
+  }
+  if (error instanceof Error) {
+    return TRANSIENT_ERROR_CODES.has((error as NodeJS.ErrnoException).code || '');
+  }
+  return false;
+};
+
+export interface RetryConfig {
+  maxAttempts: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+}
+
+const DEFAULT_RETRY_CONFIG: RetryConfig = {
+  maxAttempts: 5,
+  baseDelayMs: 1000,
+  maxDelayMs: 30000,
+};
+
+const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+
+export const withRetry = async <T>(
+  operation: () => Promise<T>,
+  config: Partial<RetryConfig> = {},
+  context = 'Database operation'
+): Promise<T> => {
+  const { maxAttempts, baseDelayMs, maxDelayMs } = { ...DEFAULT_RETRY_CONFIG, ...config };
+
+  let lastError: Error | undefined;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error as Error;
+
+      if (!isTransientError(error) || attempt === maxAttempts) {
+        throw error;
+      }
+
+      const delay = Math.min(baseDelayMs * Math.pow(2, attempt - 1), maxDelayMs);
+      dbLogger.warn(`${context} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms...`, {
+        error: lastError.message,
+        nextAttempt: attempt + 1,
+      });
+
+      await sleep(delay);
+    }
+  }
+
+  throw lastError;
+};
 
 // Prisma event types
 interface PrismaQueryEvent {
@@ -113,6 +187,40 @@ export const testPrismaConnection = async (): Promise<boolean> => {
     });
     return false;
   }
+};
+
+/**
+ * Connects to the database with two-phase retry strategy:
+ * - Phase 1: Fast retries (1s, 2s, 4s, 8s, 10s) for transient glitches (~30s)
+ * - Phase 2: Slow retries (60s intervals) for longer outages (~1 hour)
+ */
+export const connectWithRetry = async (): Promise<{ client: PrismaClient; snapshotCount: number }> => {
+  const doConnect = async () => {
+    const client = getPrismaClient();
+    await client.$queryRaw`SELECT 1`;
+    const snapshotCount = await client.snapshotData.count();
+    return { client, snapshotCount };
+  };
+
+  // Phase 1: Fast retries for transient glitches
+  dbLogger.info('Connecting to database (Phase 1: fast retries)...');
+  try {
+    return await withRetry(doConnect, {
+      maxAttempts: 6,
+      baseDelayMs: 1000,
+      maxDelayMs: 10000,
+    }, 'Database connection (fast)');
+  } catch {
+    dbLogger.warn('Fast retries exhausted, switching to long-term retry strategy...');
+  }
+
+  // Phase 2: Slow retries for longer outages (~1 hour)
+  dbLogger.info('Connecting to database (Phase 2: long-term retries, ~1 hour max)...');
+  return withRetry(doConnect, {
+    maxAttempts: 60,
+    baseDelayMs: 60000,
+    maxDelayMs: 60000,
+  }, 'Database connection (slow)');
 };
 
 // Note: prisma instance is accessed via getPrismaClient() - not exported directly

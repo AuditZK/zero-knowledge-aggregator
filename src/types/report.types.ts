@@ -189,6 +189,9 @@ export interface SignedReport {
   attestationId?: string;    // SEV-SNP attestation ID if available
   enclaveMode: 'production' | 'development';
 
+  // AMD SEV-SNP Measurement - Hash of enclave code (compare with GitHub releases)
+  measurement?: string;      // 384-bit hash of enclave code (hex)
+
   // Integrity (hash of financialData only, NOT displayParams)
   reportHash: string;        // SHA-256 hash of financial data
 }
