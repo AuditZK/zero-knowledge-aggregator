@@ -5,6 +5,7 @@ import { CcxtExchangeConnector } from '../../connectors/CcxtExchangeConnector';
 import { IbkrFlexConnector } from '../../connectors/IbkrFlexConnector';
 import { AlpacaConnector } from '../../connectors/AlpacaConnector';
 import { TradeStationConnector } from '../../connectors/TradeStationConnector';
+import { HyperliquidConnector } from '../../connectors/HyperliquidConnector';
 import { IbkrFlexService } from '../ibkr-flex-service';
 import { getLogger } from '../../utils/secure-enclave-logger';
 
@@ -33,6 +34,9 @@ const logger = getLogger('ExchangeConnectorFactory');
  *   - IBKR (ibkr) - Flex Query API
  *   - Alpaca (alpaca) - REST API
  *   - TradeStation (tradestation) - OAuth 2.0 REST API
+ *
+ * Supported DEX (wallet address only, no private key):
+ *   - Hyperliquid (hyperliquid) - Public REST API (read-only)
  */
 export class ExchangeConnectorFactory {
   /**
@@ -62,7 +66,7 @@ export class ExchangeConnectorFactory {
   /**
    * List of stock brokers with custom connectors
    */
-  private static readonly CUSTOM_BROKERS = ['ibkr', 'alpaca', 'tradestation'];
+  private static readonly CUSTOM_BROKERS = ['ibkr', 'alpaca', 'tradestation', 'hyperliquid'];
 
   /**
    * Create an exchange connector instance
@@ -115,6 +119,10 @@ export class ExchangeConnectorFactory {
 
       case 'tradestation':
         return new TradeStationConnector(credentials);
+
+      case 'hyperliquid':
+        // DEX - only needs wallet address (apiKey), no private key required
+        return new HyperliquidConnector(credentials);
 
       default:
         throw new Error(`Custom broker ${exchange} not implemented`);
