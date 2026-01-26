@@ -95,11 +95,28 @@ echo "  - LOG_LEVEL: ${LOG_LEVEL:-info}"
 echo "  - SKIP_ATTESTATION: ${SKIP_ATTESTATION:-false}"
 echo ""
 
+# Parse flags
+BUILD_FLAG=""
+RESTART_FLAG=""
+for arg in "$@"; do
+  case $arg in
+    --build) BUILD_FLAG="--build" ;;
+    --restart) RESTART_FLAG="true" ;;
+  esac
+done
+
 # Handle restart flag
-if [[ "${1:-}" == "--restart" ]]; then
+if [[ "$RESTART_FLAG" == "true" ]]; then
   echo -e "${YELLOW}Restarting enclave...${NC}"
   cd "$PROJECT_DIR"
   docker compose -f docker-compose.enclave.yml down enclave-service
+fi
+
+# Build if requested
+if [[ -n "$BUILD_FLAG" ]]; then
+  echo -e "${GREEN}Building enclave image...${NC}"
+  cd "$PROJECT_DIR"
+  docker compose -f docker-compose.enclave.yml build enclave-service
 fi
 
 # Start enclave

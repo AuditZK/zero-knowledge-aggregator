@@ -71,9 +71,15 @@ export class TradeSyncService {
     try {
       await this.ensureUser(userUid);
       const tradeSyncResult = await this.syncTradesForStatistics(userUid);
+
+      // Preserve original message on failure, use success message otherwise
+      const message = tradeSyncResult.success
+        ? `Sync completed: ${tradeSyncResult.synced} trades processed (memory only)`
+        : tradeSyncResult.message;
+
       return {
         success: tradeSyncResult.success,
-        message: `Sync completed: ${tradeSyncResult.synced} trades processed (memory only)`,
+        message,
         synced: tradeSyncResult.synced,
       };
     } catch (error) {

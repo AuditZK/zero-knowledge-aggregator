@@ -84,7 +84,13 @@ export class EnclaveWorker {
       const syncResult = await this.tradeSyncService.syncUserTrades(userUid);
 
       if (!syncResult.success) {
-        logger.error('Trade sync failed', { userUid, exchange, message: syncResult.message });
+        // Use WARN for missing connections (not a real error), ERROR for actual failures
+        const isNoConnections = syncResult.message.includes('No active exchange connections');
+        if (isNoConnections) {
+          logger.warn('Trade sync skipped - no connections', { userUid, exchange, message: syncResult.message });
+        } else {
+          logger.error('Trade sync failed', { userUid, exchange, message: syncResult.message });
+        }
         return this.buildErrorResponse(userUid, exchange, syncResult.message);
       }
 
