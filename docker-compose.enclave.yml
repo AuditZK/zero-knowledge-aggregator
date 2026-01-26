@@ -100,8 +100,8 @@ services:
       - "127.0.0.1:3000:3000"  # Localhost only - requires SSH tunnel
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      # REQUIRED: No default password - must be set explicitly
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:?GRAFANA_PASSWORD is required}
+      # Optional: defaults to 'admin' if not set (change via GCP metadata)
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_AUTH_ANONYMOUS_ENABLED=false
       - GF_SECURITY_DISABLE_GRAVATAR=true
