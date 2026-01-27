@@ -62,6 +62,8 @@ export JWT_SECRET=$(get_metadata "jwt-secret")
 # Load optional config from GCP metadata
 export BENCHMARK_SERVICE_URL=$(get_metadata "benchmark-service-url")
 export LOG_LEVEL=$(get_metadata "log-level")
+export CTRADER_CLIENT_ID=$(get_metadata "ctrader-client-id")
+export CTRADER_CLIENT_SECRET=$(get_metadata "ctrader-client-secret")
 export LOG_SERVER_API_KEY=$(get_metadata "log-server-api-key")
 export SKIP_ATTESTATION=$(get_metadata "skip-attestation")
 export GRAFANA_PASSWORD=$(get_metadata "grafana-password")
