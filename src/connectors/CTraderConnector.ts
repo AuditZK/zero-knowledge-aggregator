@@ -32,8 +32,9 @@ export class CTraderConnector extends RestBrokerConnector {
   constructor(credentials: ExchangeCredentials) {
     super(credentials);
 
-    if (!credentials.apiKey || !credentials.apiSecret || !credentials.passphrase) {
-      throw new Error('cTrader requires apiKey (client_id), apiSecret (client_secret), and passphrase (access_token)');
+    // OAuth flow from frontend sends access_token in apiKey
+    if (!credentials.apiKey) {
+      throw new Error('cTrader requires apiKey (access_token from OAuth)');
     }
 
     this.api = new CTraderApiService(credentials);
