@@ -116,19 +116,31 @@ export class CTraderApiService {
   private readonly baseUrl = 'https://openapi.ctrader.com';
   private readonly authUrl = 'https://openapi.ctrader.com/apps/auth';
   private accessToken: string;
+  private _storedRefreshToken: string; // For future auto-refresh implementation
   private readonly clientId: string;
   private readonly clientSecret: string;
   private accountId: number | null = null;
   private symbolCache: Map<number, CTraderSymbol> = new Map();
 
   constructor(credentials: ExchangeCredentials) {
-    if (!credentials.apiKey || !credentials.apiSecret || !credentials.passphrase) {
-      throw new Error('cTrader requires apiKey (client_id), apiSecret (client_secret), and passphrase (access_token)');
+    // OAuth flow from frontend sends:
+    // - apiKey = access_token
+    // - apiSecret = refresh_token
+    // - passphrase = expires_in (optional)
+    if (!credentials.apiKey) {
+      throw new Error('cTrader requires apiKey (access_token from OAuth)');
     }
 
-    this.clientId = credentials.apiKey;
-    this.clientSecret = credentials.apiSecret;
-    this.accessToken = credentials.passphrase;
+    this.accessToken = credentials.apiKey;
+    // Store refresh token and client credentials for future token refresh
+    this._storedRefreshToken = credentials.apiSecret || '';
+    this.clientId = process.env.CTRADER_CLIENT_ID || '';
+    this.clientSecret = process.env.CTRADER_CLIENT_SECRET || '';
+
+    // Log refresh token availability for debugging (will be used for auto-refresh later)
+    if (this._storedRefreshToken) {
+      logger.debug('cTrader refresh token available for future token renewal');
+    }
   }
 
   /**
