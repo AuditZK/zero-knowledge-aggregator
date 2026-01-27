@@ -66,7 +66,7 @@ export class DailySyncSchedulerService {
     logger.info('Daily sync started', {
       timestamp: new Date().toISOString(),
       mode: 'enclave_attested',
-      strategy: 'atomic_multi_exchange'
+      strategy: 'best_effort'
     });
 
     try {
@@ -154,29 +154,28 @@ export class DailySyncSchedulerService {
     failedExchanges: string[],
     totalConnections: number
   ): Promise<{ synced: number; failed: number; partialFailure: boolean }> {
+    // Log failed exchanges but continue with successful ones
     if (failedExchanges.length > 0) {
-      logger.error(`User ${userUid}: ATOMIC SYNC ABORTED - ${failedExchanges.length}/${totalConnections} exchanges failed`, {
+      logger.warn(`User ${userUid}: ${failedExchanges.length}/${totalConnections} exchanges failed, saving ${snapshots.length} successful snapshots`, {
         failed_exchanges: failedExchanges,
         successful_exchanges: snapshots.map(s => s.exchange),
-        reason: 'Partial snapshots would corrupt performance metrics'
       });
-      return { synced: 0, failed: totalConnections, partialFailure: true };
     }
 
     if (snapshots.length === 0) {
-      return { synced: 0, failed: 0, partialFailure: false };
+      return { synced: 0, failed: failedExchanges.length, partialFailure: failedExchanges.length > 0 };
     }
 
     try {
       await this.snapshotDataRepo.upsertSnapshotsTransactional(snapshots);
-      logger.info(`User ${userUid}: ATOMIC SYNC COMPLETED - ${snapshots.length} snapshots saved`, {
+      logger.info(`User ${userUid}: ${snapshots.length} snapshots saved`, {
         exchanges: snapshots.map(s => s.exchange),
         total_equity: snapshots.reduce((sum, s) => sum + s.totalEquity, 0).toFixed(2)
       });
-      return { synced: snapshots.length, failed: 0, partialFailure: false };
+      return { synced: snapshots.length, failed: failedExchanges.length, partialFailure: failedExchanges.length > 0 };
     } catch (saveError) {
-      logger.error(`User ${userUid}: ATOMIC SAVE FAILED - transaction rolled back`, saveError);
-      return { synced: 0, failed: snapshots.length, partialFailure: false };
+      logger.error(`User ${userUid}: SAVE FAILED - transaction rolled back`, saveError);
+      return { synced: 0, failed: snapshots.length + failedExchanges.length, partialFailure: false };
     }
   }
 
@@ -188,7 +187,7 @@ export class DailySyncSchedulerService {
       users_with_partial_failure: stats.usersWithPartialFailure,
       duration_sec: durationSec,
       completed_at: new Date().toISOString(),
-      strategy: 'atomic_multi_exchange'
+      strategy: 'best_effort'
     });
   }
 
