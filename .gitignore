@@ -88,3 +88,5 @@ wiki/
 
 # SonarCloud
 .scannerwork/
+# Test scripts
+scripts/test/*.py
