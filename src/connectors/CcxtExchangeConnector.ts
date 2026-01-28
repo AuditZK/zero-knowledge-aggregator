@@ -205,15 +205,42 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
         return this.getSpotBalanceWithUsdConversion();
       }
 
-      // For derivatives (swap/future), just get stablecoin balance
+      // For derivatives (swap/future), get equity from raw API response
       this.exchange.options['defaultType'] = marketType;
       const balance = await this.exchange.fetchBalance();
+
+      // Try to get real equity from raw API response (MEXC and others store it in balance.info)
+      const equity = this.extractDerivativesEquity(balance);
       const usdtBalance = balance['USDT'] || balance['USD'] || balance['USDC'];
 
-      if (!usdtBalance) {return { equity: 0, available_margin: 0 };}
-
-      return { equity: usdtBalance.total || 0, available_margin: usdtBalance.free || 0 };
+      return {
+        equity: equity || usdtBalance?.total || 0,
+        available_margin: usdtBalance?.free || 0
+      };
     });
+  }
+
+  /**
+   * Extract real equity from derivatives balance raw API response.
+   * Some exchanges (MEXC, etc.) return the full equity in balance.info but CCXT
+   * only exposes availableBalance + frozenBalance as 'total', missing unrealizedPnL.
+   */
+  private extractDerivativesEquity(balance: Record<string, unknown>): number {
+    const info = balance.info as { data?: Array<{ currency: string; equity?: number }> } | undefined;
+    if (!info?.data || !Array.isArray(info.data)) {
+      return 0;
+    }
+
+    // Sum equity from stablecoin assets (USDT, USDC, USD)
+    let totalEquity = 0;
+    for (const asset of info.data) {
+      if (this.STABLECOINS.includes(asset.currency) && asset.equity && asset.equity > 0) {
+        totalEquity += asset.equity;
+        this.logger.debug(`${asset.currency} derivatives equity: ${asset.equity}`);
+      }
+    }
+
+    return totalEquity;
   }
 
   /**
