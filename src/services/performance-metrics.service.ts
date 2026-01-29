@@ -135,7 +135,7 @@ export class PerformanceMetricsService {
     breakdown_by_market?: {
       global?: {
         volume?: number;
-        orders?: number;
+        trades?: number;
         trading_fees?: number;
         funding_fees?: number;
       };
@@ -218,7 +218,7 @@ export class PerformanceMetricsService {
       if (!global) continue;
 
       volume += global.volume || 0;
-      trades += global.orders || 0;
+      trades += global.trades || 0;
       fees += (global.trading_fees || 0) + (global.funding_fees || 0);
     }
 

@@ -4,7 +4,6 @@ import { EquitySnapshotAggregator } from './services/equity-snapshot-aggregator'
 import { PerformanceMetricsService } from './services/performance-metrics.service';
 import { SnapshotDataRepository } from './core/repositories/snapshot-data-repository';
 import { ExchangeConnectionRepository } from './core/repositories/exchange-connection-repository';
-import { SyncStatusRepository } from './core/repositories/sync-status-repository';
 import { UserRepository } from './core/repositories/user-repository';
 import { getLogger, extractErrorMessage } from './utils/secure-enclave-logger';
 import { SnapshotData } from './types';
@@ -53,7 +52,6 @@ export class EnclaveWorker {
     @inject(PerformanceMetricsService) private readonly performanceMetricsService: PerformanceMetricsService,
     @inject(SnapshotDataRepository) private readonly snapshotDataRepo: SnapshotDataRepository,
     @inject(ExchangeConnectionRepository) private readonly exchangeConnectionRepo: ExchangeConnectionRepository,
-    @inject(SyncStatusRepository) private readonly syncStatusRepo: SyncStatusRepository,
     @inject(UserRepository) private readonly userRepo: UserRepository
   ) {}
 
@@ -333,17 +331,23 @@ export class EnclaveWorker {
         totalEquity += snapshot.totalEquity;
         totalRealizedPnl += 0; // Not available in SnapshotData - calculated from equity changes
         totalUnrealizedPnl += snapshot.unrealizedPnL;
-        totalFees += 0; // Not available in SnapshotData
+
+        // Extract fees and trades from breakdown_by_market if available
+        let breakdown = snapshot.breakdown_by_market;
+        if (typeof breakdown === 'string') {
+          try { breakdown = JSON.parse(breakdown); } catch { breakdown = undefined; }
+        }
+        const global = (breakdown as Record<string, { trading_fees?: number; funding_fees?: number; trades?: number }> | undefined)?.global;
+        if (global) {
+          totalFees += (global.trading_fees || 0) + (global.funding_fees || 0);
+          totalTrades += global.trades || 0;
+        }
 
         const snapshotDate = new Date(snapshot.timestamp);
         if (!lastSync || snapshotDate > lastSync) {
           lastSync = snapshotDate;
         }
       }
-
-      // Get trade count from sync status (trades are memory-only, not stored)
-      const syncStatus = await this.syncStatusRepo.getSyncStatus(userUid, ex);
-      totalTrades += syncStatus?.totalTrades || 0;
     }
 
     return {
@@ -379,10 +383,10 @@ export class EnclaveWorker {
     deposits: number;
     withdrawals: number;
     breakdown?: {
-      global?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
-      spot?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
-      swap?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
-      options?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
+      global?: { equity: number; available_margin: number; volume: number; trades: number; trading_fees: number; funding_fees: number };
+      spot?: { equity: number; available_margin: number; volume: number; trades: number; trading_fees: number; funding_fees: number };
+      swap?: { equity: number; available_margin: number; volume: number; trades: number; trading_fees: number; funding_fees: number };
+      options?: { equity: number; available_margin: number; volume: number; trades: number; trading_fees: number; funding_fees: number };
     };
   }>> {
     try {
@@ -425,10 +429,10 @@ export class EnclaveWorker {
           deposits: snapshot.deposits,
           withdrawals: snapshot.withdrawals,
           breakdown: breakdown as {
-            global?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
-            spot?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
-            swap?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
-            options?: { equity: number; available_margin: number; volume: number; orders: number; trading_fees: number; funding_fees: number };
+            global?: { equity: number; available_margin: number; volume: number; trades: number; trading_fees: number; funding_fees: number };
+            spot?: { equity: number; available_margin: number; volume: number; trades: number; trading_fees: number; funding_fees: number };
+            swap?: { equity: number; available_margin: number; volume: number; trades: number; trading_fees: number; funding_fees: number };
+            options?: { equity: number; available_margin: number; volume: number; trades: number; trading_fees: number; funding_fees: number };
           } | undefined
         };
       });
