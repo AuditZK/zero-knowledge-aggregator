@@ -46,7 +46,16 @@ export class SevSnpAttestationService {
   // Cache validity: 7 days (VCEK certs are tied to chip, rarely change)
   private readonly VCEK_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
+  // Short-lived attestation report cache (allows multiple clients to poll without overloading hardware)
+  private readonly ATTESTATION_CACHE_TTL_MS = 5000; // 5 seconds
+  private attestationCache: { result: AttestationResult; timestamp: number } | null = null;
+
   private tlsFingerprint: Buffer | null = null;
+
+  /** Invalidate the attestation cache (useful for testing). */
+  invalidateCache(): void {
+    this.attestationCache = null;
+  }
 
   /** Binds TLS fingerprint to attestation reportData field. */
   setTlsFingerprint(fingerprint: Buffer): void {
@@ -60,6 +69,14 @@ export class SevSnpAttestationService {
   }
 
   async getAttestationReport(): Promise<AttestationResult> {
+    // Check cache first (prevents hardware overload from multiple concurrent requests)
+    if (this.attestationCache && Date.now() - this.attestationCache.timestamp < this.ATTESTATION_CACHE_TTL_MS) {
+      logger.debug('Returning cached attestation report', {
+        cacheAge: Date.now() - this.attestationCache.timestamp
+      });
+      return this.attestationCache.result;
+    }
+
     if (!this.isSevSnpAvailable()) {
       logger.warn('AMD SEV-SNP not available on this system');
       return this.createFailureResult('SEV-SNP hardware not available');
@@ -88,7 +105,7 @@ export class SevSnpAttestationService {
         reportDataHex = reportDataHex.slice(0, 64);
       }
 
-      return {
+      const result: AttestationResult = {
         verified: vcekVerified, // Only true if VCEK verification succeeded
         enclave: true,
         sevSnpEnabled: true,
@@ -97,6 +114,12 @@ export class SevSnpAttestationService {
         platformVersion: report.platformVersion?.toString() || null,
         vcekVerified
       };
+
+      // Cache the result for subsequent requests
+      this.attestationCache = { result, timestamp: Date.now() };
+      logger.debug('Attestation report cached', { ttlMs: this.ATTESTATION_CACHE_TTL_MS });
+
+      return result;
     } catch (error: unknown) {
       const errorMessage = extractErrorMessage(error);
       logger.error('AMD SEV-SNP attestation failed', { error: errorMessage });

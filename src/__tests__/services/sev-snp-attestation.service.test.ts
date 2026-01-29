@@ -15,6 +15,7 @@ describe('SevSnpAttestationService', () => {
 
   beforeEach(() => {
     service = new SevSnpAttestationService();
+    service.invalidateCache(); // Clear any cached attestation results
     originalEnv = { ...process.env };
     jest.clearAllMocks();
 
