@@ -4,7 +4,7 @@
 export interface SpotMarketSnapshot {
   equity: number;
   volume: number;
-  orders: number;
+  trades: number;
   trading_fees: number;
 }
 
@@ -34,9 +34,9 @@ export interface GlobalSnapshot extends DerivativesMarketSnapshot {
  * {
  *   "timestamp": "2025-11-08T15:00:10",
  *   "breakdown_by_market": {
- *     "global": { equity, available_margin, volume, orders, trading_fees, funding_fees },
- *     "spot": { equity, volume, orders, trading_fees }, // NO funding_fees on spot
- *     "swap": { equity, volume, orders, trading_fees, funding_fees },
+ *     "global": { equity, available_margin, volume, trades, trading_fees, funding_fees },
+ *     "spot": { equity, volume, trades, trading_fees }, // NO funding_fees on spot
+ *     "swap": { equity, volume, trades, trading_fees, funding_fees },
  *     ...
  *   }
  * }
