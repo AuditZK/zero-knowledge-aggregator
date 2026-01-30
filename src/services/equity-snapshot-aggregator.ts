@@ -122,8 +122,14 @@ export class EquitySnapshotAggregator {
         return null;
       }
 
-      const { balancesByMarket, globalEquity, globalMargin, filteredTypes } =
+      const { balancesByMarket, globalEquity: rawEquity, globalMargin, filteredTypes } =
         await this.fetchBalancesByMarket(connector, exchange);
+
+      // Ensure globalEquity is always a valid number (protection against NaN/undefined from API)
+      const globalEquity = Number(rawEquity) || 0;
+      if (rawEquity !== globalEquity) {
+        logger.warn(`Invalid equity value for ${userUid}/${exchange}: received ${rawEquity}, using ${globalEquity}`);
+      }
 
       const startOfDay = TimeUtils.getStartOfDayUTC(currentSnapshot);
       const { tradesByMarket, swapSymbols } = await this.fetchTradesByMarket(
@@ -142,7 +148,8 @@ export class EquitySnapshotAggregator {
         globalMargin
       );
 
-      const totalUnrealizedPnl = await this.calculateUnrealizedPnl(connector, balancesByMarket);
+      const rawUnrealizedPnl = await this.calculateUnrealizedPnl(connector, balancesByMarket);
+      const totalUnrealizedPnl = Number(rawUnrealizedPnl) || 0;
       const totalRealizedBalance = globalEquity - totalUnrealizedPnl;
 
       const snapshot: SnapshotData = {
