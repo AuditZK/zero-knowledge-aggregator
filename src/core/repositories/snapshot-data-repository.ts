@@ -14,10 +14,11 @@ export class SnapshotDataRepository {
   async upsertSnapshotData(snapshot: Omit<SnapshotData, 'id' | 'createdAt' | 'updatedAt'>): Promise<SnapshotData> {
     const snapshotData = await this.prisma.snapshotData.upsert({
       where: {
-        userUid_timestamp_exchange: {
+        userUid_timestamp_exchange_label: {
           userUid: snapshot.userUid,
           timestamp: new Date(snapshot.timestamp),
           exchange: snapshot.exchange,
+          label: snapshot.label || '',
         },
       },
       update: {
@@ -33,6 +34,7 @@ export class SnapshotDataRepository {
         userUid: snapshot.userUid,
         timestamp: new Date(snapshot.timestamp),
         exchange: snapshot.exchange,
+        label: snapshot.label || '',
         totalEquity: snapshot.totalEquity,
         realizedBalance: snapshot.realizedBalance,
         unrealizedPnL: snapshot.unrealizedPnL,
@@ -109,10 +111,13 @@ export class SnapshotDataRepository {
     return snapshotData.map(this.mapPrismaSnapshotDataToSnapshotData);
   }
 
-  async getLatestSnapshotData(userUid: string, exchange?: string): Promise<SnapshotData | null> {
+  async getLatestSnapshotData(userUid: string, exchange?: string, label?: string): Promise<SnapshotData | null> {
     const where: Prisma.SnapshotDataWhereInput = { userUid };
     if (exchange) {
       where.exchange = exchange;
+    }
+    if (label !== undefined) {
+      where.label = label;
     }
 
     const snapshotData = await this.prisma.snapshotData.findFirst({
@@ -123,13 +128,14 @@ export class SnapshotDataRepository {
     return snapshotData ? this.mapPrismaSnapshotDataToSnapshotData(snapshotData) : null;
   }
 
-  async deleteSnapshotData(userUid: string, timestamp: string, exchange: string): Promise<void> {
+  async deleteSnapshotData(userUid: string, timestamp: string, exchange: string, label: string = ''): Promise<void> {
     await this.prisma.snapshotData.delete({
       where: {
-        userUid_timestamp_exchange: {
+        userUid_timestamp_exchange_label: {
           userUid,
           timestamp: new Date(timestamp),
           exchange,
+          label,
         },
       },
     });
@@ -169,10 +175,11 @@ export class SnapshotDataRepository {
       snapshots.map(snapshot =>
         this.prisma.snapshotData.upsert({
           where: {
-            userUid_timestamp_exchange: {
+            userUid_timestamp_exchange_label: {
               userUid: snapshot.userUid,
               timestamp: new Date(snapshot.timestamp),
               exchange: snapshot.exchange,
+              label: snapshot.label || '',
             },
           },
           update: {
@@ -188,6 +195,7 @@ export class SnapshotDataRepository {
             userUid: snapshot.userUid,
             timestamp: new Date(snapshot.timestamp),
             exchange: snapshot.exchange,
+            label: snapshot.label || '',
             totalEquity: snapshot.totalEquity,
             realizedBalance: snapshot.realizedBalance,
             unrealizedPnL: snapshot.unrealizedPnL,
@@ -242,6 +250,7 @@ export class SnapshotDataRepository {
       userUid: prismaSnapshotData.userUid,
       timestamp: prismaSnapshotData.timestamp.toISOString(),
       exchange: prismaSnapshotData.exchange,
+      label: prismaSnapshotData.label,
       totalEquity: prismaSnapshotData.totalEquity,
       realizedBalance: prismaSnapshotData.realizedBalance,
       unrealizedPnL: prismaSnapshotData.unrealizedPnL,

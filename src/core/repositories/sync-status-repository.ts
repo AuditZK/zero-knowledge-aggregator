@@ -11,9 +11,10 @@ export class SyncStatusRepository {
   async upsertSyncStatus(status: Omit<SyncStatus, 'id' | 'createdAt' | 'updatedAt'>): Promise<SyncStatus> {
     const syncStatus = await this.prisma.syncStatus.upsert({
       where: {
-        userUid_exchange: {
+        userUid_exchange_label: {
           userUid: status.userUid,
           exchange: status.exchange,
+          label: status.label,
         },
       },
       update: {
@@ -26,6 +27,7 @@ export class SyncStatusRepository {
       create: {
         userUid: status.userUid,
         exchange: status.exchange,
+        label: status.label,
         lastSyncTime: status.lastSyncTime,
         status: status.status as SyncStatusEnum,
         totalTrades: status.totalTrades,
@@ -36,12 +38,13 @@ export class SyncStatusRepository {
     return this.mapPrismaSyncStatusToSyncStatus(syncStatus);
   }
 
-  async getSyncStatus(userUid: string, exchange: string): Promise<SyncStatus | null> {
+  async getSyncStatus(userUid: string, exchange: string, label: string): Promise<SyncStatus | null> {
     const syncStatus = await this.prisma.syncStatus.findUnique({
       where: {
-        userUid_exchange: {
+        userUid_exchange_label: {
           userUid,
           exchange,
+          label,
         },
       },
     });
@@ -89,23 +92,25 @@ export class SyncStatusRepository {
     return syncStatuses.map(this.mapPrismaSyncStatusToSyncStatus);
   }
 
-  async deleteSyncStatus(userUid: string, exchange: string): Promise<void> {
+  async deleteSyncStatus(userUid: string, exchange: string, label: string): Promise<void> {
     await this.prisma.syncStatus.delete({
       where: {
-        userUid_exchange: {
+        userUid_exchange_label: {
           userUid,
           exchange,
+          label,
         },
       },
     });
   }
 
-  async resetSyncStatus(userUid: string, exchange: string): Promise<SyncStatus> {
+  async resetSyncStatus(userUid: string, exchange: string, label: string): Promise<SyncStatus> {
     const syncStatus = await this.prisma.syncStatus.update({
       where: {
-        userUid_exchange: {
+        userUid_exchange_label: {
           userUid,
           exchange,
+          label,
         },
       },
       data: {
@@ -124,6 +129,7 @@ export class SyncStatusRepository {
       id: prismaSyncStatus.id,
       userUid: prismaSyncStatus.userUid,
       exchange: prismaSyncStatus.exchange,
+      label: prismaSyncStatus.label,
       lastSyncTime: prismaSyncStatus.lastSyncTime || undefined,
       status: prismaSyncStatus.status as 'pending' | 'syncing' | 'completed' | 'error',
       totalTrades: prismaSyncStatus.totalTrades,

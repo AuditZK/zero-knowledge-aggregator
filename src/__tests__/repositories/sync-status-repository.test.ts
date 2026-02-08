@@ -19,6 +19,7 @@ describe('SyncStatusRepository', () => {
     id: 'sync_123',
     userUid: 'user_abc',
     exchange: 'binance',
+    label: '',
     lastSyncTime: new Date('2024-01-15'),
     status: SyncStatusEnum.completed,
     totalTrades: 100,
@@ -48,6 +49,7 @@ describe('SyncStatusRepository', () => {
       const input = {
         userUid: 'user_abc',
         exchange: 'binance',
+        label: '',
         lastSyncTime: new Date('2024-01-15'),
         status: 'completed' as const,
         totalTrades: 100,
@@ -59,9 +61,10 @@ describe('SyncStatusRepository', () => {
       expect(mockPrisma.syncStatus.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
           where: {
-            userUid_exchange: {
+            userUid_exchange_label: {
               userUid: 'user_abc',
               exchange: 'binance',
+              label: '',
             },
           },
         })
@@ -75,11 +78,11 @@ describe('SyncStatusRepository', () => {
     it('should return sync status when found', async () => {
       (mockPrisma.syncStatus.findUnique as jest.Mock).mockResolvedValue(mockSyncStatus);
 
-      const result = await repository.getSyncStatus('user_abc', 'binance');
+      const result = await repository.getSyncStatus('user_abc', 'binance', '');
 
       expect(mockPrisma.syncStatus.findUnique).toHaveBeenCalledWith({
         where: {
-          userUid_exchange: {
+          userUid_exchange_label: {
             userUid: 'user_abc',
             exchange: 'binance',
           },
@@ -92,7 +95,7 @@ describe('SyncStatusRepository', () => {
     it('should return null when not found', async () => {
       (mockPrisma.syncStatus.findUnique as jest.Mock).mockResolvedValue(null);
 
-      const result = await repository.getSyncStatus('nonexistent', 'binance');
+      const result = await repository.getSyncStatus('nonexistent', 'binance', '');
 
       expect(result).toBeNull();
     });
@@ -166,11 +169,11 @@ describe('SyncStatusRepository', () => {
     it('should delete sync status by user and exchange', async () => {
       (mockPrisma.syncStatus.delete as jest.Mock).mockResolvedValue(mockSyncStatus);
 
-      await repository.deleteSyncStatus('user_abc', 'binance');
+      await repository.deleteSyncStatus('user_abc', 'binance', '');
 
       expect(mockPrisma.syncStatus.delete).toHaveBeenCalledWith({
         where: {
-          userUid_exchange: {
+          userUid_exchange_label: {
             userUid: 'user_abc',
             exchange: 'binance',
           },
@@ -184,11 +187,11 @@ describe('SyncStatusRepository', () => {
       const resetStatus = { ...mockSyncStatus, status: SyncStatusEnum.pending, lastSyncTime: null, errorMessage: null };
       (mockPrisma.syncStatus.update as jest.Mock).mockResolvedValue(resetStatus);
 
-      const result = await repository.resetSyncStatus('user_abc', 'binance');
+      const result = await repository.resetSyncStatus('user_abc', 'binance', '');
 
       expect(mockPrisma.syncStatus.update).toHaveBeenCalledWith({
         where: {
-          userUid_exchange: {
+          userUid_exchange_label: {
             userUid: 'user_abc',
             exchange: 'binance',
           },

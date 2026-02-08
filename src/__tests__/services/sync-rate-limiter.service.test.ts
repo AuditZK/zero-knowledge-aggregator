@@ -99,7 +99,7 @@ describe('SyncRateLimiterService', () => {
 
       expect(mockPrisma.syncRateLimitLog.upsert).toHaveBeenCalledWith({
         where: {
-          userUid_exchange: { userUid, exchange },
+          userUid_exchange_label: { userUid, exchange, label: '' },
         },
         update: {
           lastSyncTime: expect.any(Date),
@@ -108,6 +108,7 @@ describe('SyncRateLimiterService', () => {
         create: {
           userUid,
           exchange,
+          label: '',
           lastSyncTime: expect.any(Date),
           syncCount: 1,
         },
@@ -160,8 +161,8 @@ describe('SyncRateLimiterService', () => {
 
     it('should return user sync statistics', async () => {
       const mockLogs = [
-        { exchange: 'binance', lastSyncTime: new Date(), syncCount: 10 },
-        { exchange: 'kraken', lastSyncTime: new Date(), syncCount: 5 },
+        { exchange: 'binance', label: '', lastSyncTime: new Date(), syncCount: 10 },
+        { exchange: 'kraken', label: '', lastSyncTime: new Date(), syncCount: 5 },
       ];
       mockPrisma.syncRateLimitLog.findMany.mockResolvedValue(mockLogs);
 
@@ -200,7 +201,7 @@ describe('SyncRateLimiterService', () => {
 
       expect(mockPrisma.syncRateLimitLog.delete).toHaveBeenCalledWith({
         where: {
-          userUid_exchange: { userUid, exchange },
+          userUid_exchange_label: { userUid, exchange, label: '' },
         },
       });
     });

@@ -115,16 +115,16 @@ export class DailySyncSchedulerService {
     }
   }
 
-  private async buildUserSnapshots(userUid: string, connections: Array<{ exchange: string }>) {
+  private async buildUserSnapshots(userUid: string, connections: Array<{ exchange: string; label: string }>) {
     const snapshots: SnapshotData[] = [];
     const failedExchanges: string[] = [];
 
     for (const connection of connections) {
-      const snapshot = await this.buildExchangeSnapshot(userUid, connection.exchange);
+      const snapshot = await this.buildExchangeSnapshot(userUid, connection.exchange, connection.label);
       if (snapshot) {
         snapshots.push(snapshot);
       } else {
-        failedExchanges.push(connection.exchange);
+        failedExchanges.push(`${connection.exchange}/${connection.label}`);
       }
       // Small delay between exchanges to avoid overwhelming APIs
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -133,17 +133,17 @@ export class DailySyncSchedulerService {
     return { snapshots, failedExchanges };
   }
 
-  private async buildExchangeSnapshot(userUid: string, exchange: string): Promise<SnapshotData | null> {
+  private async buildExchangeSnapshot(userUid: string, exchange: string, label: string): Promise<SnapshotData | null> {
     try {
-      const snapshot = await this.snapshotAggregator.buildSnapshot(userUid, exchange);
+      const snapshot = await this.snapshotAggregator.buildSnapshot(userUid, exchange, label);
       if (snapshot) {
-        logger.info(`User ${userUid}/${exchange}: Snapshot built successfully (pending atomic save)`);
+        logger.info(`User ${userUid}/${exchange}/${label}: Snapshot built successfully (pending atomic save)`);
         return snapshot;
       }
-      logger.warn(`User ${userUid}/${exchange}: No snapshot returned (no connector)`);
+      logger.warn(`User ${userUid}/${exchange}/${label}: No snapshot returned (no connector)`);
       return null;
     } catch (error) {
-      logger.error(`User ${userUid}/${exchange}: Failed to build snapshot`, error);
+      logger.error(`User ${userUid}/${exchange}/${label}: Failed to build snapshot`, error);
       return null;
     }
   }

@@ -81,6 +81,7 @@ export interface SnapshotData {
   userUid: string;
   timestamp: string; // Format: '2024-01-15T00:00:00.000Z' (DAILY snapshot timestamp at 00:00 UTC)
   exchange: string; // Exchange source (binance, bitget, ibkr, etc.)
+  label: string; // Connection label for multi-account support
 
   // Core equity tracking (CRITICAL for PnL calculation)
   totalEquity: number;        // Total account value (realized + unrealized positions)
@@ -201,6 +202,7 @@ export interface SyncStatus {
   id: string;
   userUid: string;
   exchange: string;
+  label: string;
   lastSyncTime?: Date;
   status: 'pending' | 'syncing' | 'completed' | 'error';
   totalTrades: number;
