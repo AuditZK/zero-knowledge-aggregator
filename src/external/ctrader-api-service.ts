@@ -1,4 +1,5 @@
 import { injectable } from 'tsyringe';
+import WebSocket from 'ws';
 import type { ExchangeCredentials } from '../types';
 import { getLogger } from '../utils/secure-enclave-logger';
 
@@ -7,14 +8,46 @@ const logger = getLogger('CTraderApiService');
 /**
  * cTrader Open API Service (Read-only for enclave)
  *
+ * Uses WebSocket JSON API (port 5036) for full functionality
+ * - Positions, equity, and trade history available
+ *
  * Authentication: OAuth 2.0
- * - apiKey = client_id
- * - apiSecret = client_secret
- * - passphrase = access_token (obtained via OAuth flow)
+ * - apiKey = access_token (obtained via OAuth flow)
+ * - apiSecret = refresh_token (optional)
  *
  * API Documentation: https://help.ctrader.com/open-api/
  * Rate limits: 50 req/s (non-historical), 5 req/s (historical)
  */
+
+// Payload types for cTrader Open API
+const PayloadType = {
+  // Authentication
+  PROTO_OA_APPLICATION_AUTH_REQ: 2100,
+  PROTO_OA_APPLICATION_AUTH_RES: 2101,
+  PROTO_OA_ACCOUNT_AUTH_REQ: 2102,
+  PROTO_OA_ACCOUNT_AUTH_RES: 2103,
+  // Account info
+  PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ: 2149,
+  PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_RES: 2150,
+  PROTO_OA_TRADER_REQ: 2121,
+  PROTO_OA_TRADER_RES: 2122,
+  // Positions & Orders
+  PROTO_OA_RECONCILE_REQ: 2124,
+  PROTO_OA_RECONCILE_RES: 2125,
+  // Deals (historical trades)
+  PROTO_OA_DEAL_LIST_REQ: 2133,
+  PROTO_OA_DEAL_LIST_RES: 2134,
+  // Cashflow
+  PROTO_OA_CASH_FLOW_HISTORY_LIST_REQ: 2143,
+  PROTO_OA_CASH_FLOW_HISTORY_LIST_RES: 2144,
+  // Symbols
+  PROTO_OA_SYMBOL_BY_ID_REQ: 2116,
+  PROTO_OA_SYMBOL_BY_ID_RES: 2117,
+  // Heartbeat
+  PROTO_OA_HEARTBEAT_EVENT: 51,
+  // Errors
+  PROTO_OA_ERROR_RES: 2142,
+} as const;
 
 // cTrader API response types
 export interface CTraderAccount {
@@ -33,11 +66,33 @@ export interface CTraderAccount {
   brokerTitle: string;
 }
 
+export interface CTraderTrader {
+  ctidTraderAccountId: number;
+  balance: number;
+  balanceVersion: number;
+  managerBonus: number;
+  ibBonus: number;
+  nonWithdrawableBonus: number;
+  depositAssetId: number;
+  swapFree: boolean;
+  leverageInCents: number;
+  totalMarginCalculationType: string;
+  maxLeverage: number;
+  frenchRisk: boolean;
+  traderLogin: number;
+  accountType: string;
+  brokerName: string;
+  registrationTimestamp: number;
+  isLimitedRisk: boolean;
+  limitedRiskMarginCalculationStrategy: string;
+  moneyDigits: number;
+}
+
 export interface CTraderPosition {
   positionId: number;
   tradeData: {
     symbolId: number;
-    volume: number;  // in cents (divide by 100)
+    volume: number;
     tradeSide: 'BUY' | 'SELL';
     openTimestamp: number;
     guaranteedStopLoss: boolean;
@@ -45,7 +100,7 @@ export interface CTraderPosition {
   };
   positionStatus: 'POSITION_STATUS_OPEN' | 'POSITION_STATUS_CLOSED';
   swap: number;
-  price: number;  // Entry price in cents
+  price: number;
   stopLoss?: number;
   takeProfit?: number;
   utcLastUpdateTimestamp: number;
@@ -55,21 +110,21 @@ export interface CTraderPosition {
   guaranteedStopLoss: boolean;
   usedMargin?: number;
   moneyDigits: number;
-  unrealizedGrossProfit?: number;  // in cents
-  unrealizedNetProfit?: number;    // in cents (after swap/commission)
+  unrealizedGrossProfit?: number;
+  unrealizedNetProfit?: number;
 }
 
 export interface CTraderDeal {
   dealId: number;
   orderId: number;
   positionId: number;
-  volume: number;       // in cents
-  filledVolume: number; // in cents
+  volume: number;
+  filledVolume: number;
   symbolId: number;
   createTimestamp: number;
   executionTimestamp: number;
   utcLastUpdateTimestamp: number;
-  executionPrice: number;  // in cents
+  executionPrice: number;
   tradeSide: 'BUY' | 'SELL';
   dealStatus: 'FILLED' | 'PARTIALLY_FILLED' | 'REJECTED' | 'INTERNALLY_REJECTED' | 'ERROR' | 'MISSED';
   marginRate?: number;
@@ -103,44 +158,224 @@ export interface CTraderCashflow {
   externalNote?: string;
 }
 
-// OAuth token response
-interface TokenResponse {
-  access_token: string;
-  token_type: string;
-  expires_in: number;
-  refresh_token?: string;
+interface PendingRequest {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  expectedPayloadType: number;
 }
 
 @injectable()
 export class CTraderApiService {
-  private readonly baseUrl = 'https://openapi.ctrader.com';
-  private readonly authUrl = 'https://openapi.ctrader.com/apps/auth';
+  // WebSocket endpoints for JSON API (port 5036)
+  private readonly wsLiveUrl = 'wss://live.ctraderapi.com:5036';
+  private readonly wsDemoUrl = 'wss://demo.ctraderapi.com:5036';
+  private readonly authUrl = 'https://openapi.ctrader.com/apps';
+
+  private ws: WebSocket | null = null;
   private accessToken: string;
-  private _storedRefreshToken: string; // For future auto-refresh implementation
   private readonly clientId: string;
   private readonly clientSecret: string;
   private accountId: number | null = null;
+  private isLive: boolean = true;
   private symbolCache: Map<number, CTraderSymbol> = new Map();
+  private pendingRequests: Map<string, PendingRequest> = new Map();
+  private msgIdCounter = 0;
+  private isConnected = false;
+  private isAppAuthenticated = false;
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(credentials: ExchangeCredentials) {
-    // OAuth flow from frontend sends:
-    // - apiKey = access_token
-    // - apiSecret = refresh_token
-    // - passphrase = expires_in (optional)
     if (!credentials.apiKey) {
       throw new Error('cTrader requires apiKey (access_token from OAuth)');
     }
 
     this.accessToken = credentials.apiKey;
-    // Store refresh token and client credentials for future token refresh
-    this._storedRefreshToken = credentials.apiSecret || '';
     this.clientId = process.env.CTRADER_CLIENT_ID || '';
     this.clientSecret = process.env.CTRADER_CLIENT_SECRET || '';
 
-    // Log refresh token availability for debugging (will be used for auto-refresh later)
-    if (this._storedRefreshToken) {
-      logger.debug('cTrader refresh token available for future token renewal');
+    // Determine if live or demo based on passphrase or default to live
+    this.isLive = credentials.passphrase !== 'demo';
+  }
+
+  /**
+   * Connect to cTrader WebSocket API
+   */
+  private async connect(): Promise<void> {
+    if (this.isConnected && this.ws?.readyState === WebSocket.OPEN) {
+      return;
     }
+
+    return new Promise((resolve, reject) => {
+      const url = this.isLive ? this.wsLiveUrl : this.wsDemoUrl;
+      logger.info(`Connecting to cTrader WebSocket: ${this.isLive ? 'LIVE' : 'DEMO'}`);
+
+      this.ws = new WebSocket(url);
+
+      const timeout = setTimeout(() => {
+        reject(new Error('cTrader WebSocket connection timeout'));
+        this.ws?.close();
+      }, 10000);
+
+      this.ws.on('open', () => {
+        clearTimeout(timeout);
+        this.isConnected = true;
+        logger.info('cTrader WebSocket connected');
+        this.startHeartbeat();
+        resolve();
+      });
+
+      this.ws.on('message', (data: WebSocket.Data) => {
+        this.handleMessage(data);
+      });
+
+      this.ws.on('error', (error: Error) => {
+        clearTimeout(timeout);
+        logger.error('cTrader WebSocket error', { error: String(error) });
+        reject(error);
+      });
+
+      this.ws.on('close', () => {
+        this.isConnected = false;
+        this.isAppAuthenticated = false;
+        this.stopHeartbeat();
+        logger.info('cTrader WebSocket disconnected');
+      });
+    });
+  }
+
+  /**
+   * Handle incoming WebSocket messages
+   */
+  private handleMessage(data: WebSocket.Data): void {
+    try {
+      const message = JSON.parse(data.toString());
+      const { clientMsgId, payloadType, payload } = message;
+
+      // Handle heartbeat
+      if (payloadType === PayloadType.PROTO_OA_HEARTBEAT_EVENT) {
+        return;
+      }
+
+      // Handle error responses
+      if (payloadType === PayloadType.PROTO_OA_ERROR_RES) {
+        const pending = clientMsgId ? this.pendingRequests.get(clientMsgId) : null;
+        const errorMsg = payload?.errorCode
+          ? `cTrader error ${payload.errorCode}: ${payload.description || 'Unknown error'}`
+          : 'cTrader unknown error';
+
+        if (pending) {
+          this.pendingRequests.delete(clientMsgId);
+          pending.reject(new Error(errorMsg));
+        } else {
+          logger.error('cTrader error event', { payload });
+        }
+        return;
+      }
+
+      // Handle pending request responses
+      if (clientMsgId && this.pendingRequests.has(clientMsgId)) {
+        const pending = this.pendingRequests.get(clientMsgId)!;
+        this.pendingRequests.delete(clientMsgId);
+        pending.resolve(payload);
+      }
+    } catch (error) {
+      logger.error('Failed to parse cTrader message', { error: String(error) });
+    }
+  }
+
+  /**
+   * Send a message and wait for response
+   */
+  private async sendMessage<T>(
+    payloadType: number,
+    payload: Record<string, unknown>,
+    expectedResponseType: number
+  ): Promise<T> {
+    await this.connect();
+
+    const clientMsgId = `msg_${++this.msgIdCounter}_${Date.now()}`;
+    const message = JSON.stringify({ clientMsgId, payloadType, payload });
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingRequests.delete(clientMsgId);
+        reject(new Error(`cTrader request timeout for payloadType ${payloadType}`));
+      }, 30000);
+
+      this.pendingRequests.set(clientMsgId, {
+        resolve: (value) => {
+          clearTimeout(timeout);
+          resolve(value as T);
+        },
+        reject: (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        },
+        expectedPayloadType: expectedResponseType,
+      });
+
+      this.ws!.send(message);
+    });
+  }
+
+  /**
+   * Start heartbeat to keep connection alive
+   */
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatInterval = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({
+          payloadType: PayloadType.PROTO_OA_HEARTBEAT_EVENT,
+          payload: {},
+        }));
+      }
+    }, 10000); // Send heartbeat every 10 seconds
+  }
+
+  /**
+   * Stop heartbeat
+   */
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+  }
+
+  /**
+   * Authenticate the application
+   */
+  private async authenticateApp(): Promise<void> {
+    if (this.isAppAuthenticated) return;
+
+    if (!this.clientId || !this.clientSecret) {
+      throw new Error('cTrader requires CTRADER_CLIENT_ID and CTRADER_CLIENT_SECRET environment variables');
+    }
+
+    await this.sendMessage(
+      PayloadType.PROTO_OA_APPLICATION_AUTH_REQ,
+      { clientId: this.clientId, clientSecret: this.clientSecret },
+      PayloadType.PROTO_OA_APPLICATION_AUTH_RES
+    );
+
+    this.isAppAuthenticated = true;
+    logger.info('cTrader application authenticated');
+  }
+
+  /**
+   * Authenticate a trading account
+   */
+  private async authenticateAccount(ctidTraderAccountId: number): Promise<void> {
+    await this.authenticateApp();
+
+    await this.sendMessage(
+      PayloadType.PROTO_OA_ACCOUNT_AUTH_REQ,
+      { ctidTraderAccountId, accessToken: this.accessToken },
+      PayloadType.PROTO_OA_ACCOUNT_AUTH_RES
+    );
+
+    logger.debug('cTrader account authenticated', { ctidTraderAccountId });
   }
 
   /**
@@ -151,44 +386,22 @@ export class CTraderApiService {
       const accounts = await this.getAccounts();
       return accounts.length > 0;
     } catch (error) {
-      logger.error('cTrader connection test failed', error);
+      logger.error('cTrader connection test failed', { error: String(error) });
       return false;
     }
   }
 
   /**
-   * Refresh access token using refresh token
-   * Note: Requires refresh_token flow - typically done externally
-   */
-  async refreshToken(refreshToken: string): Promise<TokenResponse> {
-    const response = await fetch(`${this.authUrl}/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        client_id: this.clientId,
-        client_secret: this.clientSecret,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Token refresh failed: ${error}`);
-    }
-
-    const tokenData = await response.json() as TokenResponse;
-    this.accessToken = tokenData.access_token;
-    return tokenData;
-  }
-
-  /**
-   * Get all trading accounts linked to cTrader ID
+   * Get all trading accounts linked to access token
    */
   async getAccounts(): Promise<CTraderAccount[]> {
-    const response = await this.makeRequest<{ ctidTraderAccount: CTraderAccount[] }>(
-      '/v2/webservices/ctid/ctraderaccounts',
-      { accessToken: this.accessToken }
+    await this.connect();
+    await this.authenticateApp();
+
+    const response = await this.sendMessage<{ ctidTraderAccount?: CTraderAccount[] }>(
+      PayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ,
+      { accessToken: this.accessToken },
+      PayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_RES
     );
 
     return response.ctidTraderAccount || [];
@@ -199,6 +412,26 @@ export class CTraderApiService {
    */
   setActiveAccount(accountId: number): void {
     this.accountId = accountId;
+  }
+
+  /**
+   * Get trader info (balance, equity data)
+   */
+  async getTraderInfo(accountId?: number): Promise<CTraderTrader> {
+    const targetAccountId = accountId || this.accountId;
+    if (!targetAccountId) {
+      throw new Error('No account ID set. Call setActiveAccount() first or provide accountId');
+    }
+
+    await this.authenticateAccount(targetAccountId);
+
+    const response = await this.sendMessage<{ trader: CTraderTrader }>(
+      PayloadType.PROTO_OA_TRADER_REQ,
+      { ctidTraderAccountId: targetAccountId },
+      PayloadType.PROTO_OA_TRADER_RES
+    );
+
+    return response.trader;
   }
 
   /**
@@ -217,39 +450,36 @@ export class CTraderApiService {
       throw new Error('No account ID set. Call setActiveAccount() first or provide accountId');
     }
 
-    // Get account details
-    const accounts = await this.getAccounts();
-    const account = accounts.find(a => a.ctidTraderAccountId === targetAccountId);
+    // Get trader info for balance
+    const trader = await this.getTraderInfo(targetAccountId);
+    const moneyDigits = trader.moneyDigits || 2;
+    const divisor = Math.pow(10, moneyDigits);
 
-    if (!account) {
-      throw new Error(`Account ${targetAccountId} not found`);
-    }
-
-    // Get open positions to calculate equity
+    // Get positions for unrealized P&L
     const positions = await this.getPositions(targetAccountId);
     const unrealizedPnl = positions.reduce((sum, pos) => {
-      return sum + (pos.unrealizedNetProfit || 0) / 100; // Convert from cents
+      return sum + (pos.unrealizedNetProfit || 0) / divisor;
     }, 0);
 
     const marginUsed = positions.reduce((sum, pos) => {
-      return sum + (pos.usedMargin || 0) / 100;
+      return sum + (pos.usedMargin || 0) / divisor;
     }, 0);
 
-    const balance = account.balance / 100; // Convert from cents
+    const balance = trader.balance / divisor;
     const equity = balance + unrealizedPnl;
 
     return {
       balance,
       equity,
       unrealizedPnl,
-      currency: 'USD', // cTrader uses deposit asset - simplified to USD
+      currency: 'USD', // Simplified - would need asset lookup for actual currency
       marginUsed,
       marginAvailable: equity - marginUsed,
     };
   }
 
   /**
-   * Get open positions
+   * Get open positions using reconcile request
    */
   async getPositions(accountId?: number): Promise<CTraderPosition[]> {
     const targetAccountId = accountId || this.accountId;
@@ -257,9 +487,12 @@ export class CTraderApiService {
       throw new Error('No account ID set');
     }
 
-    const response = await this.makeRequest<{ position: CTraderPosition[] }>(
-      `/v2/webservices/trader/${targetAccountId}/positions`,
-      { accessToken: this.accessToken }
+    await this.authenticateAccount(targetAccountId);
+
+    const response = await this.sendMessage<{ position?: CTraderPosition[] }>(
+      PayloadType.PROTO_OA_RECONCILE_REQ,
+      { ctidTraderAccountId: targetAccountId },
+      PayloadType.PROTO_OA_RECONCILE_RES
     );
 
     return response.position || [];
@@ -278,13 +511,17 @@ export class CTraderApiService {
       throw new Error('No account ID set');
     }
 
-    const response = await this.makeRequest<{ deal: CTraderDeal[] }>(
-      `/v2/webservices/trader/${targetAccountId}/deals`,
+    await this.authenticateAccount(targetAccountId);
+
+    const response = await this.sendMessage<{ deal?: CTraderDeal[] }>(
+      PayloadType.PROTO_OA_DEAL_LIST_REQ,
       {
-        accessToken: this.accessToken,
-        from: fromTimestamp.toString(),
-        to: toTimestamp.toString(),
-      }
+        ctidTraderAccountId: targetAccountId,
+        fromTimestamp,
+        toTimestamp,
+        maxRows: 1000,
+      },
+      PayloadType.PROTO_OA_DEAL_LIST_RES
     );
 
     return response.deal || [];
@@ -294,7 +531,6 @@ export class CTraderApiService {
    * Get symbol information by ID
    */
   async getSymbol(symbolId: number, accountId?: number): Promise<CTraderSymbol | null> {
-    // Check cache first
     if (this.symbolCache.has(symbolId)) {
       return this.symbolCache.get(symbolId)!;
     }
@@ -305,9 +541,12 @@ export class CTraderApiService {
     }
 
     try {
-      const response = await this.makeRequest<{ symbol: CTraderSymbol[] }>(
-        `/v2/webservices/trader/${targetAccountId}/symbols`,
-        { accessToken: this.accessToken, symbolId: symbolId.toString() }
+      await this.authenticateAccount(targetAccountId);
+
+      const response = await this.sendMessage<{ symbol?: CTraderSymbol[] }>(
+        PayloadType.PROTO_OA_SYMBOL_BY_ID_REQ,
+        { ctidTraderAccountId: targetAccountId, symbolId: [symbolId] },
+        PayloadType.PROTO_OA_SYMBOL_BY_ID_RES
       );
 
       const symbol = response.symbol?.[0];
@@ -330,7 +569,6 @@ export class CTraderApiService {
 
   /**
    * Get cash transfers (deposits/withdrawals)
-   * Note: This may require additional API access depending on broker
    */
   async getCashflows(accountId: number | undefined, since: Date): Promise<CTraderCashflow[]> {
     const targetAccountId = accountId || this.accountId;
@@ -339,47 +577,60 @@ export class CTraderApiService {
     }
 
     try {
-      const response = await this.makeRequest<{ transaction: CTraderCashflow[] }>(
-        `/v2/webservices/trader/${targetAccountId}/cashflows`,
+      await this.authenticateAccount(targetAccountId);
+
+      const response = await this.sendMessage<{ depositWithdraw?: CTraderCashflow[] }>(
+        PayloadType.PROTO_OA_CASH_FLOW_HISTORY_LIST_REQ,
         {
-          accessToken: this.accessToken,
-          from: since.getTime().toString(),
-          to: Date.now().toString(),
-        }
+          ctidTraderAccountId: targetAccountId,
+          fromTimestamp: since.getTime(),
+          toTimestamp: Date.now(),
+        },
+        PayloadType.PROTO_OA_CASH_FLOW_HISTORY_LIST_RES
       );
 
-      return response.transaction || [];
+      return response.depositWithdraw || [];
     } catch (error) {
-      // Cashflows may not be available for all brokers
       logger.warn('cTrader cashflows not available', { error: String(error) });
       return [];
     }
   }
 
   /**
-   * Make authenticated request to cTrader REST API
+   * Close WebSocket connection
    */
-  private async makeRequest<T>(
-    endpoint: string,
-    params: Record<string, string>
-  ): Promise<T> {
-    const url = new URL(`${this.baseUrl}${endpoint}`);
-    Object.entries(params).forEach(([key, value]) => {
-      url.searchParams.append(key, value);
-    });
+  disconnect(): void {
+    this.stopHeartbeat();
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+    this.isConnected = false;
+    this.isAppAuthenticated = false;
+  }
 
-    const response = await fetch(url.toString(), {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-      },
+  /**
+   * Refresh access token using refresh token
+   */
+  async refreshToken(refreshToken: string): Promise<{ access_token: string; expires_in: number }> {
+    const response = await fetch(`${this.authUrl}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: this.clientId,
+        client_secret: this.clientSecret,
+      }),
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`cTrader API error ${response.status}: ${errorText}`);
+      const error = await response.text();
+      throw new Error(`Token refresh failed: ${error}`);
     }
 
-    return response.json() as Promise<T>;
+    const tokenData = await response.json() as { access_token: string; expires_in: number };
+    this.accessToken = tokenData.access_token;
+    return tokenData;
   }
 }
