@@ -130,7 +130,7 @@ describe('ExchangeConnectionRepository', () => {
       };
 
       await expect(repository.createConnection(credentials)).rejects.toThrow(
-        'Exchange binance is already connected'
+        'Exchange binance with label "Duplicate" is already connected'
       );
     });
   });
