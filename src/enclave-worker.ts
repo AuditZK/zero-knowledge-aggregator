@@ -127,30 +127,31 @@ export class EnclaveWorker {
     exchange?: string
   ): Promise<SyncJobResponse | null> {
     const connectionsResult = await this.exchangeConnectionRepo.getConnectionsByUser(userUid, true);
-    const exchanges = exchange
-      ? [exchange]
-      : (connectionsResult ?? []).map(conn => conn.exchange);
+    const connections = exchange
+      ? (connectionsResult ?? []).filter(conn => conn.exchange === exchange)
+      : (connectionsResult ?? []);
 
-    // Check if snapshots exist for any exchange
-    for (const ex of exchanges) {
-      const existingSnapshot = await this.snapshotDataRepo.getLatestSnapshotData(userUid, ex);
+    // Check if snapshots exist for any connection
+    for (const conn of connections) {
+      const existingSnapshot = await this.snapshotDataRepo.getLatestSnapshotData(userUid, conn.exchange);
 
       if (existingSnapshot) {
         const lastSnapshotTime = new Date(existingSnapshot.timestamp).toISOString();
 
         logger.warn('Manual sync blocked - automatic snapshots already initialized', {
           userUid,
-          exchange: ex,
+          exchange: conn.exchange,
+          label: conn.label,
           latestSnapshot: lastSnapshotTime
         });
 
         return {
           success: false,
           userUid,
-          exchange: ex,
+          exchange: conn.exchange,
           synced: 0,
           snapshotsGenerated: 0,
-          error: `Manual sync disabled for ${ex}. Automatic daily snapshots are active (last snapshot: ${lastSnapshotTime}). All subsequent snapshots are created automatically at 00:00 UTC.`
+          error: `Manual sync disabled for ${conn.exchange}/${conn.label}. Automatic daily snapshots are active (last snapshot: ${lastSnapshotTime}). All subsequent snapshots are created automatically at 00:00 UTC.`
         };
       }
     }
@@ -172,49 +173,49 @@ export class EnclaveWorker {
     let snapshotsCount = 0;
     let latestSnapshot: SnapshotData | null = null;
 
-    // Get all exchanges for the user if not specified
-    const exchanges = exchange
-      ? [exchange]
-      : ((await this.exchangeConnectionRepo.getConnectionsByUser(userUid, true)) ?? [])
-          .map(conn => conn.exchange);
+    // Get all connections for the user (each connection = exchange + label)
+    const allConnections = (await this.exchangeConnectionRepo.getConnectionsByUser(userUid, true)) ?? [];
+    const connections = exchange
+      ? allConnections.filter(conn => conn.exchange === exchange)
+      : allConnections;
 
-    for (const ex of exchanges) {
+    for (const conn of connections) {
       try {
         // For IBKR: Backfill historical data on FIRST sync only
         // IBKR Flex provides 365 days of daily equity data
-        if (ex.toLowerCase() === 'ibkr') {
-          const existingSnapshots = await this.snapshotDataRepo.getSnapshotData(userUid, undefined, undefined, ex);
+        if (conn.exchange.toLowerCase() === 'ibkr') {
+          const existingSnapshots = await this.snapshotDataRepo.getSnapshotData(userUid, undefined, undefined, conn.exchange);
           const snapshotCount = existingSnapshots?.length || 0;
 
           if (snapshotCount === 0) {
             logger.info(`IBKR first sync: running historical backfill from Flex data`, {
-              userUid, exchange: ex
+              userUid, exchange: conn.exchange, label: conn.label
             });
-            await this.equitySnapshotAggregator.backfillIbkrHistoricalSnapshots(userUid, ex);
+            await this.equitySnapshotAggregator.backfillIbkrHistoricalSnapshots(userUid, conn.exchange, conn.label);
 
             // Count backfilled snapshots
-            const newSnapshots = await this.snapshotDataRepo.getSnapshotData(userUid, undefined, undefined, ex);
+            const newSnapshots = await this.snapshotDataRepo.getSnapshotData(userUid, undefined, undefined, conn.exchange);
             snapshotsCount += newSnapshots?.length || 0;
           }
         }
 
         // Update current snapshot
-        await this.equitySnapshotAggregator.updateCurrentSnapshot(userUid, ex);
+        await this.equitySnapshotAggregator.updateCurrentSnapshot(userUid, conn.exchange, conn.label);
         snapshotsCount += 1;
 
         // Get the latest snapshot for response
-        const snapshot = await this.snapshotDataRepo.getLatestSnapshotData(userUid, ex);
+        const snapshot = await this.snapshotDataRepo.getLatestSnapshotData(userUid, conn.exchange);
         if (snapshot && (!latestSnapshot || new Date(snapshot.timestamp) > new Date(latestSnapshot.timestamp))) {
           latestSnapshot = snapshot;
         }
 
-        logger.info(`Snapshot updated for ${userUid}/${ex}`, { snapshotsCount });
+        logger.info(`Snapshot updated for ${userUid}/${conn.exchange}/${conn.label}`, { snapshotsCount });
       } catch (error: unknown) {
         const errorMessage = extractErrorMessage(error);
-        logger.error(`Failed to update snapshot for ${userUid}/${ex}`, {
+        logger.error(`Failed to update snapshot for ${userUid}/${conn.exchange}/${conn.label}`, {
           error: errorMessage
         });
-        // Continue with other exchanges
+        // Continue with other connections
       }
     }
 
@@ -310,11 +311,11 @@ export class EnclaveWorker {
     totalTrades: number;
     lastSync: Date | null;
   }> {
-    // Get exchanges to aggregate
-    const exchanges = exchange
-      ? [exchange]
-      : ((await this.exchangeConnectionRepo.getConnectionsByUser(userUid, true)) ?? [])
-          .map(conn => conn.exchange);
+    // Get all connections to aggregate (each connection = exchange + label)
+    const allConnections = (await this.exchangeConnectionRepo.getConnectionsByUser(userUid, true)) ?? [];
+    const connections = exchange
+      ? allConnections.filter(conn => conn.exchange === exchange)
+      : allConnections;
 
     let totalBalance = 0;
     let totalEquity = 0;
@@ -324,8 +325,8 @@ export class EnclaveWorker {
     let totalTrades = 0;
     let lastSync: Date | null = null;
 
-    for (const ex of exchanges) {
-      const snapshot = await this.snapshotDataRepo.getLatestSnapshotData(userUid, ex);
+    for (const conn of connections) {
+      const snapshot = await this.snapshotDataRepo.getLatestSnapshotData(userUid, conn.exchange, conn.label);
       if (snapshot) {
         totalBalance += snapshot.realizedBalance;
         totalEquity += snapshot.totalEquity;

@@ -63,7 +63,9 @@ model SnapshotData {
 
   user User @relation(fields: [userUid], references: [uid], onDelete: Cascade)
 
-  @@unique([userUid, timestamp, exchange])
+  label      String   @default("") // Connection label for multi-account support
+
+  @@unique([userUid, timestamp, exchange, label])
   @@index([userUid, timestamp])
   @@index([exchange, timestamp])
   @@map("snapshot_data")
@@ -86,7 +88,7 @@ model ExchangeConnection {
 
   user User @relation(fields: [userUid], references: [uid], onDelete: Cascade)
 
-  @@unique([userUid, exchange])
+  @@unique([userUid, exchange, label])
   @@index([userUid, exchange])
   @@map("exchange_connections")
 }
@@ -96,6 +98,7 @@ model SyncStatus {
   id                    String           @id @default(cuid())
   userUid               String
   exchange              String
+  label                 String           @default("")
   lastSyncTime          DateTime?
   status                SyncStatusEnum   @default(pending)
   totalTrades           Int              @default(0)
@@ -105,7 +108,7 @@ model SyncStatus {
 
   user User @relation(fields: [userUid], references: [uid], onDelete: Cascade)
 
-  @@unique([userUid, exchange])
+  @@unique([userUid, exchange, label])
   @@map("sync_statuses")
 }
 
@@ -115,12 +118,13 @@ model SyncRateLimitLog {
   id            String   @id @default(cuid())
   userUid       String
   exchange      String
+  label         String   @default("")
   lastSyncTime  DateTime // Timestamp of last successful sync
   syncCount     Int      @default(1) // Total number of syncs performed
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  @@unique([userUid, exchange])
+  @@unique([userUid, exchange, label])
   @@index([lastSyncTime]) // For cleanup queries
   @@map("sync_rate_limit_logs")
 }

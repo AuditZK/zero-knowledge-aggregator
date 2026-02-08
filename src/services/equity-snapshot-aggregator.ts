@@ -101,28 +101,29 @@ export class EquitySnapshotAggregator {
     return classified;
   }
 
-  async updateCurrentSnapshot(userUid: string, exchange: string): Promise<void> {
-    const snapshot = await this.buildSnapshot(userUid, exchange);
+  async updateCurrentSnapshot(userUid: string, exchange: string, label: string = ''): Promise<void> {
+    const snapshot = await this.buildSnapshot(userUid, exchange, label);
     if (!snapshot) {
       return;
     }
     await this.snapshotDataRepo.upsertSnapshotData(snapshot);
-    logger.info(`Updated snapshot for ${userUid} on ${exchange}: equity=${snapshot.totalEquity.toFixed(2)}, realized=${snapshot.realizedBalance.toFixed(2)}, unrealized=${snapshot.unrealizedPnL.toFixed(2)}`);
+    logger.info(`Updated snapshot for ${userUid} on ${exchange}/${label}: equity=${snapshot.totalEquity.toFixed(2)}, realized=${snapshot.realizedBalance.toFixed(2)}, unrealized=${snapshot.unrealizedPnL.toFixed(2)}`);
   }
 
   /** Build snapshot in memory (no DB save). For atomic multi-exchange sync. */
-  async buildSnapshot(userUid: string, exchange: string): Promise<SnapshotData | null> {
+  async buildSnapshot(userUid: string, exchange: string, label: string = ''): Promise<SnapshotData | null> {
     try {
       const { connector, currentSnapshot } = await this.getConnectorAndSnapshotTime(
         userUid,
-        exchange
+        exchange,
+        label
       );
       if (!connector) {
         logger.warn(`No connector found for ${userUid}/${exchange}`);
         return null;
       }
 
-      const { balancesByMarket, globalEquity: rawEquity, globalMargin, filteredTypes } =
+      const { balancesByMarket, globalEquity: rawEquity, globalMargin, globalMarginUsed, filteredTypes } =
         await this.fetchBalancesByMarket(connector, exchange);
 
       // Ensure globalEquity is always a valid number (protection against NaN/undefined from API)
@@ -145,7 +146,8 @@ export class EquitySnapshotAggregator {
         tradesByMarket,
         totalFundingFees,
         globalEquity,
-        globalMargin
+        globalMargin,
+        globalMarginUsed
       );
 
       const rawUnrealizedPnl = await this.calculateUnrealizedPnl(connector, balancesByMarket);
@@ -153,10 +155,11 @@ export class EquitySnapshotAggregator {
       const totalRealizedBalance = globalEquity - totalUnrealizedPnl;
 
       const snapshot: SnapshotData = {
-        id: `${userUid}-${exchange}-${currentSnapshot.toISOString()}`,
+        id: `${userUid}-${exchange}-${label}-${currentSnapshot.toISOString()}`,
         userUid,
         timestamp: currentSnapshot.toISOString(),
         exchange,
+        label,
         totalEquity: globalEquity,
         realizedBalance: totalRealizedBalance,
         unrealizedPnL: totalUnrealizedPnl,
@@ -167,16 +170,16 @@ export class EquitySnapshotAggregator {
         updatedAt: new Date()
       };
 
-      logger.info(`Built snapshot for ${userUid} on ${exchange}: equity=${globalEquity.toFixed(2)}, realized=${totalRealizedBalance.toFixed(2)}, unrealized=${totalUnrealizedPnl.toFixed(2)}, markets=${Object.keys(breakdown).length - 1}`);
+      logger.info(`Built snapshot for ${userUid} on ${exchange}/${label}: equity=${globalEquity.toFixed(2)}, realized=${totalRealizedBalance.toFixed(2)}, unrealized=${totalUnrealizedPnl.toFixed(2)}, markets=${Object.keys(breakdown).length - 1}`);
 
       return snapshot;
     } catch (error) {
-      logger.error(`Failed to build snapshot for ${userUid}/${exchange}`, error);
+      logger.error(`Failed to build snapshot for ${userUid}/${exchange}/${label}`, error);
       throw error;
     }
   }
 
-  private async getConnectorAndSnapshotTime(userUid: string, exchange: string) {
+  private async getConnectorAndSnapshotTime(userUid: string, exchange: string, label: string = '') {
     const user = await this.userRepo.getUserByUid(userUid);
     if (!user) {
       logger.error(`User ${userUid} not found`);
@@ -186,12 +189,12 @@ export class EquitySnapshotAggregator {
     const syncInterval = user.syncIntervalMinutes || 60;
     const currentSnapshot = roundToInterval(new Date(), syncInterval);
     const connections = (await this.connectionRepo.getConnectionsByUser(userUid)) ?? [];
-    const connection = connections.find(c => c.exchange === exchange && c.isActive);
+    const connection = connections.find(c => c.exchange === exchange && c.label === label && c.isActive);
 
     if (!connection) {
-      logger.error(`No active connection found for ${exchange}`, {
+      logger.error(`No active connection found for ${exchange}/${label}`, {
         userUid,
-        availableExchanges: connections.map(c => c.exchange)
+        availableConnections: connections.map(c => `${c.exchange}/${c.label}`)
       });
       return { connector: null, syncInterval, currentSnapshot };
     }
@@ -219,13 +222,14 @@ export class EquitySnapshotAggregator {
       return this.fetchBasicBalance(connector);
     }
 
-    return { balancesByMarket: {}, globalEquity: 0, globalMargin: 0, filteredTypes: [] as MarketType[] };
+    return { balancesByMarket: {}, globalEquity: 0, globalMargin: 0, globalMarginUsed: 0, filteredTypes: [] as MarketType[] };
   }
 
   private async fetchCcxtBalances(connector: ExtendedConnector & { detectMarketTypes: () => Promise<string[]>; getBalanceByMarket: (type: string) => Promise<unknown> }, exchange: string) {
     const balancesByMarket: Record<string, MarketBalanceBreakdown> = {};
     let globalEquity = 0;
     let globalMargin = 0;
+    let globalMarginUsed = 0;
 
     const marketTypes = await connector.detectMarketTypes();
     const filteredTypes = getFilteredMarketTypes(exchange, marketTypes as MarketType[]);
@@ -241,11 +245,17 @@ export class EquitySnapshotAggregator {
       if (result.status !== 'fulfilled') continue;
 
       const { marketType, data } = result.value;
-      const typedData = data as { equity: number; available_margin?: number };
+      const typedData = data as { equity: number; available_margin?: number; margin_used?: number };
       if (typedData.equity > 0) {
-        balancesByMarket[marketType] = { totalEquityUsd: typedData.equity, unrealizedPnl: 0 };
+        balancesByMarket[marketType] = {
+          totalEquityUsd: typedData.equity,
+          unrealizedPnl: 0,
+          availableBalance: typedData.available_margin,
+          usedMargin: typedData.margin_used,
+        };
         globalEquity += typedData.equity;
         globalMargin += typedData.available_margin || 0;
+        globalMarginUsed += typedData.margin_used || 0;
       }
     }
 
@@ -256,7 +266,7 @@ export class EquitySnapshotAggregator {
       globalEquity += earnResult.equity;
     }
 
-    return { balancesByMarket, globalEquity, globalMargin, filteredTypes };
+    return { balancesByMarket, globalEquity, globalMargin, globalMarginUsed, filteredTypes };
   }
 
   private async fetchEarnBalance(connector: ExtendedConnector): Promise<{ breakdown: MarketBalanceBreakdown; equity: number } | null> {
@@ -281,13 +291,15 @@ export class EquitySnapshotAggregator {
     const balancesByMarket: Record<string, MarketBalanceBreakdown> = {};
     let globalEquity = 0;
     let globalMargin = 0;
+    let globalMarginUsed = 0;
 
     const breakdown = await connector.getBalanceBreakdown();
 
     if (breakdown.global) {
-      const global = breakdown.global as { equity?: number; totalEquityUsd?: number; available_margin?: number; availableBalance?: number };
+      const global = breakdown.global as { equity?: number; totalEquityUsd?: number; available_margin?: number; availableBalance?: number; usedMargin?: number };
       globalEquity = global.equity || global.totalEquityUsd || 0;
       globalMargin = global.available_margin || global.availableBalance || 0;
+      globalMarginUsed = global.usedMargin || 0;
     }
 
     for (const [marketType, marketData] of Object.entries(breakdown)) {
@@ -297,7 +309,7 @@ export class EquitySnapshotAggregator {
       }
     }
 
-    return { balancesByMarket, globalEquity, globalMargin, filteredTypes: Object.keys(balancesByMarket) as MarketType[] };
+    return { balancesByMarket, globalEquity, globalMargin, globalMarginUsed, filteredTypes: Object.keys(balancesByMarket) as MarketType[] };
   }
 
   private convertBreakdownToMarketBalance(marketData: unknown): MarketBalanceBreakdown | null {
@@ -329,17 +341,20 @@ export class EquitySnapshotAggregator {
 
   private async fetchBasicBalance(connector: ExtendedConnector & { getBalance: () => Promise<unknown> }) {
     const balanceData = await connector.getBalance();
-    const typedBalanceData = balanceData as { equity: number; unrealizedPnl?: number };
+    const typedBalanceData = balanceData as { equity: number; unrealizedPnl?: number; marginUsed?: number; marginAvailable?: number };
 
     return {
       balancesByMarket: {
         global: {
           totalEquityUsd: typedBalanceData.equity,
-          unrealizedPnl: typedBalanceData.unrealizedPnl || 0
+          unrealizedPnl: typedBalanceData.unrealizedPnl || 0,
+          usedMargin: typedBalanceData.marginUsed,
+          availableBalance: typedBalanceData.marginAvailable,
         }
       } as Record<string, MarketBalanceBreakdown>,
       globalEquity: typedBalanceData.equity,
-      globalMargin: 0,
+      globalMargin: typedBalanceData.marginAvailable || 0,
+      globalMarginUsed: typedBalanceData.marginUsed || 0,
       filteredTypes: ['global' as MarketType]
     };
   }
@@ -484,7 +499,8 @@ export class EquitySnapshotAggregator {
     tradesByMarket: Record<string, MarketTrade[]>,
     totalFundingFees: number,
     globalEquity: number,
-    globalMargin: number
+    globalMargin: number,
+    globalMarginUsed: number = 0
   ): BreakdownByMarket {
     const breakdown: BreakdownByMarket = {};
 
@@ -536,6 +552,7 @@ export class EquitySnapshotAggregator {
     breakdown.global = {
       totalEquityUsd: globalEquity,
       availableBalance: globalMargin,
+      usedMargin: globalMarginUsed,
       unrealizedPnl: 0,
       // snake_case aliases
       equity: globalEquity,
@@ -578,11 +595,11 @@ export class EquitySnapshotAggregator {
     return totalUnrealizedPnl;
   }
 
-  async backfillIbkrHistoricalSnapshots(userUid: string, exchange: string): Promise<void> {
+  async backfillIbkrHistoricalSnapshots(userUid: string, exchange: string, label: string = ''): Promise<void> {
     if (exchange !== 'ibkr') {return;}
     try {
       const connections = (await this.connectionRepo.getConnectionsByUser(userUid)) ?? [];
-      const connection = connections.find(c => c.exchange === exchange && c.isActive);
+      const connection = connections.find(c => c.exchange === exchange && c.label === label && c.isActive);
       if (!connection) {return;}
       const credentials = await this.connectionRepo.getDecryptedCredentials(connection.id);
       if (!credentials) {return;}
@@ -611,6 +628,7 @@ export class EquitySnapshotAggregator {
         await this.snapshotDataRepo.upsertSnapshotData({
           userUid,
           exchange,
+          label,
           timestamp: snapshotDate.toISOString(),
           totalEquity: globalEquity,
           realizedBalance: realizedBalance,

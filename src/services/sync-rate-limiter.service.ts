@@ -15,45 +15,38 @@ export class SyncRateLimiterService {
   ) {}
 
   /**
-   * Check if a sync is allowed for the given user/exchange combination
-   *
-   * @param userUid - User identifier
-   * @param exchange - Exchange name (e.g., 'binance', 'ibkr')
-   * @returns Object with { allowed: boolean, reason?: string, nextAllowedTime?: Date }
+   * Check if a sync is allowed for the given user/exchange/label combination
    */
   async checkRateLimit(
     userUid: string,
     exchange: string,
+    label: string = '',
   ): Promise<{ allowed: boolean; reason?: string; nextAllowedTime?: Date }> {
     try {
-      // Get last sync time for this user/exchange
       const lastSync = await this.prisma.syncRateLimitLog.findUnique({
         where: {
-          userUid_exchange: {
+          userUid_exchange_label: {
             userUid,
             exchange,
+            label,
           },
         },
       });
 
       if (!lastSync) {
-        // First sync for this user/exchange - always allowed
-        logger.info(`Rate limit check PASSED for ${userUid}/${exchange} (first sync)`);
+        logger.info(`Rate limit check PASSED for ${userUid}/${exchange}/${label} (first sync)`);
         return { allowed: true };
       }
 
-      // Calculate time since last sync
       const now = new Date();
       const timeSinceLastSync = now.getTime() - lastSync.lastSyncTime.getTime();
       const hoursSinceLastSync = timeSinceLastSync / (1000 * 60 * 60);
 
-      // Check if cooldown period has passed
       if (hoursSinceLastSync >= this.RATE_LIMIT_HOURS) {
-        logger.info(`Rate limit check PASSED for ${userUid}/${exchange} (${hoursSinceLastSync.toFixed(1)}h since last sync)`);
+        logger.info(`Rate limit check PASSED for ${userUid}/${exchange}/${label} (${hoursSinceLastSync.toFixed(1)}h since last sync)`);
         return { allowed: true };
       }
 
-      // Rate limit exceeded - calculate next allowed time
       const nextAllowedTime = new Date(
         lastSync.lastSyncTime.getTime() + (this.RATE_LIMIT_HOURS * 60 * 60 * 1000)
       );
@@ -61,7 +54,7 @@ export class SyncRateLimiterService {
       const hoursRemaining = (this.RATE_LIMIT_HOURS - hoursSinceLastSync).toFixed(1);
       const reason = `Rate limit exceeded. Last sync was ${hoursSinceLastSync.toFixed(1)}h ago. Please wait ${hoursRemaining}h before next sync. Next allowed time: ${nextAllowedTime.toISOString()}`;
 
-      logger.warn(`Rate limit check FAILED for ${userUid}/${exchange}: ${reason}`);
+      logger.warn(`Rate limit check FAILED for ${userUid}/${exchange}/${label}: ${reason}`);
 
       return {
         allowed: false,
@@ -69,25 +62,22 @@ export class SyncRateLimiterService {
         nextAllowedTime,
       };
     } catch (error) {
-      logger.error(`Rate limit check error for ${userUid}/${exchange}`, error);
-      // On error, allow sync (fail-open for availability)
+      logger.error(`Rate limit check error for ${userUid}/${exchange}/${label}`, error);
       return { allowed: true };
     }
   }
 
   /**
    * Record a successful sync operation
-   *
-   * @param userUid - User identifier
-   * @param exchange - Exchange name
    */
-  async recordSync(userUid: string, exchange: string): Promise<void> {
+  async recordSync(userUid: string, exchange: string, label: string = ''): Promise<void> {
     try {
       await this.prisma.syncRateLimitLog.upsert({
         where: {
-          userUid_exchange: {
+          userUid_exchange_label: {
             userUid,
             exchange,
+            label,
           },
         },
         update: {
@@ -97,20 +87,20 @@ export class SyncRateLimiterService {
         create: {
           userUid,
           exchange,
+          label,
           lastSyncTime: new Date(),
           syncCount: 1,
         },
       });
 
-      logger.info(`Recorded sync for ${userUid}/${exchange}`);
+      logger.info(`Recorded sync for ${userUid}/${exchange}/${label}`);
     } catch (error) {
-      logger.error(`Failed to record sync for ${userUid}/${exchange}`, error);
+      logger.error(`Failed to record sync for ${userUid}/${exchange}/${label}`, error);
     }
   }
 
   /**
    * Clean up old rate limit logs (for privacy and database hygiene)
-   * Should be called periodically (e.g., daily cron job)
    */
   async cleanupOldLogs(): Promise<number> {
     try {
@@ -139,12 +129,10 @@ export class SyncRateLimiterService {
 
   /**
    * Get rate limit statistics for a user
-   *
-   * @param userUid - User identifier
-   * @returns Array of sync logs with exchange, last sync time, and total sync count
    */
   async getUserRateLimitStats(userUid: string): Promise<Array<{
     exchange: string;
+    label: string;
     lastSyncTime: Date;
     syncCount: number;
   }>> {
@@ -156,6 +144,7 @@ export class SyncRateLimiterService {
 
       return logs.map(log => ({
         exchange: log.exchange,
+        label: log.label,
         lastSyncTime: log.lastSyncTime,
         syncCount: log.syncCount,
       }));
@@ -167,24 +156,22 @@ export class SyncRateLimiterService {
 
   /**
    * Override rate limit for emergency manual sync (admin use only)
-   *
-   * @param userUid - User identifier
-   * @param exchange - Exchange name
    */
-  async overrideRateLimit(userUid: string, exchange: string): Promise<void> {
+  async overrideRateLimit(userUid: string, exchange: string, label: string = ''): Promise<void> {
     try {
       await this.prisma.syncRateLimitLog.delete({
         where: {
-          userUid_exchange: {
+          userUid_exchange_label: {
             userUid,
             exchange,
+            label,
           },
         },
       });
 
-      logger.warn(`Rate limit OVERRIDDEN for ${userUid}/${exchange} (manual admin action)`);
+      logger.warn(`Rate limit OVERRIDDEN for ${userUid}/${exchange}/${label} (manual admin action)`);
     } catch (error) {
-      logger.error(`Failed to override rate limit for ${userUid}/${exchange}`, error);
+      logger.error(`Failed to override rate limit for ${userUid}/${exchange}/${label}`, error);
     }
   }
 }
