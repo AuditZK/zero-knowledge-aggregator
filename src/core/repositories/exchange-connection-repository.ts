@@ -52,7 +52,7 @@ export class ExchangeConnectionRepository {
       // Handle unique constraint violation (P2002)
       const prismaError = error as PrismaError;
       if (prismaError.code === 'P2002') {
-        throw new Error(`Exchange ${credentials.exchange} is already connected`);
+        throw new Error(`Exchange ${credentials.exchange} with label "${credentials.label}" is already connected`);
       }
       throw error;
     }
