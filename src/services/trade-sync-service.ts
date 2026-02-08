@@ -101,6 +101,7 @@ export class TradeSyncService {
     await this.syncStatusRepo.upsertSyncStatus({
       userUid,
       exchange: credentials.exchange,
+      label: credentials.label || '',
       lastSyncTime: new Date(),
       status: 'syncing',
       totalTrades: 0,
@@ -119,6 +120,7 @@ export class TradeSyncService {
       await this.syncStatusRepo.upsertSyncStatus({
         userUid,
         exchange: credentials.exchange,
+        label: credentials.label || '',
         lastSyncTime: new Date(),
         status: 'completed',
         totalTrades: tradeCount,
@@ -131,6 +133,7 @@ export class TradeSyncService {
       await this.syncStatusRepo.upsertSyncStatus({
         userUid,
         exchange: credentials.exchange,
+        label: credentials.label || '',
         lastSyncTime: new Date(),
         status: 'error',
         totalTrades: 0,
@@ -231,6 +234,7 @@ export class TradeSyncService {
       await this.syncStatusRepo.upsertSyncStatus({
         userUid,
         exchange,
+        label: label || '',
         lastSyncTime: undefined,
         status: 'pending',
         totalTrades: 0,
