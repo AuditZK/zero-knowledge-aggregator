@@ -4,6 +4,7 @@ import 'reflect-metadata';
 import { setupEnclaveContainer, verifyEnclaveIsolation } from './config/enclave-container';
 import { startEnclaveServer } from './enclave-server';
 import { connectWithRetry } from './config/prisma';
+import { runStartupMigrations } from './core/services/pg-startup-migrations';
 import { getLogger } from './utils/secure-enclave-logger';
 import { MemoryProtectionService } from './services/memory-protection.service';
 
@@ -78,6 +79,9 @@ const startEnclave = async () => {
       const { client, snapshotCount } = await connectWithRetry();
       prisma = client;
       logger.info('Database connected', { snapshotCount });
+
+      // 6b. Startup migrations (idempotent schema fixes)
+      await runStartupMigrations(prisma);
     } catch (error) {
       logger.error('Database connection failed after all retries (~1 hour)', error);
       process.exit(1);
