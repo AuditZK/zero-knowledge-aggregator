@@ -68,16 +68,25 @@ async function migrateMultiAccountConstraints(prisma: PrismaClient): Promise<voi
       } else if (newExists) {
         logger.debug(`Constraint ${newConstraint} already exists on ${table} — skipping`);
       }
-    } catch (error) {
-      logger.error(`Failed to migrate constraint on ${table}`, error);
-      throw error;
+    } catch (error: any) {
+      // 42P07 = relation already exists (constraint/index already present)
+      if (error?.meta?.message?.includes('42P07') || error?.code === 'P2010') {
+        logger.info(`Constraint ${newConstraint} already exists on ${table} (as index) — skipping`);
+      } else {
+        logger.error(`Failed to migrate constraint on ${table}`, error);
+        throw error;
+      }
     }
   }
 }
 
 async function constraintExists(prisma: PrismaClient, constraintName: string): Promise<boolean> {
   const result = await prisma.$queryRaw<{ count: bigint }[]>`
-    SELECT COUNT(*)::bigint as count FROM pg_constraint WHERE conname = ${constraintName}
+    SELECT COUNT(*)::bigint as count FROM (
+      SELECT conname AS name FROM pg_constraint WHERE conname = ${constraintName}
+      UNION
+      SELECT relname AS name FROM pg_class WHERE relname = ${constraintName} AND relkind = 'i'
+    ) combined
   `;
   return Number(result[0]?.count ?? 0) > 0;
 }
