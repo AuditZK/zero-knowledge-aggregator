@@ -72,11 +72,12 @@ export class EnclaveWorker {
       logger.info('Processing sync job request', { userUid, exchange });
 
       // SECURITY: Block manual syncs after initialization
-      const blockError = await this.checkManualSyncAllowed(userUid, exchange);
-      if (blockError) {
-        logger.warn('Manual sync blocked - automatic snapshots already initialized', { userUid, exchange });
-        return blockError;
-      }
+      // TEMP: Disabled for emergency snapshot recovery (re-enable after use)
+      // const blockError = await this.checkManualSyncAllowed(userUid, exchange);
+      // if (blockError) {
+      //   logger.warn('Manual sync blocked - automatic snapshots already initialized', { userUid, exchange });
+      //   return blockError;
+      // }
 
       // Step 1: Sync today's trades from exchanges (for metrics: volume, fees, orders)
       const syncResult = await this.tradeSyncService.syncUserTrades(userUid);
