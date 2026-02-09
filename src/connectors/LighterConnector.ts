@@ -250,7 +250,7 @@ export class LighterConnector extends CryptoExchangeConnector {
       throw new Error('Lighter account not found for this wallet address');
     }
 
-    const account = response.accounts[0];
+    const account = response.accounts[0]!;
     this.accountIndex = account.index;
     return account;
   }
