@@ -126,10 +126,36 @@ export class EnclaveWorker {
     userUid: string,
     exchange?: string
   ): Promise<SyncJobResponse | null> {
-    // TEMP: Bypass for emergency snapshot recovery
-    // TODO: Restore anti-cherry-picking check after emergency sync
-    void userUid;
-    void exchange;
+    const connectionsResult = await this.exchangeConnectionRepo.getConnectionsByUser(userUid, true);
+    const connections = exchange
+      ? (connectionsResult ?? []).filter(conn => conn.exchange === exchange)
+      : (connectionsResult ?? []);
+
+    // Check if snapshots exist for any connection
+    for (const conn of connections) {
+      const existingSnapshot = await this.snapshotDataRepo.getLatestSnapshotData(userUid, conn.exchange);
+
+      if (existingSnapshot) {
+        const lastSnapshotTime = new Date(existingSnapshot.timestamp).toISOString();
+
+        logger.warn('Manual sync blocked - automatic snapshots already initialized', {
+          userUid,
+          exchange: conn.exchange,
+          label: conn.label,
+          latestSnapshot: lastSnapshotTime
+        });
+
+        return {
+          success: false,
+          userUid,
+          exchange: conn.exchange,
+          synced: 0,
+          snapshotsGenerated: 0,
+          error: `Manual sync disabled for ${conn.exchange}/${conn.label}. Automatic daily snapshots are active (last snapshot: ${lastSnapshotTime}). All subsequent snapshots are created automatically at 00:00 UTC.`
+        };
+      }
+    }
+
     return null;
   }
 
