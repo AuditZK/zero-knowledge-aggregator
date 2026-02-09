@@ -55,6 +55,7 @@ export interface SnapshotBreakdown {
 export interface MarketBalanceData {
   equity: number;
   available_margin?: number;
+  margin_used?: number;
 }
 
 /**

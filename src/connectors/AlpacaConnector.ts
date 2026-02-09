@@ -58,12 +58,17 @@ export class AlpacaConnector extends RestBrokerConnector {
 
       const cash = this.parseFloat(accountInfo.cash);
       const portfolioValue = this.parseFloat(accountInfo.portfolio_value);
+      const initialMargin = this.parseFloat(accountInfo.initial_margin);
+      const buyingPower = this.parseFloat(accountInfo.buying_power);
 
-      return this.createBalanceData(
-        cash,
-        portfolioValue,
-        accountInfo.currency || this.defaultCurrency
-      );
+      return {
+        balance: cash,
+        equity: portfolioValue,
+        unrealizedPnl: portfolioValue - cash,
+        currency: accountInfo.currency || this.defaultCurrency,
+        marginUsed: initialMargin,
+        marginAvailable: buyingPower,
+      };
     });
   }
 

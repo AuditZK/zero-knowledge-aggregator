@@ -330,6 +330,8 @@ export class TradeStationApiService {
     totalEquity: number;
     totalCash: number;
     totalUnrealizedPnl: number;
+    totalMarketValue: number;
+    totalBuyingPower: number;
     currency: string;
     accounts: TradeStationAccount[];
   } | null> {
@@ -345,17 +347,23 @@ export class TradeStationApiService {
       let totalEquity = 0;
       let totalCash = 0;
       let totalUnrealizedPnl = 0;
+      let totalMarketValue = 0;
+      let totalBuyingPower = 0;
 
       for (const balance of balances) {
         totalEquity += balance.Equity || 0;
         totalCash += balance.CashBalance || 0;
         totalUnrealizedPnl += balance.UnrealizedProfitLoss || 0;
+        totalMarketValue += balance.MarketValue || 0;
+        totalBuyingPower += balance.BuyingPower || 0;
       }
 
       return {
         totalEquity,
         totalCash,
         totalUnrealizedPnl,
+        totalMarketValue,
+        totalBuyingPower,
         currency: 'USD',
         accounts,
       };

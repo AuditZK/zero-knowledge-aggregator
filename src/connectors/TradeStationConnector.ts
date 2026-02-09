@@ -80,11 +80,14 @@ export class TradeStationConnector extends RestBrokerConnector {
       // Cache account IDs for other methods
       this.accountIds = aggregated.accounts.map(a => a.AccountID);
 
-      return this.createBalanceData(
-        aggregated.totalCash,
-        aggregated.totalEquity,
-        aggregated.currency
-      );
+      return {
+        balance: aggregated.totalCash,
+        equity: aggregated.totalEquity,
+        unrealizedPnl: aggregated.totalUnrealizedPnl,
+        currency: aggregated.currency,
+        marginUsed: aggregated.totalMarketValue,
+        marginAvailable: aggregated.totalBuyingPower,
+      };
     });
   }
 

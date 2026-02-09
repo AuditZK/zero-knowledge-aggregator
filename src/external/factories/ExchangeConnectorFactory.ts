@@ -7,6 +7,7 @@ import { AlpacaConnector } from '../../connectors/AlpacaConnector';
 import { TradeStationConnector } from '../../connectors/TradeStationConnector';
 import { HyperliquidConnector } from '../../connectors/HyperliquidConnector';
 import { CTraderConnector } from '../../connectors/CTraderConnector';
+import { LighterConnector } from '../../connectors/LighterConnector';
 import { IbkrFlexService } from '../ibkr-flex-service';
 import { getLogger } from '../../utils/secure-enclave-logger';
 
@@ -26,6 +27,7 @@ const logger = getLogger('ExchangeConnectorFactory');
  * Supported crypto exchanges via CCXT:
  *   - Binance (binance) - Spot + Futures + Swap
  *   - Bitget (bitget) - Spot + Swap (Unified Account)
+ *   - BingX (bingx) - Spot + Swap
  *   - MEXC (mexc) - Spot + Futures
  *   - OKX (okx) - Spot + Swap (Unified Account)
  *   - Bybit (bybit) - Spot + Swap (Unified Account)
@@ -41,6 +43,7 @@ const logger = getLogger('ExchangeConnectorFactory');
  *
  * Supported DEX (wallet address only, no private key):
  *   - Hyperliquid (hyperliquid) - Public REST API (read-only)
+ *   - Lighter (lighter) - Public REST API (read-only)
  */
 export class ExchangeConnectorFactory {
   /**
@@ -61,6 +64,7 @@ export class ExchangeConnectorFactory {
     'kucoin': 'kucoin', // Normalized to support spot + futures
     'coinbase': 'coinbase',
     'gate': 'gate',
+    'bingx': 'bingx',
     'huobi': 'huobi',
     'kraken': 'kraken',
 
@@ -70,7 +74,7 @@ export class ExchangeConnectorFactory {
   /**
    * List of stock brokers with custom connectors
    */
-  private static readonly CUSTOM_BROKERS = ['ibkr', 'alpaca', 'tradestation', 'hyperliquid', 'ctrader'];
+  private static readonly CUSTOM_BROKERS = ['ibkr', 'alpaca', 'tradestation', 'hyperliquid', 'lighter', 'ctrader'];
 
   /**
    * Create an exchange connector instance
@@ -127,6 +131,10 @@ export class ExchangeConnectorFactory {
       case 'hyperliquid':
         // DEX - only needs wallet address (apiKey), no private key required
         return new HyperliquidConnector(credentials);
+
+      case 'lighter':
+        // DEX - only needs wallet address (apiKey), no private key required
+        return new LighterConnector(credentials);
 
       case 'ctrader':
         // CFD/Forex broker - OAuth 2.0 flow

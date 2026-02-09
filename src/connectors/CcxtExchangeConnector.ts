@@ -44,7 +44,7 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
       secret: credentials.apiSecret,
       password: credentials.passphrase,
       enableRateLimit: true,
-      options: { defaultType: 'future', recvWindow: 10000 },
+      options: { defaultType: 'swap', recvWindow: 10000 },
     });
 
     this.logger.info(`CCXT connector initialized for ${exchangeId}`);
@@ -57,14 +57,15 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
   async getBalance(): Promise<BalanceData> {
     return this.withErrorHandling('getBalance', async () => {
       const balance = await this.exchange.fetchBalance();
-      const usdtBalance = balance['USDT'] || balance['USD'] || balance.total;
-
-      if (!usdtBalance) {
-        this.logger.warn('No USDT/USD balance found, returning zero balance');
-        return this.createBalanceData(0, 0, this.defaultCurrency);
-      }
-
-      return this.createBalanceData(usdtBalance.free || 0, usdtBalance.total || 0, this.defaultCurrency);
+      const extracted = this.extractSwapEquity(balance);
+      return {
+        balance: extracted.realizedBalance,
+        equity: extracted.equity,
+        unrealizedPnl: extracted.equity - extracted.realizedBalance,
+        currency: this.defaultCurrency,
+        marginUsed: extracted.marginUsed,
+        marginAvailable: extracted.available,
+      };
     });
   }
 
@@ -208,39 +209,102 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
       // For derivatives (swap/future), get equity from raw API response
       this.exchange.options['defaultType'] = marketType;
       const balance = await this.exchange.fetchBalance();
+      const extracted = this.extractSwapEquity(balance);
 
-      // Try to get real equity from raw API response (MEXC and others store it in balance.info)
-      const equity = this.extractDerivativesEquity(balance);
-      const usdtBalance = balance['USDT'] || balance['USD'] || balance['USDC'];
-
-      return {
-        equity: equity || usdtBalance?.total || 0,
-        available_margin: usdtBalance?.free || 0
-      };
+      return { equity: extracted.equity, available_margin: extracted.available, margin_used: extracted.marginUsed };
     });
   }
 
   /**
-   * Extract real equity from derivatives balance raw API response.
-   * Some exchanges (MEXC, etc.) return the full equity in balance.info but CCXT
-   * only exposes availableBalance + frozenBalance as 'total', missing unrealizedPnL.
+   * Extract full balance data from swap balance response.
+   *
+   * Exchange raw API formats:
+   * - MEXC:   info.data[] → { currency, equity, cashBalance, availableBalance, positionMargin, unrealized }
+   * - Bitget: info[]      → { marginCoin, accountEquity, available, unrealizedPL }
+   * - Others: CCXT normalized balance[STABLECOIN] { free, total }
    */
-  private extractDerivativesEquity(balance: Record<string, unknown>): number {
-    const info = balance.info as { data?: Array<{ currency: string; equity?: number }> } | undefined;
-    if (!info?.data || !Array.isArray(info.data)) {
-      return 0;
-    }
+  private extractSwapEquity(balance: Record<string, unknown>): {
+    equity: number;
+    realizedBalance: number;
+    available: number;
+    marginUsed: number;
+  } {
+    const info = balance.info as Record<string, unknown> | undefined;
 
-    // Sum equity from stablecoin assets (USDT, USDC, USD)
-    let totalEquity = 0;
-    for (const asset of info.data) {
-      if (this.STABLECOINS.includes(asset.currency) && asset.equity && asset.equity > 0) {
-        totalEquity += asset.equity;
-        this.logger.debug(`${asset.currency} derivatives equity: ${asset.equity}`);
+    // MEXC: info = { data: [{ currency, equity, cashBalance, availableBalance, positionMargin }] }
+    // Also handles nested info.data (CCXT may wrap response differently across versions)
+    const mexcData = info?.data ?? (info as Record<string, unknown> | undefined);
+    if (mexcData && Array.isArray(mexcData)) {
+      // Sum ALL stablecoin equities (user may have USDT + USDC across sub-accounts)
+      let totalEquity = 0;
+      let totalRealized = 0;
+      let totalAvailable = 0;
+      let totalMarginUsed = 0;
+
+      for (const asset of mexcData as Array<Record<string, unknown>>) {
+        const currency = String(asset.currency || '');
+        const equity = Number(asset.equity) || 0;
+        if (this.STABLECOINS.includes(currency) && equity > 0) {
+          totalEquity += equity;
+          totalRealized += Number(asset.cashBalance) || 0;
+          totalAvailable += Number(asset.availableBalance) || 0;
+          totalMarginUsed += Number(asset.positionMargin) || 0;
+        }
+      }
+
+      if (totalEquity > 0) {
+        return { equity: totalEquity, realizedBalance: totalRealized, available: totalAvailable, marginUsed: totalMarginUsed };
+      }
+
+      // Log raw data for debugging when MEXC returns data but no stablecoin equity found
+      const currencies = (mexcData as Array<Record<string, unknown>>)
+        .filter((a) => Number(a.equity) > 0)
+        .map((a) => `${a.currency}:${a.equity}`);
+      if (currencies.length > 0) {
+        this.logger.warn(`${this.exchangeName}: equity found in non-stablecoin currencies: [${currencies.join(', ')}]`);
       }
     }
 
-    return totalEquity;
+    // Bitget classic: info = [{ marginCoin, accountEquity, available, unrealizedPL }]
+    if (Array.isArray(info)) {
+      for (const asset of info as Array<Record<string, unknown>>) {
+        const coin = String(asset.marginCoin || '');
+        if (this.STABLECOINS.includes(coin) && Number(asset.accountEquity) > 0) {
+          const equity = Number(asset.accountEquity);
+          const unrealized = Number(asset.unrealizedPL) || 0;
+          return {
+            equity,
+            realizedBalance: equity - unrealized,
+            available: Number(asset.available) || 0,
+            marginUsed: Number(asset.locked) || 0,
+          };
+        }
+      }
+    }
+
+    // Binance, OKX, Bybit, etc.: CCXT parseBalance maps equity → total correctly
+    for (const coin of this.STABLECOINS) {
+      const bal = balance[coin] as { free?: number; used?: number; total?: number } | undefined;
+      if (bal?.total && bal.total > 0) {
+        return {
+          equity: bal.total,
+          realizedBalance: bal.total,
+          available: bal.free || 0,
+          marginUsed: bal.used || 0,
+        };
+      }
+    }
+
+    // Debug: log available keys to understand response structure
+    const balanceKeys = Object.keys(balance).filter(k => !this.BALANCE_META_KEYS.includes(k));
+    const infoType = info ? (Array.isArray(info) ? 'array' : typeof info) : 'undefined';
+    const infoDataType = info?.data ? (Array.isArray(info.data) ? `array[${(info.data as unknown[]).length}]` : typeof info.data) : 'missing';
+    this.logger.warn(`${this.exchangeName}: no equity found in balance response`, {
+      balanceKeys: balanceKeys.slice(0, 10),
+      infoType,
+      infoDataType,
+    });
+    return { equity: 0, realizedBalance: 0, available: 0, marginUsed: 0 };
   }
 
   /**

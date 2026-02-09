@@ -122,9 +122,17 @@ export class HyperliquidConnector extends CryptoExchangeConnector {
 
       const accountValue = Number.parseFloat(state.marginSummary.accountValue) || 0;
       const totalRawUsd = Number.parseFloat(state.marginSummary.totalRawUsd) || 0;
+      const totalMarginUsed = Number.parseFloat(state.marginSummary.totalMarginUsed) || 0;
+      const withdrawable = Number.parseFloat(state.withdrawable) || 0;
 
-      // createBalanceData calculates unrealizedPnl as equity - balance
-      return this.createBalanceData(totalRawUsd, accountValue, this.defaultCurrency);
+      return {
+        balance: totalRawUsd,
+        equity: accountValue,
+        unrealizedPnl: accountValue - totalRawUsd,
+        currency: this.defaultCurrency,
+        marginUsed: totalMarginUsed,
+        marginAvailable: withdrawable,
+      };
     });
   }
 
@@ -208,8 +216,9 @@ export class HyperliquidConnector extends CryptoExchangeConnector {
       const state = await this.fetchClearinghouseState();
       const equity = Number.parseFloat(state.marginSummary.accountValue) || 0;
       const availableMargin = Number.parseFloat(state.withdrawable) || 0;
+      const marginUsed = Number.parseFloat(state.marginSummary.totalMarginUsed) || 0;
 
-      return { equity, available_margin: availableMargin };
+      return { equity, available_margin: availableMargin, margin_used: marginUsed };
     });
   }
 
