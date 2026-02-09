@@ -61,7 +61,15 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
 
       summaries.sort((a, b) => a.date.localeCompare(b.date));
       const latest = summaries.at(-1)!;
-      return this.createBalanceData(latest.cash, latest.netLiquidationValue, 'USD');
+      const invested = latest.stockValue + latest.optionValue + latest.commodityValue;
+      return {
+        balance: latest.cash,
+        equity: latest.netLiquidationValue,
+        unrealizedPnl: latest.unrealizedPnL,
+        currency: 'USD',
+        marginUsed: invested > 0 ? invested : 0,
+        marginAvailable: latest.cash > 0 ? latest.cash : 0,
+      };
     });
   }
 

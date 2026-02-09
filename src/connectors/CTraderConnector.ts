@@ -88,11 +88,14 @@ export class CTraderConnector extends RestBrokerConnector {
 
       const balanceInfo = await this.api.getAccountBalance(this.accountId!);
 
-      return this.createBalanceData(
-        balanceInfo.balance,
-        balanceInfo.equity,
-        balanceInfo.currency
-      );
+      return {
+        balance: balanceInfo.balance,
+        equity: balanceInfo.equity,
+        unrealizedPnl: balanceInfo.unrealizedPnl,
+        currency: balanceInfo.currency,
+        marginUsed: balanceInfo.marginUsed,
+        marginAvailable: balanceInfo.marginAvailable,
+      };
     });
   }
 
