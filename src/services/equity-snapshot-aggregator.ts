@@ -6,7 +6,6 @@ import { UniversalConnectorCacheService } from '../core/services/universal-conne
 import type { SnapshotData, IConnectorWithMarketTypes, IConnectorWithBalanceBreakdown, IConnectorWithBalance, MarketBalanceBreakdown, BreakdownByMarket } from '../types';
 import { MarketType, getFilteredMarketTypes } from '../types/snapshot-breakdown';
 import { getLogger } from '../utils/secure-enclave-logger';
-import { TimeUtils } from '../utils/time-utils';
 import { IExchangeConnector } from '../external/interfaces/IExchangeConnector';
 
 const logger = getLogger('EquitySnapshotAggregator');
@@ -132,15 +131,18 @@ export class EquitySnapshotAggregator {
         logger.warn(`Invalid equity value for ${userUid}/${exchange}: received ${rawEquity}, using ${globalEquity}`);
       }
 
-      const startOfDay = TimeUtils.getStartOfDayUTC(currentSnapshot);
+      // Trades window: 24h before snapshot (not start of snapshot day)
+      // At 00:00 UTC, startOfDay would be the same as snapshot time → 0 trades captured.
+      // Instead, always look back 24h to capture the full day's trading activity.
+      const tradesSince = new Date(currentSnapshot.getTime() - 24 * 60 * 60 * 1000);
       const { tradesByMarket, swapSymbols } = await this.fetchTradesByMarket(
         exchange,
-        startOfDay,
+        tradesSince,
         filteredTypes,
         connector
       );
 
-      const totalFundingFees = await this.calculateFundingFees(connector, swapSymbols, startOfDay);
+      const totalFundingFees = await this.calculateFundingFees(connector, swapSymbols, tradesSince);
       const breakdown = this.buildMarketBreakdown(
         balancesByMarket,
         tradesByMarket,
