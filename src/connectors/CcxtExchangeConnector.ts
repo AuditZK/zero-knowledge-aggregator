@@ -39,13 +39,21 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
       throw new Error(`Exchange '${exchangeId}' not supported by CCXT.`);
     }
 
-    this.exchange = new ExchangeClass({
+    const exchangeConfig: Record<string, unknown> = {
       apiKey: credentials.apiKey,
       secret: credentials.apiSecret,
       password: credentials.passphrase,
       enableRateLimit: true,
       options: { defaultType: 'swap', recvWindow: 10000 },
-    });
+    };
+
+    // Route through proxy for geo-restricted exchanges (e.g. Binance from US regions)
+    const proxyUrl = process.env.EXCHANGE_HTTP_PROXY;
+    if (proxyUrl) {
+      exchangeConfig.httpProxy = proxyUrl;
+    }
+
+    this.exchange = new ExchangeClass(exchangeConfig);
 
     this.logger.info(`CCXT connector initialized for ${exchangeId}`);
   }
