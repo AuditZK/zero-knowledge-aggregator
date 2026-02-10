@@ -68,6 +68,7 @@ export LOG_SERVER_API_KEY=$(get_metadata "log-server-api-key")
 export SKIP_ATTESTATION=$(get_metadata "skip-attestation")
 export GRAFANA_PASSWORD=$(get_metadata "grafana-password")
 export ENCLAVE_DOMAIN=$(get_metadata "enclave-domain")
+export EXCHANGE_HTTP_PROXY=$(get_metadata "exchange-http-proxy")
 
 # Validate required secrets
 MISSING=""
@@ -95,6 +96,7 @@ echo "  - BENCHMARK_SERVICE_URL: ${BENCHMARK_SERVICE_URL:-<not set>}"
 echo "  - ENCLAVE_DOMAIN: ${ENCLAVE_DOMAIN:-<not set>}"
 echo "  - LOG_LEVEL: ${LOG_LEVEL:-info}"
 echo "  - SKIP_ATTESTATION: ${SKIP_ATTESTATION:-false}"
+echo "  - EXCHANGE_HTTP_PROXY: ${EXCHANGE_HTTP_PROXY:-<not set>}"
 echo ""
 
 # Parse flags
