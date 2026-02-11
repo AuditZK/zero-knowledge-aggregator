@@ -47,7 +47,7 @@
     "@grpc/proto-loader": "^0.8.0",
     "@prisma/client": "^6.19.0",
     "@types/xml2js": "^0.4.14",
-    "axios": "^1.11.0",
+    "axios": "^1.13.5",
     "ccxt": "^4.5.36",
     "express": "^5.1.0",
     "express-rate-limit": "^8.2.1",
@@ -79,7 +79,7 @@
     "npm": ">=10.0.0"
   },
   "overrides": {
-    "axios": "^1.11.0",
+    "axios": "^1.13.5",
     "qs": ">=6.14.1"
   }
 }
