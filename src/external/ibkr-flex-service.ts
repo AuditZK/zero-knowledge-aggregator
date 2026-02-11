@@ -250,9 +250,7 @@ export class IbkrFlexService {
       const flexStatement = parsed.FlexQueryResponse?.FlexStatements?.[0]?.FlexStatement?.[0];
       if (!flexStatement) {return [];}
 
-      // DEBUG: Log all top-level keys in flexStatement
-      logger.info('IBKR FlexStatement structure:', {
-        keys: Object.keys(flexStatement),
+      logger.info('IBKR FlexStatement parsed', {
         hasEquitySummaryByReportDateInBase: !!flexStatement.EquitySummaryByReportDateInBase,
         hasEquitySummaryInBase: !!flexStatement.EquitySummaryInBase
       });
@@ -269,24 +267,16 @@ export class IbkrFlexService {
         return [];
       }
 
-      // DEBUG: Log first and last entries to understand date range
       const firstEntry = dataList[0]?.$;
       const lastEntry = dataList[dataList.length - 1]?.$;
       logger.info('IBKR Data Range:', {
         totalEntries: dataList.length,
         firstDate: firstEntry?.reportDate,
         lastDate: lastEntry?.reportDate,
-        lastTotal: lastEntry?.total,
-        lastCash: lastEntry?.cash
       });
 
-      return dataList.map((info: { $: Record<string, string> }, index: number) => {
+      return dataList.map((info: { $: Record<string, string> }) => {
         const attrs = info.$;
-
-        // DEBUG: Log all available attributes for first entry to identify field names
-        if (index === dataList.length - 1) {
-          logger.info('IBKR EquitySummary attributes (latest entry):', { attrs });
-        }
 
         const netLiquidation = parseFloat(
           attrs.total || attrs.netLiquidation || attrs.netLiquidationValue || attrs.equityWithLoanValue || attrs.equity || '0'
