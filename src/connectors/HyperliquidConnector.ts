@@ -62,6 +62,15 @@ interface HyperliquidSpotBalance {
   entryNtl: string;
 }
 
+interface HyperliquidLedgerUpdate {
+  time: number;
+  hash: string;
+  delta: {
+    type: string; // 'deposit' | 'withdraw' | 'internalTransfer' | 'spotTransfer' | etc.
+    usdc: string;
+  };
+}
+
 interface HyperliquidFill {
   coin: string;
   px: string;
@@ -248,6 +257,38 @@ export class HyperliquidConnector extends CryptoExchangeConnector {
           currency: fill.feeToken || 'USDC',
         },
       }));
+    });
+  }
+
+  /**
+   * Get deposits and withdrawals since a date
+   * Hyperliquid uses USDC for all transfers (1:1 to USD)
+   */
+  async getCashflows(since: Date): Promise<{ deposits: number; withdrawals: number }> {
+    return this.withErrorHandling('getCashflows', async () => {
+      const ledgerUpdates = await this.postInfo<HyperliquidLedgerUpdate[]>({
+        type: 'userNonFundingLedgerUpdates',
+        user: this.walletAddress,
+        startTime: since.getTime(),
+      });
+
+      let deposits = 0;
+      let withdrawals = 0;
+
+      for (const entry of ledgerUpdates) {
+        const amount = Math.abs(Number.parseFloat(entry.delta.usdc) || 0);
+        if (entry.delta.type === 'deposit') {
+          deposits += amount;
+        } else if (entry.delta.type === 'withdraw') {
+          withdrawals += amount;
+        }
+      }
+
+      if (deposits > 0 || withdrawals > 0) {
+        this.logger.info(`Hyperliquid cashflows since ${since.toISOString()}: +${deposits.toFixed(2)} deposits, -${withdrawals.toFixed(2)} withdrawals`);
+      }
+
+      return { deposits, withdrawals };
     });
   }
 

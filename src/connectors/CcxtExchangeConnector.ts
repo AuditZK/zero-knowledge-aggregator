@@ -597,6 +597,103 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
   }
 
   /**
+   * Get deposits and withdrawals since a date
+   * Uses CCXT fetchDeposits/fetchWithdrawals (on-chain transfers)
+   * Converts all currencies to USD (stablecoins 1:1, others via price lookup)
+   */
+  async getCashflows(since: Date): Promise<{ deposits: number; withdrawals: number }> {
+    return this.withErrorHandling('getCashflows', async () => {
+      const sinceTimestamp = this.dateToTimestamp(since);
+      const allTransactions: Array<{ tx: ccxt.Transaction; direction: 'deposit' | 'withdrawal' }> = [];
+
+      if (this.exchange.has['fetchDeposits']) {
+        try {
+          const deposits = await this.exchange.fetchDeposits(undefined, sinceTimestamp);
+          for (const tx of deposits) {
+            if (tx.status === 'ok') {
+              allTransactions.push({ tx, direction: 'deposit' });
+            }
+          }
+        } catch (error) {
+          this.logger.debug('fetchDeposits not available', { error: extractErrorMessage(error) });
+        }
+      }
+
+      if (this.exchange.has['fetchWithdrawals']) {
+        try {
+          const withdrawals = await this.exchange.fetchWithdrawals(undefined, sinceTimestamp);
+          for (const tx of withdrawals) {
+            if (tx.status === 'ok') {
+              allTransactions.push({ tx, direction: 'withdrawal' });
+            }
+          }
+        } catch (error) {
+          this.logger.debug('fetchWithdrawals not available', { error: extractErrorMessage(error) });
+        }
+      }
+
+      // Collect non-stablecoin currencies that need price conversion
+      const altcoinCurrencies = new Set<string>();
+      for (const { tx } of allTransactions) {
+        const currency = tx.currency || '';
+        if (currency && !this.STABLECOINS.includes(currency)) {
+          altcoinCurrencies.add(currency);
+        }
+      }
+
+      // Fetch prices for all non-stablecoin currencies in one batch
+      const prices = altcoinCurrencies.size > 0
+        ? await this.fetchAltcoinPrices(Array.from(altcoinCurrencies))
+        : new Map<string, number>();
+
+      let totalDeposits = 0;
+      let totalWithdrawals = 0;
+
+      for (const { tx, direction } of allTransactions) {
+        const usdValue = this.transactionToUsd(tx, prices);
+        if (usdValue > 0) {
+          if (direction === 'deposit') {
+            totalDeposits += usdValue;
+          } else {
+            totalWithdrawals += usdValue;
+          }
+        }
+      }
+
+      if (totalDeposits > 0 || totalWithdrawals > 0) {
+        this.logger.info(`Cashflows since ${since.toISOString()}: +${totalDeposits.toFixed(2)} deposits, -${totalWithdrawals.toFixed(2)} withdrawals`);
+      }
+
+      return { deposits: totalDeposits, withdrawals: totalWithdrawals };
+    });
+  }
+
+  /**
+   * Convert a CCXT Transaction to USD value
+   * Stablecoins: 1:1, others: use price lookup from pre-fetched prices map
+   */
+  private transactionToUsd(tx: ccxt.Transaction, prices: Map<string, number>): number {
+    const amount = tx.amount || 0;
+    if (amount <= 0) return 0;
+
+    const currency = tx.currency || '';
+
+    if (this.STABLECOINS.includes(currency)) {
+      return amount;
+    }
+
+    const price = prices.get(currency);
+    if (price && price > 0) {
+      const usdValue = amount * price;
+      this.logger.debug(`Converted cashflow: ${amount} ${currency} @ $${price} = $${usdValue.toFixed(2)}`);
+      return usdValue;
+    }
+
+    this.logger.warn(`Non-stablecoin cashflow: no price found for ${amount} ${currency}, skipping`);
+    return 0;
+  }
+
+  /**
    * Get balance from Earn/Staking products (flexible savings, staking, etc.)
    * Supported exchanges: Binance, Bitget, OKX, Bybit
    */
