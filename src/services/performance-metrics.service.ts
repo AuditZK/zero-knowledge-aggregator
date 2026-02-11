@@ -187,25 +187,19 @@ export class PerformanceMetricsService {
   ): DailyDataPoint | null {
     if (daySnapshots.length === 0) return null;
 
-    daySnapshots.sort((a, b) =>
-      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    );
-
-    const openSnap = daySnapshots[0];
-    const closeSnap = daySnapshots.at(-1);
-    if (!openSnap || !closeSnap) return null;
-
-    const equities = daySnapshots.map(s => s.totalEquity);
+    // Sum equity across all exchanges for global portfolio view
+    // Each day has one snapshot per exchange, all at 00:00 UTC
+    const totalEquity = daySnapshots.reduce((sum, s) => sum + s.totalEquity, 0);
     const metrics = this.sumDayMetrics(daySnapshots);
 
     return {
       date: new Date(dateKey + 'T00:00:00Z'),
-      openEquity: openSnap.totalEquity,
-      closeEquity: closeSnap.totalEquity,
-      highEquity: Math.max(...equities),
-      lowEquity: Math.min(...equities),
-      dailyReturnPct: this.calculateReturnPct(closeSnap.totalEquity, previousEquity),
-      dailyReturnUsd: previousEquity === null ? 0 : closeSnap.totalEquity - previousEquity,
+      openEquity: totalEquity,
+      closeEquity: totalEquity,
+      highEquity: totalEquity,
+      lowEquity: totalEquity,
+      dailyReturnPct: this.calculateReturnPct(totalEquity, previousEquity),
+      dailyReturnUsd: previousEquity === null ? 0 : totalEquity - previousEquity,
       ...metrics
     };
   }
