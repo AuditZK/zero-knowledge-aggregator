@@ -12,6 +12,7 @@ export enum TradeStatus {
 export interface User {
   id?: string; // Add optional id for compatibility
   uid: string;
+  platformHash?: string | null; // SHA-256(platformUserId) for mapping reconciliation
   syncIntervalMinutes: number;
   createdAt: Date;
   updatedAt: Date;
@@ -102,6 +103,7 @@ export interface SnapshotData {
 
 export interface CreateUserRequest {
   uid: string;
+  platformHash?: string; // SHA-256(platformUserId) for mapping reconciliation
 }
 
 export interface CreateTradeRequest {

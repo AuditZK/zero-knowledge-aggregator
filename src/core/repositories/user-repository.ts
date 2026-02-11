@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 type PrismaUser = {
   id: string;
   uid: string;
+  platformHash: string | null;
   syncIntervalMinutes: number;
   createdAt: Date;
   updatedAt: Date;
@@ -23,9 +24,12 @@ export class UserRepository {
       where: {
         uid: userData.uid,
       },
-      update: {},
+      update: {
+        ...(userData.platformHash ? { platformHash: userData.platformHash } : {}),
+      },
       create: {
         uid: userData.uid,
+        ...(userData.platformHash ? { platformHash: userData.platformHash } : {}),
       },
     });
 
@@ -49,6 +53,18 @@ export class UserRepository {
   async getUserById(id: string): Promise<User | null> {
     const user = await this.prisma.user.findUnique({
       where: { id },
+    });
+
+    return user ? this.mapPrismaUserToUser(user) : null;
+  }
+
+  /**
+   * Récupère un utilisateur par platformHash (SHA-256 du platformUserId)
+   * Permet la réconciliation de mapping après perte de la base frontend
+   */
+  async getUserByPlatformHash(platformHash: string): Promise<User | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { platformHash },
     });
 
     return user ? this.mapPrismaUserToUser(user) : null;
@@ -152,6 +168,7 @@ export class UserRepository {
     return {
       id: prismaUser.id,
       uid: prismaUser.uid,
+      platformHash: prismaUser.platformHash,
       syncIntervalMinutes: prismaUser.syncIntervalMinutes,
       createdAt: prismaUser.createdAt,
       updatedAt: prismaUser.updatedAt,

@@ -14,6 +14,7 @@ datasource db {
 model User {
   id                  String   @id @default(cuid())
   uid                 String   @unique // Microservice UID (anonyme, pas d'email/nom)
+  platformHash        String?  @unique // SHA-256(platformUserId) for mapping reconciliation (zero-knowledge: one-way hash)
   syncIntervalMinutes Int      @default(1440) // Snapshot interval: 1440 = daily (24h)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
