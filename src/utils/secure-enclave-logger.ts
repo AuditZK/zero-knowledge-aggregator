@@ -127,6 +127,19 @@ const TIER2_BUSINESS_PATTERNS = [
   /deposit/i,
   /withdrawal/i,
 
+  // Asset classes & financial instruments (broker APIs: IBKR, cTrader, etc.)
+  /^cash/i,           // cash, cashLong, cashShort
+  /^stock/i,          // stock, stockLong, stockShort
+  /^commodit/i,       // commodities, commoditiesLong
+  /^bond/i,           // bonds, bondsLong
+  /^crypto/i,         // crypto, cryptoLong
+  /unrealized/i,      // cfdUnrealizedPl, forexCfdUnrealizedPl
+  /realized/i,        // realizedPnL (covers Pl vs Pnl naming variants)
+  /accrual/i,         // interestAccruals, dividendAccruals
+  /liquidation/i,     // netLiquidation, liquidationPrice
+  /^margin/i,         // marginUsed, marginFinancingCharge
+  /^collateral/i,     // slbCashCollateral
+
   // Trading activity
   /^trade/i,
   /^position/i,

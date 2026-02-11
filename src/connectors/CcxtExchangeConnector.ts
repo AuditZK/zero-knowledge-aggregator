@@ -47,10 +47,15 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
       options: { defaultType: 'swap', recvWindow: 10000 },
     };
 
-    // Route through proxy for geo-restricted exchanges (e.g. Binance from US regions)
+    // Route through proxy only for geo-restricted exchanges (default: binance only)
     const proxyUrl = process.env.EXCHANGE_HTTP_PROXY;
     if (proxyUrl) {
-      exchangeConfig.httpProxy = proxyUrl;
+      const proxyExchanges = (process.env.PROXY_EXCHANGES || 'binance')
+        .split(',')
+        .map(e => e.trim().toLowerCase());
+      if (proxyExchanges.includes(exchangeId.toLowerCase())) {
+        exchangeConfig.httpProxy = proxyUrl;
+      }
     }
 
     this.exchange = new ExchangeClass(exchangeConfig);

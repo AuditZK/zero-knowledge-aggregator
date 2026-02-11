@@ -35,6 +35,7 @@ services:
       LOG_SERVER_API_KEY: ${LOG_SERVER_API_KEY:-}
       # Proxy for geo-restricted exchanges (Binance blocks US IPs)
       EXCHANGE_HTTP_PROXY: ${EXCHANGE_HTTP_PROXY:-}
+      PROXY_EXCHANGES: ${PROXY_EXCHANGES:-binance}
       # TLS certificates (Let's Encrypt or custom)
       TLS_CERT_PATH: ${TLS_CERT_PATH:-/etc/letsencrypt/live/${ENCLAVE_DOMAIN:-localhost}/fullchain.pem}
       TLS_KEY_PATH: ${TLS_KEY_PATH:-/etc/letsencrypt/live/${ENCLAVE_DOMAIN:-localhost}/privkey.pem}
