@@ -5,7 +5,7 @@ import {
   TradeData,
   ExchangeFeature,
 } from '../external/interfaces/IExchangeConnector';
-import { IbkrFlexService, FlexTrade, FlexAccountSummary } from '../external/ibkr-flex-service';
+import { IbkrFlexService, FlexTrade, FlexAccountSummary, FlexCashTransaction } from '../external/ibkr-flex-service';
 import { ExchangeCredentials } from '../types';
 
 /** Trade metrics by asset category with guaranteed total field */
@@ -223,6 +223,90 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
       const tradesByDate = this.groupTradesByDate(trades);
       return this.mapSummaryToBreakdown(latest, tradesByDate.get(latest.date));
     });
+  }
+
+  /**
+   * Get deposits and withdrawals since a date
+   * Uses IBKR Flex CashTransactions (type: 'Deposits' / 'Withdrawals')
+   * All amounts in USD (IBKR base currency)
+   */
+  async getCashflows(since: Date): Promise<{ deposits: number; withdrawals: number }> {
+    return this.withErrorHandling('getCashflows', async () => {
+      const cashTransactions = await this.fetchFlexData(xml => this.flexService.parseCashTransactions(xml));
+
+      let deposits = 0;
+      let withdrawals = 0;
+
+      for (const tx of cashTransactions) {
+        const txDate = this.parseFlexDate(tx.date);
+        if (txDate < since) continue;
+
+        const { d, w } = this.classifyCashTransaction(tx);
+        deposits += d;
+        withdrawals += w;
+      }
+
+      if (deposits > 0 || withdrawals > 0) {
+        this.logger.info(`IBKR cashflows since ${since.toISOString()}: +${deposits.toFixed(2)} deposits, -${withdrawals.toFixed(2)} withdrawals`);
+      }
+
+      return { deposits, withdrawals };
+    });
+  }
+
+  /**
+   * Get deposits/withdrawals grouped by date (YYYYMMDD format)
+   * Used by historical backfill to assign cashflows to each daily snapshot
+   */
+  async getCashflowsByDate(since: Date): Promise<Map<string, { deposits: number; withdrawals: number }>> {
+    return this.withErrorHandling('getCashflowsByDate', async () => {
+      const cashTransactions = await this.fetchFlexData(xml => this.flexService.parseCashTransactions(xml));
+      const byDate = new Map<string, { deposits: number; withdrawals: number }>();
+
+      for (const tx of cashTransactions) {
+        const txDate = this.parseFlexDate(tx.date);
+        if (txDate < since) continue;
+
+        // Normalize date key to YYYYMMDD (same format as historicalSummaries)
+        const dateKey = this.toDateKey(tx.date);
+        if (!byDate.has(dateKey)) {
+          byDate.set(dateKey, { deposits: 0, withdrawals: 0 });
+        }
+
+        const entry = byDate.get(dateKey)!;
+        const { d, w } = this.classifyCashTransaction(tx);
+        entry.deposits += d;
+        entry.withdrawals += w;
+      }
+
+      return byDate;
+    });
+  }
+
+  private classifyCashTransaction(tx: FlexCashTransaction): { d: number; w: number } {
+    if (tx.type === 'Deposits' || (tx.type === 'Deposits/Withdrawals' && tx.amount > 0)) {
+      return { d: Math.abs(tx.amount), w: 0 };
+    }
+    if (tx.type === 'Withdrawals' || (tx.type === 'Deposits/Withdrawals' && tx.amount < 0)) {
+      return { d: 0, w: Math.abs(tx.amount) };
+    }
+    return { d: 0, w: 0 };
+  }
+
+  private parseFlexDate(dateStr: string): Date {
+    if (dateStr.includes('-')) {
+      return new Date(dateStr);
+    }
+    // IBKR format: YYYYMMDD or YYYYMMDD;HHMMSS
+    const datePart = dateStr.split(';')[0] ?? dateStr;
+    return new Date(`${datePart.substring(0, 4)}-${datePart.substring(4, 6)}-${datePart.substring(6, 8)}T00:00:00Z`);
+  }
+
+  private toDateKey(dateStr: string): string {
+    if (dateStr.includes('-')) {
+      return (dateStr.split('T')[0] ?? dateStr).replace(/-/g, '');
+    }
+    return dateStr.split(';')[0] ?? dateStr;
   }
 
   async getCurrentPositions(): Promise<PositionData[]> {

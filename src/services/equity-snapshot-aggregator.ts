@@ -42,6 +42,8 @@ interface ExtendedConnector extends IExchangeConnector {
   getFundingFees?(symbols: string[], since: Date): Promise<FundingFeeData[]>;
   getHistoricalSummaries?(since: Date): Promise<Array<{ date: string; breakdown: BreakdownByMarket }>>;
   getEarnBalance?(): Promise<{ equity: number; available_margin?: number }>;
+  getCashflows?(since: Date): Promise<{ deposits: number; withdrawals: number }>;
+  getCashflowsByDate?(since: Date): Promise<Map<string, { deposits: number; withdrawals: number }>>;
 }
 
 const hasMarketTypes = (connector: unknown): connector is IConnectorWithMarketTypes => typeof (connector as IConnectorWithMarketTypes).detectMarketTypes === 'function';
@@ -143,6 +145,7 @@ export class EquitySnapshotAggregator {
       );
 
       const totalFundingFees = await this.calculateFundingFees(connector, swapSymbols, tradesSince);
+      const cashflows = await this.fetchCashflows(connector, tradesSince);
       const breakdown = this.buildMarketBreakdown(
         balancesByMarket,
         tradesByMarket,
@@ -165,14 +168,14 @@ export class EquitySnapshotAggregator {
         totalEquity: globalEquity,
         realizedBalance: totalRealizedBalance,
         unrealizedPnL: totalUnrealizedPnl,
-        deposits: 0,
-        withdrawals: 0,
+        deposits: cashflows.deposits,
+        withdrawals: cashflows.withdrawals,
         breakdown_by_market: breakdown,
         createdAt: new Date(),
         updatedAt: new Date()
       };
 
-      logger.info(`Built snapshot for ${userUid} on ${exchange}/${label}: equity=${globalEquity.toFixed(2)}, realized=${totalRealizedBalance.toFixed(2)}, unrealized=${totalUnrealizedPnl.toFixed(2)}, markets=${Object.keys(breakdown).length - 1}`);
+      logger.info(`Built snapshot for ${userUid} on ${exchange}/${label}: equity=${globalEquity.toFixed(2)}, realized=${totalRealizedBalance.toFixed(2)}, unrealized=${totalUnrealizedPnl.toFixed(2)}, deposits=${cashflows.deposits.toFixed(2)}, withdrawals=${cashflows.withdrawals.toFixed(2)}, markets=${Object.keys(breakdown).length - 1}`);
 
       return snapshot;
     } catch (error) {
@@ -426,6 +429,24 @@ export class EquitySnapshotAggregator {
     }
   }
 
+  private async fetchCashflows(
+    connector: ExtendedConnector,
+    since: Date
+  ): Promise<{ deposits: number; withdrawals: number }> {
+    if (!connector.getCashflows) {
+      return { deposits: 0, withdrawals: 0 };
+    }
+
+    try {
+      return await connector.getCashflows(since);
+    } catch (error: unknown) {
+      logger.debug('Failed to fetch cashflows, using 0', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return { deposits: 0, withdrawals: 0 };
+    }
+  }
+
   private async calculateFundingFees(
     connector: ExtendedConnector,
     swapSymbols: Set<string>,
@@ -609,6 +630,21 @@ export class EquitySnapshotAggregator {
       if (!connector.getHistoricalSummaries) {return;}
       const historicalData = await connector.getHistoricalSummaries(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
       if (!historicalData || historicalData.length === 0) {return;}
+
+      // Fetch cashflows grouped by date (YYYYMMDD) for backfill
+      let cashflowsByDate = new Map<string, { deposits: number; withdrawals: number }>();
+      if (connector.getCashflowsByDate) {
+        try {
+          const since = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+          cashflowsByDate = await connector.getCashflowsByDate(since);
+          logger.info('IBKR cashflows by date fetched for backfill', { days: cashflowsByDate.size });
+        } catch (error) {
+          logger.debug('Failed to fetch IBKR cashflows for backfill', {
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+
       let processedCount = 0, skippedCount = 0;
       for (const entry of historicalData) {
         // IBKR connector uses 'equity' not 'totalEquityUsd'
@@ -627,6 +663,8 @@ export class EquitySnapshotAggregator {
         // Same output as crypto exchanges (daily snapshots), but source is different
         const snapshotDate = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
 
+        const dayCashflows = cashflowsByDate.get(entry.date) || { deposits: 0, withdrawals: 0 };
+
         await this.snapshotDataRepo.upsertSnapshotData({
           userUid,
           exchange,
@@ -635,8 +673,8 @@ export class EquitySnapshotAggregator {
           totalEquity: globalEquity,
           realizedBalance: realizedBalance,
           unrealizedPnL: unrealizedPnl,
-          deposits: 0, // Cash flow extraction from IBKR Flex not yet implemented
-          withdrawals: 0, // Cash flow extraction from IBKR Flex not yet implemented
+          deposits: dayCashflows.deposits,
+          withdrawals: dayCashflows.withdrawals,
           breakdown_by_market: entry.breakdown
         });
 
