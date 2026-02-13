@@ -8,6 +8,7 @@ import { TradeStationConnector } from '../../connectors/TradeStationConnector';
 import { HyperliquidConnector } from '../../connectors/HyperliquidConnector';
 import { CTraderConnector } from '../../connectors/CTraderConnector';
 import { LighterConnector } from '../../connectors/LighterConnector';
+import { MockExchangeConnector } from '../../connectors/MockExchangeConnector';
 import { IbkrFlexService } from '../ibkr-flex-service';
 import { getLogger } from '../../utils/secure-enclave-logger';
 
@@ -74,7 +75,7 @@ export class ExchangeConnectorFactory {
   /**
    * List of stock brokers with custom connectors
    */
-  private static readonly CUSTOM_BROKERS = ['ibkr', 'alpaca', 'tradestation', 'hyperliquid', 'lighter', 'ctrader'];
+  private static readonly CUSTOM_BROKERS = ['ibkr', 'alpaca', 'tradestation', 'hyperliquid', 'lighter', 'ctrader', 'mock'];
 
   /**
    * Create an exchange connector instance
@@ -139,6 +140,10 @@ export class ExchangeConnectorFactory {
       case 'ctrader':
         // CFD/Forex broker - OAuth 2.0 flow
         return new CTraderConnector(credentials);
+
+      case 'mock':
+        // Stress test only - generates random trades, no external API
+        return new MockExchangeConnector(credentials);
 
       default:
         throw new Error(`Custom broker ${exchange} not implemented`);
