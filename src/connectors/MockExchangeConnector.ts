@@ -54,7 +54,7 @@ export class MockExchangeConnector extends BaseExchangeConnector {
     const positions: PositionData[] = [];
 
     for (let i = 0; i < count; i++) {
-      const symbol = MockExchangeConnector.SYMBOLS[Math.floor(Math.random() * MockExchangeConnector.SYMBOLS.length)];
+      const symbol = MockExchangeConnector.SYMBOLS[Math.floor(Math.random() * MockExchangeConnector.SYMBOLS.length)] as string;
       const basePrice = MockExchangeConnector.PRICES[symbol] ?? 100;
       const entryPrice = basePrice * (0.95 + Math.random() * 0.1);
       const markPrice = basePrice * (0.95 + Math.random() * 0.1);
@@ -81,7 +81,7 @@ export class MockExchangeConnector extends BaseExchangeConnector {
     const range = endDate.getTime() - startDate.getTime();
 
     for (let i = 0; i < this.tradeCount; i++) {
-      const symbol = MockExchangeConnector.SYMBOLS[Math.floor(Math.random() * MockExchangeConnector.SYMBOLS.length)];
+      const symbol = MockExchangeConnector.SYMBOLS[Math.floor(Math.random() * MockExchangeConnector.SYMBOLS.length)] as string;
       const basePrice = MockExchangeConnector.PRICES[symbol] ?? 100;
       const price = basePrice * (0.9 + Math.random() * 0.2);
       const quantity = (Math.random() * 100) / price * basePrice;
