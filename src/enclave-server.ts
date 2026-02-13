@@ -858,6 +858,12 @@ export class EnclaveServer {
    * - TLS_SERVER_KEY: Server private key (default: /etc/enclave/server.key)
    */
   private createServerCredentials(): grpc.ServerCredentials {
+    // Dev-only: skip TLS when GRPC_INSECURE=true (set in docker-compose.dev.yml)
+    if (process.env.GRPC_INSECURE === 'true' && process.env.NODE_ENV !== 'production') {
+      logger.warn('GRPC_INSECURE=true — using insecure gRPC credentials (DEV ONLY)');
+      return grpc.ServerCredentials.createInsecure();
+    }
+
     const caCertPath = process.env.TLS_CA_CERT || '/etc/enclave/ca.crt';
     const serverCertPath = process.env.TLS_SERVER_CERT || '/etc/enclave/server.crt';
     const serverKeyPath = process.env.TLS_SERVER_KEY || '/etc/enclave/server.key';
