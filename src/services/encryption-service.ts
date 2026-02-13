@@ -16,12 +16,23 @@ export class EncryptionService {
     @inject(KeyManagementService) private readonly keyManagement: KeyManagementService
   ) {}
 
+  private devKeyCache: Buffer | null = null;
+
   private async getKey(): Promise<Buffer> {
     try {
       const dek = await this.keyManagement.getCurrentDEK();
       logger.info('Retrieved encryption key from hardware-derived DEK');
       return dek;
     } catch (error: unknown) {
+      // Dev fallback: use ENCRYPTION_KEY env var when SEV-SNP hardware unavailable
+      if (process.env.NODE_ENV !== 'production' && process.env.ENCRYPTION_KEY) {
+        if (!this.devKeyCache) {
+          this.devKeyCache = Buffer.from(process.env.ENCRYPTION_KEY, 'hex');
+          logger.warn('Using ENCRYPTION_KEY env var fallback (DEV ONLY — no hardware key)');
+        }
+        return this.devKeyCache;
+      }
+
       const errorMessage = extractErrorMessage(error);
       logger.error('Failed to get encryption key from hardware derivation', { error: errorMessage });
       throw new Error(`Cannot get encryption key - AMD SEV-SNP required: ${errorMessage}`);
