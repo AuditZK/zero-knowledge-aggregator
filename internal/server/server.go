@@ -29,6 +29,8 @@ func New(cfg *config.Config, logger *zap.Logger, pool *pgxpool.Pool, signer *sig
 	var syncSvc *service.SyncService
 	var metricsSvc *service.MetricsService
 	var reportSvc *service.ReportService
+	var snapshotRepo *repository.SnapshotRepo
+	var userRepo *repository.UserRepo
 
 	if pool != nil {
 		enc, err := encryption.New(cfg.EncryptionKey)
@@ -36,14 +38,15 @@ func New(cfg *config.Config, logger *zap.Logger, pool *pgxpool.Pool, signer *sig
 			logger.Error("encryption init failed", zap.Error(err))
 		} else {
 			connRepo := repository.NewConnectionRepo(pool)
-			snapshotRepo := repository.NewSnapshotRepo(pool)
+			snapshotRepo = repository.NewSnapshotRepo(pool)
+			userRepo = repository.NewUserRepo(pool)
 
 			connSvc = service.NewConnectionService(connRepo, enc)
 			syncSvc = service.NewSyncService(connSvc, snapshotRepo, logger)
 			metricsSvc = service.NewMetricsService(snapshotRepo)
 
 			if signer != nil {
-				reportSvc = service.NewReportService(metricsSvc, signer)
+				reportSvc = service.NewReportService(metricsSvc, snapshotRepo, signer)
 			}
 		}
 	}
@@ -51,26 +54,56 @@ func New(cfg *config.Config, logger *zap.Logger, pool *pgxpool.Pool, signer *sig
 	return &Server{
 		cfg:     cfg,
 		logger:  logger,
-		handler: NewHandler(logger, connSvc, syncSvc, metricsSvc, reportSvc),
+		handler: NewHandler(logger, connSvc, syncSvc, metricsSvc, reportSvc, snapshotRepo, userRepo),
 		pool:    pool,
 	}
+}
+
+// SetHandler replaces the handler (used when creating with NewHandlerWithOptions).
+func (s *Server) SetHandler(h *Handler) {
+	s.handler = h
 }
 
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 
-	// Routes
+	// Credential rate limiter: 5 requests per 15 minutes per IP
+	credRateLimiter := NewIPRateLimiter(5, 15*time.Minute)
+
+	// Existing routes
 	mux.HandleFunc("/health", s.handler.HealthCheck)
-	mux.HandleFunc("/api/v1/connection", s.handler.CreateUserConnection)
+	if s.cfg.IsDevelopment() {
+		// Plaintext credential endpoint — dev only; use /api/v1/credentials/connect in production
+		mux.HandleFunc("/api/v1/connection", s.handler.CreateUserConnection)
+	} else {
+		mux.HandleFunc("/api/v1/connection", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusGone, map[string]any{
+				"success": false,
+				"error":   "plaintext credential submission is disabled in production; use /api/v1/credentials/connect with E2E encryption",
+			})
+		})
+	}
 	mux.HandleFunc("/api/v1/sync", s.handler.ProcessSyncJob)
 	mux.HandleFunc("/api/v1/metrics", s.handler.GetMetrics)
 	mux.HandleFunc("/api/v1/snapshots", s.handler.GetSnapshots)
 	mux.HandleFunc("/api/v1/report", s.handler.GenerateReport)
 	mux.HandleFunc("/api/v1/verify", s.handler.VerifySignature)
 
+	// New routes
+	mux.HandleFunc("/api/v1/tls/fingerprint", s.handler.GetTLSFingerprint)
+	mux.HandleFunc("/api/v1/attestation", s.handler.GetAttestation)
+	mux.HandleFunc("/api/v1/credentials/connect", credRateLimiter.Middleware(s.handler.ConnectCredentials))
+
+	// Apply CORS then logging middleware
+	var handler http.Handler = mux
+	if s.cfg.CORSOrigin != "" {
+		handler = CORSMiddleware(s.cfg.CORSOrigin, handler)
+	}
+	handler = s.loggingMiddleware(handler)
+
 	s.http = &http.Server{
-		Addr:         fmt.Sprintf(":%d", s.cfg.Port),
-		Handler:      s.loggingMiddleware(mux),
+		Addr:         fmt.Sprintf(":%d", s.cfg.RESTPort),
+		Handler:      handler,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 	}

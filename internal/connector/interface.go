@@ -5,6 +5,19 @@ import (
 	"time"
 )
 
+// Market type constants
+const (
+	MarketSpot        = "spot"
+	MarketSwap        = "swap"
+	MarketFutures     = "futures"
+	MarketOptions     = "options"
+	MarketMargin      = "margin"
+	MarketEarn        = "earn"
+	MarketCFD         = "cfd"
+	MarketForex       = "forex"
+	MarketCommodities = "commodities"
+)
+
 // Connector defines the interface for exchange connectors
 type Connector interface {
 	// GetBalance returns current account balance and equity
@@ -62,4 +75,12 @@ type Credentials struct {
 	APIKey     string
 	APISecret  string
 	Passphrase string // Optional, for exchanges like OKX
+
+	// DEX connectors (Hyperliquid, Lighter) - read-only, wallet address only
+	WalletAddress string
+
+	// OAuth connectors (cTrader)
+	AccessToken  string
+	ClientID     string
+	ClientSecret string
 }

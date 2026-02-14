@@ -1,11 +1,17 @@
 package server
 
 import (
+	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/trackrecord/enclave/internal/attestation"
+	"github.com/trackrecord/enclave/internal/encryption"
+	"github.com/trackrecord/enclave/internal/repository"
 	"github.com/trackrecord/enclave/internal/service"
+	tlspkg "github.com/trackrecord/enclave/internal/tls"
 	"go.uber.org/zap"
 )
 
@@ -14,12 +20,32 @@ var startTime = time.Now()
 const version = "1.0.0-go"
 
 type Handler struct {
-	logger     *zap.Logger
-	connSvc    *service.ConnectionService
-	syncSvc    *service.SyncService
-	metricsSvc *service.MetricsService
-	reportSvc  *service.ReportService
-	dbReady    bool
+	logger       *zap.Logger
+	connSvc      *service.ConnectionService
+	syncSvc      *service.SyncService
+	metricsSvc   *service.MetricsService
+	reportSvc    *service.ReportService
+	snapshotRepo *repository.SnapshotRepo
+	userRepo     *repository.UserRepo
+	dbReady      bool
+
+	// New services for attestation, TLS, and E2E encryption
+	tlsKeygen  *tlspkg.KeyGenerator
+	attestSvc  *attestation.Service
+	eciesSvc   *encryption.ECIESService
+}
+
+type HandlerOptions struct {
+	Logger       *zap.Logger
+	ConnSvc      *service.ConnectionService
+	SyncSvc      *service.SyncService
+	MetricsSvc   *service.MetricsService
+	ReportSvc    *service.ReportService
+	SnapshotRepo *repository.SnapshotRepo
+	UserRepo     *repository.UserRepo
+	TLSKeygen    *tlspkg.KeyGenerator
+	AttestSvc    *attestation.Service
+	ECIESSvc     *encryption.ECIESService
 }
 
 func NewHandler(
@@ -28,15 +54,201 @@ func NewHandler(
 	syncSvc *service.SyncService,
 	metricsSvc *service.MetricsService,
 	reportSvc *service.ReportService,
+	snapshotRepo *repository.SnapshotRepo,
+	userRepo *repository.UserRepo,
 ) *Handler {
 	return &Handler{
-		logger:     logger,
-		connSvc:    connSvc,
-		syncSvc:    syncSvc,
-		metricsSvc: metricsSvc,
-		reportSvc:  reportSvc,
-		dbReady:    connSvc != nil,
+		logger:       logger,
+		connSvc:      connSvc,
+		syncSvc:      syncSvc,
+		metricsSvc:   metricsSvc,
+		reportSvc:    reportSvc,
+		snapshotRepo: snapshotRepo,
+		userRepo:     userRepo,
+		dbReady:      connSvc != nil,
 	}
+}
+
+// NewHandlerWithOptions creates a handler with all optional services.
+func NewHandlerWithOptions(opts HandlerOptions) *Handler {
+	return &Handler{
+		logger:       opts.Logger,
+		connSvc:      opts.ConnSvc,
+		syncSvc:      opts.SyncSvc,
+		metricsSvc:   opts.MetricsSvc,
+		reportSvc:    opts.ReportSvc,
+		snapshotRepo: opts.SnapshotRepo,
+		userRepo:     opts.UserRepo,
+		dbReady:      opts.ConnSvc != nil,
+		tlsKeygen:    opts.TLSKeygen,
+		attestSvc:    opts.AttestSvc,
+		eciesSvc:     opts.ECIESSvc,
+	}
+}
+
+// GetTLSFingerprint - GET /api/v1/tls/fingerprint
+func (h *Handler) GetTLSFingerprint(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if h.tlsKeygen == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error": "TLS not configured",
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"fingerprint": h.tlsKeygen.Fingerprint(),
+		"algorithm":   "SHA-256",
+		"usage":       "Compare with attestation reportData to verify TLS binding",
+	})
+}
+
+// GetAttestation - GET /api/v1/attestation
+func (h *Handler) GetAttestation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if h.attestSvc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error": "attestation service not configured",
+		})
+		return
+	}
+
+	report, err := h.attestSvc.GetAttestation(r.Context())
+	if err != nil {
+		h.logger.Error("attestation failed", zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": "attestation failed",
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, report)
+}
+
+// ConnectCredentials - POST /api/v1/credentials/connect
+// Accepts E2E encrypted credentials and creates a connection.
+func (h *Handler) ConnectCredentials(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if h.eciesSvc == nil || h.connSvc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"success": false,
+			"error":   "E2E encryption or connection service not configured",
+		})
+		return
+	}
+
+	var req struct {
+		UserUID           string `json:"user_uid"`
+		Exchange          string `json:"exchange"`
+		Label             string `json:"label"`
+		EphemeralPubKey   string `json:"ephemeral_public_key"`
+		IV                string `json:"iv"`
+		Ciphertext        string `json:"ciphertext"`
+	}
+
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"success": false,
+			"error":   "invalid request body",
+		})
+		return
+	}
+
+	if req.UserUID == "" || req.Exchange == "" || req.Ciphertext == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"success": false,
+			"error":   "user_uid, exchange, and encrypted credentials are required",
+		})
+		return
+	}
+
+	// Decode hex components
+	ephPubKeyBytes, err := hexDecode(req.EphemeralPubKey)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "error": "invalid ephemeral_public_key"})
+		return
+	}
+	ivBytes, err := hexDecode(req.IV)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "error": "invalid iv"})
+		return
+	}
+	ciphertextBytes, err := hexDecode(req.Ciphertext)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "error": "invalid ciphertext"})
+		return
+	}
+
+	// Decrypt inside enclave
+	plaintext, err := h.eciesSvc.Decrypt(ephPubKeyBytes, ivBytes, ciphertextBytes)
+	if err != nil {
+		h.logger.Error("E2E decryption failed", zap.Error(err))
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"success": false,
+			"error":   "decryption failed",
+		})
+		return
+	}
+
+	// Parse decrypted credentials
+	var creds struct {
+		APIKey     string `json:"api_key"`
+		APISecret  string `json:"api_secret"`
+		Passphrase string `json:"passphrase"`
+	}
+	if err := json.Unmarshal(plaintext, &creds); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"success": false,
+			"error":   "invalid credential format",
+		})
+		return
+	}
+
+	// Upsert user
+	if h.userRepo != nil {
+		if _, err := h.userRepo.GetOrCreate(r.Context(), req.UserUID); err != nil {
+			h.logger.Error("user upsert failed", zap.Error(err))
+		}
+	}
+
+	// Create connection
+	err = h.connSvc.Create(r.Context(), &service.CreateConnectionRequest{
+		UserUID:    req.UserUID,
+		Exchange:   req.Exchange,
+		Label:      req.Label,
+		APIKey:     creds.APIKey,
+		APISecret:  creds.APISecret,
+		Passphrase: creds.Passphrase,
+	})
+	if err != nil {
+		h.logger.Error("create connection from E2E failed", zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"success": false,
+			"error":   "failed to create connection",
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success":  true,
+		"user_uid": req.UserUID,
+	})
+}
+
+func hexDecode(s string) ([]byte, error) {
+	return hex.DecodeString(s)
 }
 
 // HealthCheck - GET /health
@@ -93,6 +305,18 @@ func (h *Handler) CreateUserConnection(w http.ResponseWriter, r *http.Request) {
 			"error":   "database not configured",
 		})
 		return
+	}
+
+	// Upsert user first
+	if h.userRepo != nil {
+		if _, err := h.userRepo.GetOrCreate(r.Context(), req.UserUID); err != nil {
+			h.logger.Error("user upsert failed", zap.Error(err))
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"success": false,
+				"error":   "failed to create user",
+			})
+			return
+		}
 	}
 
 	err := h.connSvc.Create(r.Context(), &service.CreateConnectionRequest{
@@ -266,7 +490,7 @@ func (h *Handler) GetMetrics(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetSnapshots - GET /api/v1/snapshots?user_uid=xxx
+// GetSnapshots - GET /api/v1/snapshots?user_uid=xxx&exchange=xxx&start=xxx&end=xxx
 func (h *Handler) GetSnapshots(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -282,10 +506,66 @@ func (h *Handler) GetSnapshots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.snapshotRepo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"success": false,
+			"error":   "database not configured",
+		})
+		return
+	}
+
+	// Parse date range (milliseconds)
+	start := time.Now().AddDate(-1, 0, 0)
+	end := time.Now()
+
+	if s := r.URL.Query().Get("start"); s != "" {
+		if ms, err := strconv.ParseInt(s, 10, 64); err == nil {
+			start = time.UnixMilli(ms)
+		}
+	}
+	if e := r.URL.Query().Get("end"); e != "" {
+		if ms, err := strconv.ParseInt(e, 10, 64); err == nil {
+			end = time.UnixMilli(ms)
+		}
+	}
+
+	snapshots, err := h.snapshotRepo.GetByUserAndDateRange(r.Context(), userUID, start, end)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	// Filter by exchange if specified
+	exchange := r.URL.Query().Get("exchange")
+	var result []map[string]any
+	for _, snap := range snapshots {
+		if exchange != "" && snap.Exchange != exchange {
+			continue
+		}
+		result = append(result, map[string]any{
+			"user_uid":         snap.UserUID,
+			"exchange":         snap.Exchange,
+			"timestamp":        snap.Timestamp.UnixMilli(),
+			"total_equity":     snap.TotalEquity,
+			"realized_balance": snap.RealizedBalance,
+			"unrealized_pnl":   snap.UnrealizedPnL,
+			"deposits":         snap.Deposits,
+			"withdrawals":      snap.Withdrawals,
+			"breakdown":        snap.Breakdown,
+		})
+	}
+
+	if result == nil {
+		result = []map[string]any{}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":   true,
 		"user_uid":  userUID,
-		"snapshots": []any{},
+		"snapshots": result,
 	})
 }
 
@@ -305,6 +585,8 @@ func (h *Handler) GenerateReport(w http.ResponseWriter, r *http.Request) {
 		BaseCurrency       string `json:"base_currency"`
 		IncludeRiskMetrics bool   `json:"include_risk_metrics"`
 		IncludeDrawdown    bool   `json:"include_drawdown"`
+		Manager            string `json:"manager"`
+		Firm               string `json:"firm"`
 	}
 
 	if err := readJSON(r, &req); err != nil {
@@ -358,6 +640,8 @@ func (h *Handler) GenerateReport(w http.ResponseWriter, r *http.Request) {
 		BaseCurrency:       req.BaseCurrency,
 		IncludeRiskMetrics: req.IncludeRiskMetrics,
 		IncludeDrawdown:    req.IncludeDrawdown,
+		Manager:            req.Manager,
+		Firm:               req.Firm,
 	})
 
 	if err != nil {
@@ -369,23 +653,7 @@ func (h *Handler) GenerateReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"success":             true,
-		"report_id":           report.ReportID,
-		"user_uid":            report.UserUID,
-		"report_name":         report.ReportName,
-		"generated_at":        report.GeneratedAt,
-		"period_start":        report.PeriodStart,
-		"period_end":          report.PeriodEnd,
-		"total_return":        report.TotalReturn,
-		"sharpe_ratio":        report.SharpeRatio,
-		"max_drawdown":        report.MaxDrawdown,
-		"signature":           report.Signature,
-		"public_key":          report.PublicKey,
-		"signature_algorithm": report.SignatureAlgorithm,
-		"report_hash":         report.ReportHash,
-		"enclave_version":     report.EnclaveVersion,
-	})
+	writeJSON(w, http.StatusOK, report)
 }
 
 // VerifySignature - POST /api/v1/verify

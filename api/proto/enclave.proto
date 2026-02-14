@@ -15,6 +15,8 @@ service EnclaveService {
   rpc VerifyReportSignature(VerifySignatureRequest) returns (VerifySignatureResponse);
 }
 
+// --- Sync ---
+
 message SyncJobRequest {
   string user_uid = 1;
   string exchange = 2;
@@ -36,6 +38,8 @@ message Snapshot {
   int64 timestamp = 3;
 }
 
+// --- Metrics ---
+
 message AggregatedMetricsRequest {
   string user_uid = 1;
   string exchange = 2;
@@ -50,6 +54,8 @@ message AggregatedMetricsResponse {
   int32 total_trades = 6;
   int64 last_sync = 7;
 }
+
+// --- Snapshots ---
 
 message SnapshotTimeSeriesRequest {
   string user_uid = 1;
@@ -95,6 +101,8 @@ message MarketMetrics {
   double funding_fees = 6;
 }
 
+// --- Connections ---
+
 message CreateUserConnectionRequest {
   string user_uid = 1;
   string exchange = 2;
@@ -110,6 +118,8 @@ message CreateUserConnectionResponse {
   string error = 3;
 }
 
+// --- Health ---
+
 message HealthCheckRequest {}
 
 message HealthCheckResponse {
@@ -118,7 +128,11 @@ message HealthCheckResponse {
   int64 timestamp = 3;
   int64 uptime_seconds = 4;
   bool database = 5;
+  bool enclave = 6;
+  double uptime = 7;
 }
+
+// --- Performance ---
 
 message PerformanceMetricsRequest {
   string user_uid = 1;
@@ -147,6 +161,8 @@ message PerformanceMetricsResponse {
   string error = 17;
 }
 
+// --- Report ---
+
 message ReportRequest {
   string user_uid = 1;
   string start_date = 2;
@@ -156,26 +172,120 @@ message ReportRequest {
   bool include_drawdown = 6;
   string report_name = 7;
   string base_currency = 8;
+  string manager = 9;
+  string firm = 10;
 }
 
 message SignedReportResponse {
   bool success = 1;
   string error = 2;
+
+  // Identification
   string report_id = 10;
   string user_uid = 11;
   string report_name = 12;
   string generated_at = 13;
   string period_start = 14;
   string period_end = 15;
+
+  // Context
+  string base_currency = 16;
+  string benchmark = 17;
+  int32 data_points = 18;
+  repeated string exchanges = 19;
+
+  // Core metrics
   double total_return = 20;
+  double annualized_return = 21;
+  double volatility = 22;
   double sharpe_ratio = 23;
+  double sortino_ratio = 24;
   double max_drawdown = 25;
+  double calmar_ratio = 26;
+  double win_rate = 27;
+  double profit_factor = 28;
+
+  // Risk metrics
+  RiskMetricsData risk_metrics = 30;
+
+  // Benchmark comparison
+  BenchmarkMetricsData benchmark_metrics = 40;
+
+  // Drawdown analysis
+  DrawdownAnalysisData drawdown_data = 50;
+
+  // Chart data
+  repeated DailyReturnData daily_returns = 60;
+  repeated MonthlyReturnData monthly_returns = 61;
+
+  // Signature
   string signature = 70;
   string public_key = 71;
   string signature_algorithm = 72;
   string report_hash = 73;
+
+  // Enclave info
   string enclave_version = 80;
+  string attestation_id = 81;
+  string enclave_mode = 82;
+
+  // Display params (NOT signed)
+  string manager = 90;
+  string firm = 91;
 }
+
+// --- Report sub-messages ---
+
+message DailyReturnData {
+  string date = 1;
+  double net_return = 2;
+  double benchmark_return = 3;
+  double outperformance = 4;
+  double cumulative_return = 5;
+  double nav = 6;
+}
+
+message MonthlyReturnData {
+  string date = 1;
+  double net_return = 2;
+  double benchmark_return = 3;
+  double outperformance = 4;
+  double aum = 5;
+}
+
+message RiskMetricsData {
+  double var_95 = 1;
+  double var_99 = 2;
+  double expected_shortfall = 3;
+  double skewness = 4;
+  double kurtosis = 5;
+}
+
+message BenchmarkMetricsData {
+  string benchmark_name = 1;
+  double benchmark_return = 2;
+  double alpha = 3;
+  double beta = 4;
+  double information_ratio = 5;
+  double tracking_error = 6;
+  double correlation = 7;
+}
+
+message DrawdownAnalysisData {
+  double current_drawdown = 1;
+  int32 max_drawdown_duration = 2;
+  repeated DrawdownPeriodData periods = 3;
+}
+
+message DrawdownPeriodData {
+  string start_date = 1;
+  string end_date = 2;
+  double depth = 3;
+  int32 duration = 4;
+  bool recovered = 5;
+}
+
+// --- Signature Verification ---
 
 message VerifySignatureRequest {
   string report_hash = 1;

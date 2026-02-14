@@ -44,8 +44,52 @@ type SyncResult struct {
 	Error              string    `json:"error,omitempty"`
 }
 
-// SyncUser synchronizes all exchanges for a user
+// SyncUser synchronizes all exchanges for a user (manual sync).
+// Each exchange is individually checked for manual sync blocking.
 func (s *SyncService) SyncUser(ctx context.Context, userUID string) ([]*SyncResult, error) {
+	connections, err := s.connSvc.GetActiveConnections(ctx, userUID)
+	if err != nil {
+		return nil, fmt.Errorf("get connections: %w", err)
+	}
+
+	if len(connections) == 0 {
+		return nil, fmt.Errorf("no active connections for user %s", userUID)
+	}
+
+	var (
+		results []*SyncResult
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+	)
+
+	for _, conn := range connections {
+		wg.Add(1)
+		go func(c *repository.ExchangeConnection) {
+			defer wg.Done()
+
+			var result *SyncResult
+			if !s.isManualSyncAllowed(ctx, userUID, c.Exchange) {
+				result = &SyncResult{
+					UserUID:  userUID,
+					Exchange: c.Exchange,
+					Error:    "manual sync blocked: snapshot already exists. Only the hourly scheduler can sync after initial snapshot.",
+				}
+			} else {
+				result = s.syncExchange(ctx, userUID, c.Exchange)
+			}
+
+			mu.Lock()
+			results = append(results, result)
+			mu.Unlock()
+		}(conn)
+	}
+
+	wg.Wait()
+	return results, nil
+}
+
+// SyncUserScheduled synchronizes all exchanges for a user (scheduler path - bypasses manual block)
+func (s *SyncService) SyncUserScheduled(ctx context.Context, userUID string) ([]*SyncResult, error) {
 	connections, err := s.connSvc.GetActiveConnections(ctx, userUID)
 	if err != nil {
 		return nil, fmt.Errorf("get connections: %w", err)
@@ -78,9 +122,44 @@ func (s *SyncService) SyncUser(ctx context.Context, userUID string) ([]*SyncResu
 	return results, nil
 }
 
-// SyncExchange synchronizes a single exchange for a user
+// SyncExchange synchronizes a single exchange for a user (manual sync).
+// Blocks if a snapshot already exists for this user+exchange (anti-cherry-picking).
 func (s *SyncService) SyncExchange(ctx context.Context, userUID, exchange string) *SyncResult {
+	// Check if manual sync is allowed (no existing snapshot means first sync is OK)
+	if !s.isManualSyncAllowed(ctx, userUID, exchange) {
+		return &SyncResult{
+			UserUID:  userUID,
+			Exchange: exchange,
+			Error:    "manual sync blocked: snapshot already exists. Only the hourly scheduler can sync after initial snapshot.",
+		}
+	}
 	return s.syncExchange(ctx, userUID, exchange)
+}
+
+// SyncExchangeScheduled is used by the hourly scheduler - bypasses manual sync block
+func (s *SyncService) SyncExchangeScheduled(ctx context.Context, userUID, exchange string) *SyncResult {
+	return s.syncExchange(ctx, userUID, exchange)
+}
+
+// isManualSyncAllowed checks if a manual sync is permitted.
+// Returns false if any snapshot already exists for the user+exchange (anti-cherry-picking).
+func (s *SyncService) isManualSyncAllowed(ctx context.Context, userUID, exchange string) bool {
+	// Check if any snapshot exists for this user+exchange
+	snapshots, err := s.snapshotRepo.GetByUserAndDateRange(ctx, userUID,
+		time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+		time.Now().UTC(),
+	)
+	if err != nil {
+		// On error, allow sync (fail open for first-time users)
+		return true
+	}
+
+	for _, snap := range snapshots {
+		if snap.Exchange == exchange {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *SyncService) syncExchange(ctx context.Context, userUID, exchange string) *SyncResult {
@@ -175,10 +254,15 @@ func (s *SyncService) syncExchange(ctx context.Context, userUID, exchange string
 
 // aggregatedBreakdown holds aggregated trade data
 type aggregatedBreakdown struct {
-	spot    marketAgg
-	swap    marketAgg
-	futures marketAgg
-	options marketAgg
+	spot        marketAgg
+	swap        marketAgg
+	futures     marketAgg
+	options     marketAgg
+	margin      marketAgg
+	earn        marketAgg
+	cfd         marketAgg
+	forex       marketAgg
+	commodities marketAgg
 }
 
 type marketAgg struct {
@@ -195,12 +279,22 @@ func (s *SyncService) aggregateTrades(trades []*connector.Trade) *aggregatedBrea
 		ma := &agg.spot
 
 		switch t.MarketType {
-		case "swap":
+		case connector.MarketSwap:
 			ma = &agg.swap
-		case "futures":
+		case connector.MarketFutures:
 			ma = &agg.futures
-		case "options":
+		case connector.MarketOptions:
 			ma = &agg.options
+		case connector.MarketMargin:
+			ma = &agg.margin
+		case connector.MarketEarn:
+			ma = &agg.earn
+		case connector.MarketCFD:
+			ma = &agg.cfd
+		case connector.MarketForex:
+			ma = &agg.forex
+		case connector.MarketCommodities:
+			ma = &agg.commodities
 		}
 
 		ma.volume += volume
@@ -212,11 +306,13 @@ func (s *SyncService) aggregateTrades(trades []*connector.Trade) *aggregatedBrea
 }
 
 func (a *aggregatedBreakdown) totalVolume() float64 {
-	return a.spot.volume + a.swap.volume + a.futures.volume + a.options.volume
+	return a.spot.volume + a.swap.volume + a.futures.volume + a.options.volume +
+		a.margin.volume + a.earn.volume + a.cfd.volume + a.forex.volume + a.commodities.volume
 }
 
 func (a *aggregatedBreakdown) totalFees() float64 {
-	return a.spot.fees + a.swap.fees + a.futures.fees + a.options.fees
+	return a.spot.fees + a.swap.fees + a.futures.fees + a.options.fees +
+		a.margin.fees + a.earn.fees + a.cfd.fees + a.forex.fees + a.commodities.fees
 }
 
 func (a *aggregatedBreakdown) toRepo() *repository.MarketBreakdown {
@@ -251,6 +347,46 @@ func (a *aggregatedBreakdown) toRepo() *repository.MarketBreakdown {
 			Volume:      a.options.volume,
 			Trades:      a.options.trades,
 			TradingFees: a.options.fees,
+		}
+	}
+
+	if a.margin.trades > 0 {
+		breakdown.Margin = &repository.MarketMetrics{
+			Volume:      a.margin.volume,
+			Trades:      a.margin.trades,
+			TradingFees: a.margin.fees,
+		}
+	}
+
+	if a.earn.trades > 0 {
+		breakdown.Earn = &repository.MarketMetrics{
+			Volume:      a.earn.volume,
+			Trades:      a.earn.trades,
+			TradingFees: a.earn.fees,
+		}
+	}
+
+	if a.cfd.trades > 0 {
+		breakdown.CFD = &repository.MarketMetrics{
+			Volume:      a.cfd.volume,
+			Trades:      a.cfd.trades,
+			TradingFees: a.cfd.fees,
+		}
+	}
+
+	if a.forex.trades > 0 {
+		breakdown.Forex = &repository.MarketMetrics{
+			Volume:      a.forex.volume,
+			Trades:      a.forex.trades,
+			TradingFees: a.forex.fees,
+		}
+	}
+
+	if a.commodities.trades > 0 {
+		breakdown.Commodities = &repository.MarketMetrics{
+			Volume:      a.commodities.volume,
+			Trades:      a.commodities.trades,
+			TradingFees: a.commodities.fees,
 		}
 	}
 

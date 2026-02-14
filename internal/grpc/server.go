@@ -9,6 +9,7 @@ import (
 
 	"github.com/trackrecord/enclave/internal/repository"
 	"github.com/trackrecord/enclave/internal/service"
+	"github.com/trackrecord/enclave/internal/validation"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -28,6 +29,7 @@ type Server struct {
 	metricsSvc   *service.MetricsService
 	reportSvc    *service.ReportService
 	snapshotRepo *repository.SnapshotRepo
+	userRepo     *repository.UserRepo
 	grpcServer   *grpc.Server
 }
 
@@ -39,6 +41,7 @@ func NewServer(
 	metricsSvc *service.MetricsService,
 	reportSvc *service.ReportService,
 	snapshotRepo *repository.SnapshotRepo,
+	userRepo *repository.UserRepo,
 ) *Server {
 	return &Server{
 		logger:       logger,
@@ -47,6 +50,7 @@ func NewServer(
 		metricsSvc:   metricsSvc,
 		reportSvc:    reportSvc,
 		snapshotRepo: snapshotRepo,
+		userRepo:     userRepo,
 	}
 }
 
@@ -94,12 +98,15 @@ func (s *Server) loggingInterceptor(
 
 // HealthCheck implements EnclaveService
 func (s *Server) HealthCheck(ctx context.Context, req *HealthCheckRequest) (*HealthCheckResponse, error) {
+	uptime := time.Since(startTime).Seconds()
 	return &HealthCheckResponse{
 		Status:        "healthy",
 		Version:       version,
 		Timestamp:     time.Now().Unix(),
-		UptimeSeconds: int64(time.Since(startTime).Seconds()),
+		UptimeSeconds: int64(uptime),
 		Database:      s.connSvc != nil,
+		Enclave:       true,
+		Uptime:        uptime,
 	}, nil
 }
 
@@ -112,11 +119,28 @@ func (s *Server) CreateUserConnection(ctx context.Context, req *CreateUserConnec
 		}, nil
 	}
 
-	if req.UserUid == "" || req.Exchange == "" || req.ApiKey == "" {
+	if err := validation.ValidateCreateConnection(&validation.CreateConnectionRequest{
+		UserUID:   req.UserUid,
+		Exchange:  req.Exchange,
+		Label:     req.Label,
+		APIKey:    req.ApiKey,
+		APISecret: req.ApiSecret,
+	}); err != nil {
 		return &CreateUserConnectionResponse{
 			Success: false,
-			Error:   "user_uid, exchange, and api_key are required",
+			Error:   err.Error(),
 		}, nil
+	}
+
+	// Upsert user first
+	if s.userRepo != nil {
+		if _, err := s.userRepo.GetOrCreate(ctx, req.UserUid); err != nil {
+			s.logger.Error("user upsert failed", zap.Error(err))
+			return &CreateUserConnectionResponse{
+				Success: false,
+				Error:   "failed to create user",
+			}, nil
+		}
 	}
 
 	err := s.connSvc.Create(ctx, &service.CreateConnectionRequest{
@@ -151,10 +175,13 @@ func (s *Server) ProcessSyncJob(ctx context.Context, req *SyncJobRequest) (*Sync
 		}, nil
 	}
 
-	if req.UserUid == "" {
+	if err := validation.ValidateSyncRequest(&validation.SyncJobRequest{
+		UserUID:  req.UserUid,
+		Exchange: req.Exchange,
+	}); err != nil {
 		return &SyncJobResponse{
 			Success: false,
-			Error:   "user_uid is required",
+			Error:   err.Error(),
 		}, nil
 	}
 
@@ -206,6 +233,10 @@ func (s *Server) GetPerformanceMetrics(ctx context.Context, req *PerformanceMetr
 		}, nil
 	}
 
+	if err := validation.ValidateUserUID(req.UserUid); err != nil {
+		return &PerformanceMetricsResponse{Success: false, Error: err.Error()}, nil
+	}
+
 	start := time.UnixMilli(req.StartDate)
 	end := time.UnixMilli(req.EndDate)
 
@@ -250,6 +281,10 @@ func (s *Server) GetSnapshotTimeSeries(ctx context.Context, req *SnapshotTimeSer
 		return nil, status.Error(codes.Unavailable, "database not configured")
 	}
 
+	if err := validation.ValidateUserUID(req.UserUid); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
 	start := time.UnixMilli(req.StartDate)
 	end := time.UnixMilli(req.EndDate)
 
@@ -286,24 +321,87 @@ func (s *Server) GetSnapshotTimeSeries(ctx context.Context, req *SnapshotTimeSer
 }
 
 // GetAggregatedMetrics implements EnclaveService
+// Aggregates metrics across all exchange connections for the user
 func (s *Server) GetAggregatedMetrics(ctx context.Context, req *AggregatedMetricsRequest) (*AggregatedMetricsResponse, error) {
 	if s.snapshotRepo == nil {
 		return nil, status.Error(codes.Unavailable, "database not configured")
 	}
 
-	snapshot, err := s.snapshotRepo.GetLatestByUser(ctx, req.UserUid)
-	if err != nil {
+	if err := validation.ValidateUserUID(req.UserUid); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if req.Exchange != "" {
+		if err := validation.ValidateExchange(req.Exchange); err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+	}
+
+	// Get all active connections for the user
+	if s.connSvc == nil {
+		// Fallback to single snapshot
+		snapshot, err := s.snapshotRepo.GetLatestByUser(ctx, req.UserUid)
+		if err != nil {
+			return &AggregatedMetricsResponse{}, nil
+		}
+		return &AggregatedMetricsResponse{
+			TotalBalance:       snapshot.RealizedBalance,
+			TotalEquity:        snapshot.TotalEquity,
+			TotalUnrealizedPnl: snapshot.UnrealizedPnL,
+			TotalFees:          snapshot.TotalFees,
+			TotalTrades:        int32(snapshot.TotalTrades),
+			LastSync:           snapshot.Timestamp.Unix(),
+		}, nil
+	}
+
+	connections, err := s.connSvc.GetActiveConnections(ctx, req.UserUid)
+	if err != nil || len(connections) == 0 {
 		return &AggregatedMetricsResponse{}, nil
 	}
 
-	return &AggregatedMetricsResponse{
-		TotalBalance:       snapshot.RealizedBalance,
-		TotalEquity:        snapshot.TotalEquity,
-		TotalUnrealizedPnl: snapshot.UnrealizedPnL,
-		TotalFees:          snapshot.TotalFees,
-		TotalTrades:        int32(snapshot.TotalTrades),
-		LastSync:           snapshot.Timestamp.Unix(),
-	}, nil
+	resp := &AggregatedMetricsResponse{}
+	var lastSync time.Time
+
+	for _, conn := range connections {
+		// Filter by exchange if specified
+		if req.Exchange != "" && conn.Exchange != req.Exchange {
+			continue
+		}
+
+		snapshot, err := s.snapshotRepo.GetByUserExchangeAndDate(ctx, req.UserUid, conn.Exchange, time.Time{})
+		if err != nil {
+			// Try latest by user for this exchange
+			latestSnapshots, err := s.snapshotRepo.GetByUserAndDateRange(ctx, req.UserUid, time.Now().AddDate(-1, 0, 0), time.Now())
+			if err != nil {
+				continue
+			}
+			// Find latest for this exchange
+			for i := len(latestSnapshots) - 1; i >= 0; i-- {
+				if latestSnapshots[i].Exchange == conn.Exchange {
+					snapshot = latestSnapshots[i]
+					break
+				}
+			}
+			if snapshot == nil {
+				continue
+			}
+		}
+
+		resp.TotalBalance += snapshot.RealizedBalance
+		resp.TotalEquity += snapshot.TotalEquity
+		resp.TotalUnrealizedPnl += snapshot.UnrealizedPnL
+		resp.TotalFees += snapshot.TotalFees
+		resp.TotalTrades += int32(snapshot.TotalTrades)
+
+		if snapshot.Timestamp.After(lastSync) {
+			lastSync = snapshot.Timestamp
+		}
+	}
+
+	if !lastSync.IsZero() {
+		resp.LastSync = lastSync.Unix()
+	}
+
+	return resp, nil
 }
 
 // GenerateSignedReport implements EnclaveService
@@ -313,6 +411,15 @@ func (s *Server) GenerateSignedReport(ctx context.Context, req *ReportRequest) (
 			Success: false,
 			Error:   "report service not available",
 		}, nil
+	}
+
+	if err := validation.ValidateReportRequest(&validation.ReportRequest{
+		UserUID:   req.UserUid,
+		StartDate: req.StartDate,
+		EndDate:   req.EndDate,
+		Benchmark: req.Benchmark,
+	}); err != nil {
+		return &SignedReportResponse{Success: false, Error: err.Error()}, nil
 	}
 
 	startDate, err := time.Parse("2006-01-02", req.StartDate)
@@ -340,6 +447,8 @@ func (s *Server) GenerateSignedReport(ctx context.Context, req *ReportRequest) (
 		BaseCurrency:       req.BaseCurrency,
 		IncludeRiskMetrics: req.IncludeRiskMetrics,
 		IncludeDrawdown:    req.IncludeDrawdown,
+		Manager:            req.Manager,
+		Firm:               req.Firm,
 	})
 	if err != nil {
 		s.logger.Error("generate report failed", zap.Error(err))
@@ -349,7 +458,7 @@ func (s *Server) GenerateSignedReport(ctx context.Context, req *ReportRequest) (
 		}, nil
 	}
 
-	return &SignedReportResponse{
+	resp := &SignedReportResponse{
 		Success:            true,
 		ReportId:           report.ReportID,
 		UserUid:            report.UserUID,
@@ -358,14 +467,100 @@ func (s *Server) GenerateSignedReport(ctx context.Context, req *ReportRequest) (
 		PeriodStart:        report.PeriodStart,
 		PeriodEnd:          report.PeriodEnd,
 		TotalReturn:        report.TotalReturn,
+		AnnualizedReturn:   report.AnnualizedReturn,
 		SharpeRatio:        report.SharpeRatio,
+		SortinoRatio:       report.SortinoRatio,
+		CalmarRatio:        report.CalmarRatio,
 		MaxDrawdown:        report.MaxDrawdown,
+		Volatility:         report.Volatility,
+		WinRate:            report.WinRate,
+		ProfitFactor:       report.ProfitFactor,
+		DataPoints:         report.DataPoints,
+		BaseCurrency:       report.BaseCurrency,
+		Benchmark:          report.Benchmark,
+		Exchanges:          report.Exchanges,
 		Signature:          report.Signature,
 		PublicKey:          report.PublicKey,
 		SignatureAlgorithm: report.SignatureAlgorithm,
 		ReportHash:         report.ReportHash,
 		EnclaveVersion:     report.EnclaveVersion,
-	}, nil
+	}
+
+	// Map daily returns
+	if len(report.DailyReturns) > 0 {
+		resp.DailyReturns = make([]ReportDailyReturn, len(report.DailyReturns))
+		for i, dr := range report.DailyReturns {
+			resp.DailyReturns[i] = ReportDailyReturn{
+				Date:             dr.Date,
+				NetReturn:        dr.NetReturn,
+				BenchmarkReturn:  dr.BenchmarkReturn,
+				Outperformance:   dr.Outperformance,
+				CumulativeReturn: dr.CumulativeReturn,
+				NAV:              dr.NAV,
+			}
+		}
+	}
+
+	// Map monthly returns
+	if len(report.MonthlyReturns) > 0 {
+		resp.MonthlyReturns = make([]ReportMonthlyReturn, len(report.MonthlyReturns))
+		for i, mr := range report.MonthlyReturns {
+			resp.MonthlyReturns[i] = ReportMonthlyReturn{
+				Date:            mr.Date,
+				NetReturn:       mr.NetReturn,
+				BenchmarkReturn: mr.BenchmarkReturn,
+				Outperformance:  mr.Outperformance,
+				AUM:             mr.AUM,
+			}
+		}
+	}
+
+	// Map risk metrics
+	if report.RiskMetrics != nil {
+		resp.RiskMetrics = &ReportRiskMetrics{
+			VaR95:             report.RiskMetrics.VaR95,
+			VaR99:             report.RiskMetrics.VaR99,
+			ExpectedShortfall: report.RiskMetrics.ExpectedShortfall,
+			Skewness:          report.RiskMetrics.Skewness,
+			Kurtosis:          report.RiskMetrics.Kurtosis,
+		}
+	}
+
+	// Map drawdown data
+	if report.DrawdownData != nil {
+		resp.DrawdownData = &ReportDrawdownData{
+			CurrentDrawdown:     report.DrawdownData.CurrentDrawdown,
+			MaxDrawdownDuration: report.DrawdownData.MaxDrawdownDuration,
+		}
+		for _, p := range report.DrawdownData.Periods {
+			resp.DrawdownData.Periods = append(resp.DrawdownData.Periods, &ReportDrawdownPeriod{
+				StartDate: p.StartDate,
+				EndDate:   p.EndDate,
+				Depth:     p.Depth,
+				Duration:  p.Duration,
+				Recovered: p.Recovered,
+			})
+		}
+	}
+
+	// Map benchmark metrics
+	if report.BenchmarkMetrics != nil {
+		resp.BenchmarkMetrics = &ReportBenchmarkMetrics{
+			BenchmarkName:    report.BenchmarkMetrics.BenchmarkName,
+			BenchmarkReturn:  report.BenchmarkMetrics.BenchmarkReturn,
+			Alpha:            report.BenchmarkMetrics.Alpha,
+			Beta:             report.BenchmarkMetrics.Beta,
+			InformationRatio: report.BenchmarkMetrics.InformationRatio,
+			TrackingError:    report.BenchmarkMetrics.TrackingError,
+			Correlation:      report.BenchmarkMetrics.Correlation,
+		}
+	}
+
+	// Display params (not signed)
+	resp.Manager = report.Manager
+	resp.Firm = report.Firm
+
+	return resp, nil
 }
 
 // VerifyReportSignature implements EnclaveService
@@ -374,6 +569,13 @@ func (s *Server) VerifyReportSignature(ctx context.Context, req *VerifySignature
 		return &VerifySignatureResponse{
 			Valid: false,
 			Error: "report service not available",
+		}, nil
+	}
+
+	if req.ReportHash == "" || req.Signature == "" || req.PublicKey == "" {
+		return &VerifySignatureResponse{
+			Valid: false,
+			Error: "report_hash, signature, and public_key are required",
 		}, nil
 	}
 

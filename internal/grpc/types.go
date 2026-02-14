@@ -8,11 +8,13 @@ type HealthCheckRequest struct{}
 
 // HealthCheckResponse contains service health info
 type HealthCheckResponse struct {
-	Status        string `json:"status"`
-	Version       string `json:"version"`
-	Timestamp     int64  `json:"timestamp"`
-	UptimeSeconds int64  `json:"uptime_seconds"`
-	Database      bool   `json:"database"`
+	Status        string  `json:"status"`
+	Version       string  `json:"version"`
+	Timestamp     int64   `json:"timestamp"`
+	UptimeSeconds int64   `json:"uptime_seconds"`
+	Database      bool    `json:"database"`
+	Enclave       bool    `json:"enclave"`
+	Uptime        float64 `json:"uptime"`
 }
 
 // SyncJobRequest triggers a sync for a user
@@ -161,26 +163,102 @@ type ReportRequest struct {
 	IncludeDrawdown    bool   `json:"include_drawdown"`
 	ReportName         string `json:"report_name"`
 	BaseCurrency       string `json:"base_currency"`
+	Manager            string `json:"manager,omitempty"`
+	Firm               string `json:"firm,omitempty"`
 }
 
-// SignedReportResponse contains the signed report
+// ReportBenchmarkMetrics holds benchmark comparison data in the report response
+type ReportBenchmarkMetrics struct {
+	BenchmarkName    string  `json:"benchmark_name"`
+	BenchmarkReturn  float64 `json:"benchmark_return"`
+	Alpha            float64 `json:"alpha"`
+	Beta             float64 `json:"beta"`
+	InformationRatio float64 `json:"information_ratio"`
+	TrackingError    float64 `json:"tracking_error"`
+	Correlation      float64 `json:"correlation"`
+}
+
+// SignedReportResponse contains the signed report with extended analytics
 type SignedReportResponse struct {
-	Success            bool    `json:"success"`
-	Error              string  `json:"error"`
-	ReportId           string  `json:"report_id"`
-	UserUid            string  `json:"user_uid"`
-	ReportName         string  `json:"report_name"`
-	GeneratedAt        string  `json:"generated_at"`
-	PeriodStart        string  `json:"period_start"`
-	PeriodEnd          string  `json:"period_end"`
-	TotalReturn        float64 `json:"total_return"`
-	SharpeRatio        float64 `json:"sharpe_ratio"`
-	MaxDrawdown        float64 `json:"max_drawdown"`
-	Signature          string  `json:"signature"`
-	PublicKey          string  `json:"public_key"`
-	SignatureAlgorithm string  `json:"signature_algorithm"`
-	ReportHash         string  `json:"report_hash"`
-	EnclaveVersion     string  `json:"enclave_version"`
+	Success            bool                    `json:"success"`
+	Error              string                  `json:"error"`
+	ReportId           string                  `json:"report_id"`
+	UserUid            string                  `json:"user_uid"`
+	ReportName         string                  `json:"report_name"`
+	GeneratedAt        string                  `json:"generated_at"`
+	PeriodStart        string                  `json:"period_start"`
+	PeriodEnd          string                  `json:"period_end"`
+	TotalReturn        float64                 `json:"total_return"`
+	AnnualizedReturn   float64                 `json:"annualized_return"`
+	SharpeRatio        float64                 `json:"sharpe_ratio"`
+	SortinoRatio       float64                 `json:"sortino_ratio"`
+	CalmarRatio        float64                 `json:"calmar_ratio"`
+	MaxDrawdown        float64                 `json:"max_drawdown"`
+	Volatility         float64                 `json:"volatility"`
+	WinRate            float64                 `json:"win_rate"`
+	ProfitFactor       float64                 `json:"profit_factor"`
+	DataPoints         int                     `json:"data_points"`
+	BaseCurrency       string                  `json:"base_currency"`
+	Benchmark          string                  `json:"benchmark"`
+	Exchanges          []string                `json:"exchanges,omitempty"`
+	DailyReturns       []ReportDailyReturn     `json:"daily_returns,omitempty"`
+	MonthlyReturns     []ReportMonthlyReturn   `json:"monthly_returns,omitempty"`
+	RiskMetrics        *ReportRiskMetrics      `json:"risk_metrics,omitempty"`
+	DrawdownData       *ReportDrawdownData     `json:"drawdown_data,omitempty"`
+	BenchmarkMetrics   *ReportBenchmarkMetrics `json:"benchmark_metrics,omitempty"`
+	Manager            string                  `json:"manager,omitempty"`
+	Firm               string                  `json:"firm,omitempty"`
+	Signature          string                  `json:"signature"`
+	PublicKey          string                  `json:"public_key"`
+	SignatureAlgorithm string                  `json:"signature_algorithm"`
+	ReportHash         string                  `json:"report_hash"`
+	EnclaveVersion     string                  `json:"enclave_version"`
+	AttestationID      string                  `json:"attestation_id,omitempty"`
+	EnclaveMode        string                  `json:"enclave_mode,omitempty"`
+}
+
+// ReportDailyReturn is a daily return entry in the report response
+type ReportDailyReturn struct {
+	Date             string  `json:"date"`
+	NetReturn        float64 `json:"net_return"`
+	BenchmarkReturn  float64 `json:"benchmark_return"`
+	Outperformance   float64 `json:"outperformance"`
+	CumulativeReturn float64 `json:"cumulative_return"`
+	NAV              float64 `json:"nav"`
+}
+
+// ReportMonthlyReturn is a monthly return entry in the report response
+type ReportMonthlyReturn struct {
+	Date            string  `json:"date"`
+	NetReturn       float64 `json:"net_return"`
+	BenchmarkReturn float64 `json:"benchmark_return"`
+	Outperformance  float64 `json:"outperformance"`
+	AUM             float64 `json:"aum"`
+}
+
+// ReportRiskMetrics contains risk metrics in the report response
+type ReportRiskMetrics struct {
+	VaR95             float64 `json:"var_95"`
+	VaR99             float64 `json:"var_99"`
+	ExpectedShortfall float64 `json:"expected_shortfall"`
+	Skewness          float64 `json:"skewness"`
+	Kurtosis          float64 `json:"kurtosis"`
+}
+
+// ReportDrawdownPeriod represents a drawdown event in the report response
+type ReportDrawdownPeriod struct {
+	StartDate string  `json:"start_date"`
+	EndDate   string  `json:"end_date"`
+	Depth     float64 `json:"depth"`
+	Duration  int     `json:"duration"`
+	Recovered bool    `json:"recovered"`
+}
+
+// ReportDrawdownData contains drawdown analysis in the report response
+type ReportDrawdownData struct {
+	CurrentDrawdown     float64                 `json:"current_drawdown"`
+	MaxDrawdownDuration int                     `json:"max_drawdown_duration"`
+	Periods             []*ReportDrawdownPeriod `json:"periods"`
 }
 
 // VerifySignatureRequest requests signature verification

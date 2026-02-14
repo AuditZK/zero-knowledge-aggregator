@@ -52,6 +52,61 @@ func (s *ReportSigner) PublicKeyHex() string {
 	return hex.EncodeToString(s.publicKey)
 }
 
+// DailyReturn represents a single day's return data
+type DailyReturn struct {
+	Date             string  `json:"date"`
+	NetReturn        float64 `json:"net_return"`
+	BenchmarkReturn  float64 `json:"benchmark_return"`
+	Outperformance   float64 `json:"outperformance"`
+	CumulativeReturn float64 `json:"cumulative_return"`
+	NAV              float64 `json:"nav"`
+}
+
+// MonthlyReturn represents a single month's return data
+type MonthlyReturn struct {
+	Date            string  `json:"date"`
+	NetReturn       float64 `json:"net_return"`
+	BenchmarkReturn float64 `json:"benchmark_return"`
+	Outperformance  float64 `json:"outperformance"`
+	AUM             float64 `json:"aum"`
+}
+
+// RiskMetrics contains risk analysis data
+type RiskMetrics struct {
+	VaR95              float64 `json:"var_95"`
+	VaR99              float64 `json:"var_99"`
+	ExpectedShortfall  float64 `json:"expected_shortfall"`
+	Skewness           float64 `json:"skewness"`
+	Kurtosis           float64 `json:"kurtosis"`
+}
+
+// DrawdownPeriod represents a single drawdown event
+type DrawdownPeriod struct {
+	StartDate string  `json:"start_date"`
+	EndDate   string  `json:"end_date"`
+	Depth     float64 `json:"depth"`
+	Duration  int     `json:"duration"`
+	Recovered bool    `json:"recovered"`
+}
+
+// DrawdownData contains drawdown analysis
+type DrawdownData struct {
+	CurrentDrawdown    float64           `json:"current_drawdown"`
+	MaxDrawdownDuration int              `json:"max_drawdown_duration"`
+	Periods            []*DrawdownPeriod `json:"periods"`
+}
+
+// BenchmarkMetrics holds benchmark comparison data for the report.
+type BenchmarkMetrics struct {
+	BenchmarkName    string  `json:"benchmark_name"`
+	BenchmarkReturn  float64 `json:"benchmark_return"`
+	Alpha            float64 `json:"alpha"`
+	Beta             float64 `json:"beta"`
+	InformationRatio float64 `json:"information_ratio"`
+	TrackingError    float64 `json:"tracking_error"`
+	Correlation      float64 `json:"correlation"`
+}
+
 // ReportInput contains the data to include in a signed report
 type ReportInput struct {
 	UserUID     string
@@ -60,17 +115,26 @@ type ReportInput struct {
 	PeriodEnd   time.Time
 
 	// Metrics
-	TotalReturn   float64
-	SharpeRatio   float64
-	SortinoRatio  float64
-	CalmarRatio   float64
-	MaxDrawdown   float64
-	Volatility    float64
-	WinRate       float64
-	ProfitFactor  float64
-	DataPoints    int
-	BaseCurrency  string
-	BenchmarkUsed string
+	TotalReturn      float64
+	AnnualizedReturn float64
+	SharpeRatio      float64
+	SortinoRatio     float64
+	CalmarRatio      float64
+	MaxDrawdown      float64
+	Volatility       float64
+	WinRate          float64
+	ProfitFactor     float64
+	DataPoints       int
+	BaseCurrency     string
+	BenchmarkUsed    string
+
+	// Extended data
+	Exchanges        []string
+	DailyReturns     []DailyReturn
+	MonthlyReturns   []MonthlyReturn
+	RiskMetrics      *RiskMetrics
+	DrawdownData     *DrawdownData
+	BenchmarkMetrics *BenchmarkMetrics
 }
 
 // SignedReport is the output of signing
@@ -86,17 +150,30 @@ type SignedReport struct {
 	PeriodEnd   string `json:"period_end"`
 
 	// Metrics
-	TotalReturn  float64 `json:"total_return"`
-	SharpeRatio  float64 `json:"sharpe_ratio"`
-	SortinoRatio float64 `json:"sortino_ratio"`
-	CalmarRatio  float64 `json:"calmar_ratio"`
-	MaxDrawdown  float64 `json:"max_drawdown"`
-	Volatility   float64 `json:"volatility"`
-	WinRate      float64 `json:"win_rate"`
-	ProfitFactor float64 `json:"profit_factor"`
-	DataPoints   int     `json:"data_points"`
-	BaseCurrency string  `json:"base_currency"`
-	Benchmark    string  `json:"benchmark"`
+	TotalReturn      float64 `json:"total_return"`
+	AnnualizedReturn float64 `json:"annualized_return"`
+	SharpeRatio      float64 `json:"sharpe_ratio"`
+	SortinoRatio     float64 `json:"sortino_ratio"`
+	CalmarRatio      float64 `json:"calmar_ratio"`
+	MaxDrawdown      float64 `json:"max_drawdown"`
+	Volatility       float64 `json:"volatility"`
+	WinRate          float64 `json:"win_rate"`
+	ProfitFactor     float64 `json:"profit_factor"`
+	DataPoints       int     `json:"data_points"`
+	BaseCurrency     string  `json:"base_currency"`
+	Benchmark        string  `json:"benchmark"`
+
+	// Extended data
+	Exchanges        []string          `json:"exchanges,omitempty"`
+	DailyReturns     []DailyReturn     `json:"daily_returns,omitempty"`
+	MonthlyReturns   []MonthlyReturn   `json:"monthly_returns,omitempty"`
+	RiskMetrics      *RiskMetrics      `json:"risk_metrics,omitempty"`
+	DrawdownData     *DrawdownData     `json:"drawdown_data,omitempty"`
+	BenchmarkMetrics *BenchmarkMetrics `json:"benchmark_metrics,omitempty"`
+
+	// Display params (NOT signed — applied per request)
+	Manager string `json:"manager,omitempty"`
+	Firm    string `json:"firm,omitempty"`
 
 	// Signature
 	Signature          string `json:"signature"`
@@ -108,16 +185,17 @@ type SignedReport struct {
 
 // reportPayload is the canonical form for hashing
 type reportPayload struct {
-	ReportID    string  `json:"report_id"`
-	UserUID     string  `json:"user_uid"`
-	ReportName  string  `json:"report_name"`
-	GeneratedAt string  `json:"generated_at"`
-	PeriodStart string  `json:"period_start"`
-	PeriodEnd   string  `json:"period_end"`
-	TotalReturn float64 `json:"total_return"`
-	SharpeRatio float64 `json:"sharpe_ratio"`
-	MaxDrawdown float64 `json:"max_drawdown"`
-	DataPoints  int     `json:"data_points"`
+	ReportID         string  `json:"report_id"`
+	UserUID          string  `json:"user_uid"`
+	ReportName       string  `json:"report_name"`
+	GeneratedAt      string  `json:"generated_at"`
+	PeriodStart      string  `json:"period_start"`
+	PeriodEnd        string  `json:"period_end"`
+	TotalReturn      float64 `json:"total_return"`
+	AnnualizedReturn float64 `json:"annualized_return"`
+	SharpeRatio      float64 `json:"sharpe_ratio"`
+	MaxDrawdown      float64 `json:"max_drawdown"`
+	DataPoints       int     `json:"data_points"`
 }
 
 // Sign creates a signed report from input
@@ -127,16 +205,17 @@ func (s *ReportSigner) Sign(input *ReportInput) (*SignedReport, error) {
 
 	// Create canonical payload for hashing
 	payload := reportPayload{
-		ReportID:    reportID,
-		UserUID:     input.UserUID,
-		ReportName:  input.ReportName,
-		GeneratedAt: generatedAt,
-		PeriodStart: input.PeriodStart.Format("2006-01-02"),
-		PeriodEnd:   input.PeriodEnd.Format("2006-01-02"),
-		TotalReturn: input.TotalReturn,
-		SharpeRatio: input.SharpeRatio,
-		MaxDrawdown: input.MaxDrawdown,
-		DataPoints:  input.DataPoints,
+		ReportID:         reportID,
+		UserUID:          input.UserUID,
+		ReportName:       input.ReportName,
+		GeneratedAt:      generatedAt,
+		PeriodStart:      input.PeriodStart.Format("2006-01-02"),
+		PeriodEnd:        input.PeriodEnd.Format("2006-01-02"),
+		TotalReturn:      input.TotalReturn,
+		AnnualizedReturn: input.AnnualizedReturn,
+		SharpeRatio:      input.SharpeRatio,
+		MaxDrawdown:      input.MaxDrawdown,
+		DataPoints:       input.DataPoints,
 	}
 
 	// JSON encode for deterministic hashing
@@ -161,6 +240,7 @@ func (s *ReportSigner) Sign(input *ReportInput) (*SignedReport, error) {
 		PeriodStart:        input.PeriodStart.Format("2006-01-02"),
 		PeriodEnd:          input.PeriodEnd.Format("2006-01-02"),
 		TotalReturn:        input.TotalReturn,
+		AnnualizedReturn:   input.AnnualizedReturn,
 		SharpeRatio:        input.SharpeRatio,
 		SortinoRatio:       input.SortinoRatio,
 		CalmarRatio:        input.CalmarRatio,
@@ -171,6 +251,12 @@ func (s *ReportSigner) Sign(input *ReportInput) (*SignedReport, error) {
 		DataPoints:         input.DataPoints,
 		BaseCurrency:       input.BaseCurrency,
 		Benchmark:          input.BenchmarkUsed,
+		Exchanges:          input.Exchanges,
+		DailyReturns:       input.DailyReturns,
+		MonthlyReturns:     input.MonthlyReturns,
+		RiskMetrics:        input.RiskMetrics,
+		DrawdownData:       input.DrawdownData,
+		BenchmarkMetrics:   input.BenchmarkMetrics,
 		Signature:          signatureB64,
 		PublicKey:          s.PublicKeyHex(),
 		SignatureAlgorithm: SignatureAlgorithm,

@@ -29,10 +29,15 @@ type Snapshot struct {
 
 // MarketBreakdown holds metrics per market type
 type MarketBreakdown struct {
-	Spot    *MarketMetrics `json:"spot,omitempty"`
-	Swap    *MarketMetrics `json:"swap,omitempty"`
-	Futures *MarketMetrics `json:"futures,omitempty"`
-	Options *MarketMetrics `json:"options,omitempty"`
+	Spot        *MarketMetrics `json:"spot,omitempty"`
+	Swap        *MarketMetrics `json:"swap,omitempty"`
+	Futures     *MarketMetrics `json:"futures,omitempty"`
+	Options     *MarketMetrics `json:"options,omitempty"`
+	Margin      *MarketMetrics `json:"margin,omitempty"`
+	Earn        *MarketMetrics `json:"earn,omitempty"`
+	CFD         *MarketMetrics `json:"cfd,omitempty"`
+	Forex       *MarketMetrics `json:"forex,omitempty"`
+	Commodities *MarketMetrics `json:"commodities,omitempty"`
 }
 
 // MarketMetrics holds trading metrics for a market type

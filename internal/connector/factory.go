@@ -32,6 +32,20 @@ func (f *Factory) Create(creds *Credentials) (Connector, error) {
 	case "tradestation":
 		return NewTradeStation(creds), nil
 
+	// DEX (read-only, wallet address)
+	case "hyperliquid":
+		return NewHyperliquid(creds), nil
+	case "lighter":
+		return NewLighter(creds), nil
+
+	// CFD/Forex brokers
+	case "ctrader":
+		return NewCTrader(creds), nil
+
+	// Testing
+	case "mock":
+		return NewMock(), nil
+
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedExchange, creds.Exchange)
 	}
@@ -46,5 +60,8 @@ func (f *Factory) SupportedExchanges() []string {
 		"ibkr",
 		"alpaca",
 		"tradestation",
+		"hyperliquid",
+		"lighter",
+		"ctrader",
 	}
 }

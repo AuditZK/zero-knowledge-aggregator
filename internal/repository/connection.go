@@ -134,6 +134,36 @@ func (r *ConnectionRepo) GetActiveByUser(ctx context.Context, userUID string) ([
 	return connections, rows.Err()
 }
 
+// GetByUserExchangeLabel retrieves a connection by user, exchange, and label
+func (r *ConnectionRepo) GetByUserExchangeLabel(ctx context.Context, userUID, exchange, label string) (*ExchangeConnection, error) {
+	query := `
+		SELECT id, user_uid, exchange, label,
+			encrypted_api_key, api_key_iv, api_key_auth_tag,
+			encrypted_api_secret, api_secret_iv, api_secret_auth_tag,
+			encrypted_passphrase, passphrase_iv, passphrase_auth_tag,
+			is_active, created_at, updated_at
+		FROM exchange_connections
+		WHERE user_uid = $1 AND exchange = $2 AND label = $3 AND is_active = true`
+
+	var conn ExchangeConnection
+	err := r.pool.QueryRow(ctx, query, userUID, exchange, label).Scan(
+		&conn.ID, &conn.UserUID, &conn.Exchange, &conn.Label,
+		&conn.EncryptedAPIKey, &conn.APIKeyIV, &conn.APIKeyAuthTag,
+		&conn.EncryptedAPISecret, &conn.APISecretIV, &conn.APISecretAuthTag,
+		&conn.EncryptedPassphrase, &conn.PassphraseIV, &conn.PassphraseAuthTag,
+		&conn.IsActive, &conn.CreatedAt, &conn.UpdatedAt,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &conn, nil
+}
+
 // Deactivate soft-deletes a connection
 func (r *ConnectionRepo) Deactivate(ctx context.Context, id string) error {
 	query := `UPDATE exchange_connections SET is_active = false, updated_at = $1 WHERE id = $2`

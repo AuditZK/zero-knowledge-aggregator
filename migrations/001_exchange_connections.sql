@@ -22,10 +22,12 @@ CREATE TABLE IF NOT EXISTS exchange_connections (
 
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-
-    UNIQUE(user_uid, exchange, is_active) WHERE is_active = true
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Partial unique index: one active connection per user+exchange
+CREATE UNIQUE INDEX idx_exchange_connections_unique_active
+    ON exchange_connections(user_uid, exchange) WHERE is_active = true;
 
 CREATE INDEX idx_exchange_connections_user_uid ON exchange_connections(user_uid);
 CREATE INDEX idx_exchange_connections_active ON exchange_connections(user_uid, is_active) WHERE is_active = true;
