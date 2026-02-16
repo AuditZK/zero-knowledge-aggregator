@@ -119,6 +119,11 @@ export class LighterConnector extends CryptoExchangeConnector {
     return 'lighter';
   }
 
+  /** Connected to mainnet (mainnet.zklighter.elliot.ai) — always live. */
+  async detectIsPaper(): Promise<boolean> {
+    return false;
+  }
+
   /**
    * Get account balance
    */

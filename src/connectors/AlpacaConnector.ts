@@ -34,6 +34,11 @@ export class AlpacaConnector extends RestBrokerConnector {
     return 'alpaca';
   }
 
+  /** Detect paper trading from Alpaca API key prefix (PK = paper). */
+  async detectIsPaper(): Promise<boolean> {
+    return this.api.getIsPaper();
+  }
+
   /**
    * Get authentication headers (API Key based)
    */

@@ -49,6 +49,14 @@ export class IbkrFlexConnector extends BaseExchangeConnector {
     return supported.includes(feature);
   }
 
+  /** Detect paper account from IBKR account ID prefix (DU/DF = paper). */
+  async detectIsPaper(): Promise<boolean> {
+    const xmlData = await this.flexService.getFlexDataCached(this.flexToken, this.queryId);
+    const accountId = await this.flexService.parseAccountId(xmlData);
+    if (!accountId) return false;
+    return accountId.startsWith('DU') || accountId.startsWith('DF');
+  }
+
   private async fetchFlexData<T>(parser: (xmlData: string) => Promise<T>): Promise<T> {
     const xmlData = await this.flexService.getFlexDataCached(this.flexToken, this.queryId);
     return await parser(xmlData);

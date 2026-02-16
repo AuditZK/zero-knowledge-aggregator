@@ -276,10 +276,20 @@ message SignedReportResponse {
   string signature_algorithm = 72; // e.g., "ECDSA-P256-SHA256"
   string report_hash = 73;        // SHA-256 hash of report data
 
+  // Exchange details with KYC
+  repeated ExchangeInfo exchange_details = 90;
+
   // Enclave attestation
   string enclave_version = 80;
   string attestation_id = 81;     // SEV-SNP attestation ID (if available)
   string enclave_mode = 82;       // "production" | "development"
+}
+
+// Exchange info with KYC and paper status
+message ExchangeInfo {
+  string name = 1;
+  string kyc_level = 2; // "none", "basic", "intermediate", "advanced", or "" (unsupported)
+  bool is_paper = 3;    // true = paper/testnet, false = live
 }
 
 // Daily return data for charts

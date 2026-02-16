@@ -7,6 +7,7 @@ import { ExchangeConnectionRepository } from './core/repositories/exchange-conne
 import { UserRepository } from './core/repositories/user-repository';
 import { getLogger, extractErrorMessage } from './utils/secure-enclave-logger';
 import { SnapshotData } from './types';
+import { ExchangeConnectorFactory } from './external/factories/ExchangeConnectorFactory';
 // SECURITY: No TradeRepository - trades are memory-only (alpha protection)
 
 const logger = getLogger('EnclaveWorker');
@@ -509,6 +510,9 @@ export class EnclaveWorker {
 
       logger.info('User and exchange connection created successfully');
 
+      // Step 4: Capture exchange metadata (KYC level + paper status) — non-blocking
+      await this.captureExchangeMetadata(userUid, request);
+
       return {
         success: true,
         userUid
@@ -525,6 +529,63 @@ export class EnclaveWorker {
         success: false,
         error: errorMessage || 'Failed to create user connection'
       };
+    }
+  }
+
+  /**
+   * Capture exchange metadata (KYC level + paper status) after connection creation.
+   * Non-blocking: metadata fetch failure never prevents connection creation.
+   */
+  private async captureExchangeMetadata(userUid: string, request: {
+    exchange: string; label: string; apiKey: string; apiSecret: string; passphrase?: string;
+  }): Promise<void> {
+    try {
+      const connector = ExchangeConnectorFactory.create({
+        userUid,
+        exchange: request.exchange,
+        label: request.label,
+        apiKey: request.apiKey,
+        apiSecret: request.apiSecret,
+        passphrase: request.passphrase,
+      });
+
+      const connection = await this.exchangeConnectionRepo.findExistingConnection(
+        userUid, request.exchange, request.label
+      );
+      if (!connection) return;
+
+      // Capture KYC level (if supported)
+      const fetchKyc = (connector as { fetchKycLevel?: () => Promise<string | null> }).fetchKycLevel;
+      if (typeof fetchKyc === 'function') {
+        try {
+          const kycLevel = await fetchKyc.call(connector);
+          if (kycLevel) {
+            await this.exchangeConnectionRepo.updateKycLevel(connection.id, kycLevel);
+          }
+        } catch (error) {
+          logger.debug('KYC level capture failed (non-critical)', {
+            exchange: request.exchange, error: extractErrorMessage(error),
+          });
+        }
+      }
+
+      // Capture paper/live status (if supported)
+      const detectPaper = (connector as { detectIsPaper?: () => Promise<boolean> }).detectIsPaper;
+      if (typeof detectPaper === 'function') {
+        try {
+          const isPaper = await detectPaper.call(connector);
+          await this.exchangeConnectionRepo.updateIsPaper(connection.id, isPaper);
+        } catch (error) {
+          logger.debug('Paper status capture failed (non-critical)', {
+            exchange: request.exchange, error: extractErrorMessage(error),
+          });
+        }
+      }
+    } catch (error) {
+      logger.debug('Exchange metadata capture failed (non-critical)', {
+        exchange: request.exchange,
+        error: extractErrorMessage(error),
+      });
     }
   }
 

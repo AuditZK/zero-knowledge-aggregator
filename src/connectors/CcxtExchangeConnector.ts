@@ -778,4 +778,95 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
       return 0;
     }
   }
+
+  // ========================================
+  // KYC Level Detection
+  // ========================================
+
+  /**
+   * Detect if this is a paper/testnet account.
+   * CCXT connectors always connect to production API — if auth succeeds, it's live.
+   */
+  async detectIsPaper(): Promise<boolean> {
+    return false;
+  }
+
+  /** Exchanges that expose KYC verification level via API. */
+  private static readonly KYC_SUPPORTED_EXCHANGES = ['bybit', 'okx', 'kucoin'] as const;
+
+  /**
+   * Fetch KYC verification level from the exchange API.
+   * Only supported on: Bybit, OKX, KuCoin.
+   *
+   * @returns Normalized KYC level ("none" | "basic" | "intermediate" | "advanced") or null if unsupported
+   */
+  async fetchKycLevel(): Promise<string | null> {
+    const exchange = this.exchangeName.toLowerCase();
+    if (!CcxtExchangeConnector.KYC_SUPPORTED_EXCHANGES.includes(exchange as 'bybit' | 'okx' | 'kucoin')) {
+      return null;
+    }
+
+    try {
+      switch (exchange) {
+        case 'bybit':
+          return await this.fetchBybitKycLevel();
+        case 'okx':
+          return await this.fetchOkxKycLevel();
+        case 'kucoin':
+          return await this.fetchKucoinKycLevel();
+        default:
+          return null;
+      }
+    } catch (error) {
+      this.logger.debug(`KYC level fetch failed for ${exchange}: ${extractErrorMessage(error)}`);
+      return null;
+    }
+  }
+
+  private async fetchBybitKycLevel(): Promise<string> {
+    const response = await (this.exchange as any).privateGetV5UserQueryApi();
+    const kycLevel = String(response?.result?.kycLevel || '');
+
+    const BYBIT_KYC_MAP: Record<string, string> = {
+      'LEVEL_DEFAULT': 'none',
+      'LEVEL_1': 'basic',
+      'LEVEL_2': 'advanced',
+    };
+
+    const normalized = BYBIT_KYC_MAP[kycLevel] || 'none';
+    this.logger.info(`Bybit KYC level: ${kycLevel} → ${normalized}`);
+    return normalized;
+  }
+
+  private async fetchOkxKycLevel(): Promise<string> {
+    const response = await (this.exchange as any).privateGetAccountConfig();
+    const data = Array.isArray(response?.data) ? response.data[0] : null;
+    const kycLv = String(data?.kycLv || '0');
+
+    const OKX_KYC_MAP: Record<string, string> = {
+      '0': 'none',
+      '1': 'basic',
+      '2': 'intermediate',
+      '3': 'advanced',
+    };
+
+    const normalized = OKX_KYC_MAP[kycLv] || 'none';
+    this.logger.info(`OKX KYC level: ${kycLv} → ${normalized}`);
+    return normalized;
+  }
+
+  private async fetchKucoinKycLevel(): Promise<string> {
+    const response = await (this.exchange as any).privateGetUserApiKey();
+    const kycStatus = Number(response?.data?.kycStatus ?? 0);
+
+    const KUCOIN_KYC_MAP: Record<number, string> = {
+      0: 'none',
+      1: 'basic',
+      2: 'advanced',
+    };
+
+    const normalized = KUCOIN_KYC_MAP[kycStatus] || 'none';
+    this.logger.info(`KuCoin KYC level: ${kycStatus} → ${normalized}`);
+    return normalized;
+  }
 }

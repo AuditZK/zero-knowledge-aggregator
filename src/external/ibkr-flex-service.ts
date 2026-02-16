@@ -301,6 +301,17 @@ export class IbkrFlexService {
     }
   }
 
+  async parseAccountId(xmlData: string): Promise<string | null> {
+    try {
+      const parsed = await parseStringPromise(xmlData);
+      const flexStatement = parsed.FlexQueryResponse?.FlexStatements?.[0]?.FlexStatement?.[0];
+      if (!flexStatement?.$?.accountId) return null;
+      return String(flexStatement.$.accountId);
+    } catch {
+      return null;
+    }
+  }
+
   async testConnection(token: string, queryId: string): Promise<boolean> {
     try {
       const referenceCode = await this.requestFlexReport(token, queryId);

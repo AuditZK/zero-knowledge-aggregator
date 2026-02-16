@@ -182,6 +182,8 @@ export interface ExchangeConnection {
   encryptedPassphrase?: string;
   credentialsHash?: string;
   isActive: boolean;
+  kycLevel?: string;
+  isPaper?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

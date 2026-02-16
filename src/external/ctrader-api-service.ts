@@ -197,6 +197,10 @@ export class CTraderApiService {
     this.isLive = credentials.passphrase !== 'demo';
   }
 
+  getIsLive(): boolean {
+    return this.isLive;
+  }
+
   /**
    * Connect to cTrader WebSocket API
    */
