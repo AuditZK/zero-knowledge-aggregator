@@ -1,6 +1,7 @@
 import { ReportGeneratorService } from '../../services/report-generator.service';
 import { SnapshotDataRepository } from '../../core/repositories/snapshot-data-repository';
 import { SignedReportRepository } from '../../core/repositories/signed-report-repository';
+import { ExchangeConnectionRepository } from '../../core/repositories/exchange-connection-repository';
 import { ReportSigningService } from '../../services/report-signing.service';
 import type { ReportRequest, SignedReport, SignedFinancialData, DisplayParameters } from '../../types/report.types';
 
@@ -19,6 +20,7 @@ describe('ReportGeneratorService', () => {
   let mockSnapshotRepo: jest.Mocked<SnapshotDataRepository>;
   let mockReportRepo: jest.Mocked<SignedReportRepository>;
   let mockSigningService: jest.Mocked<ReportSigningService>;
+  let mockConnectionRepo: jest.Mocked<ExchangeConnectionRepository>;
 
   // Sample snapshot data for testing
   const createMockSnapshots = (days: number, startEquity: number = 100000) => {
@@ -45,6 +47,7 @@ describe('ReportGeneratorService', () => {
         deposits: i === 0 ? startEquity : 0,
         withdrawals: 0,
         exchange: 'binance',
+        label: '',
         createdAt: date,
         updatedAt: date,
       });
@@ -79,6 +82,11 @@ describe('ReportGeneratorService', () => {
       getPublicKey: jest.fn().mockReturnValue('mock-public-key'),
     } as unknown as jest.Mocked<ReportSigningService>;
 
+    mockConnectionRepo = {
+      getKycLevelsForUser: jest.fn().mockResolvedValue(new Map()),
+      getPaperStatusForUser: jest.fn().mockResolvedValue(new Map()),
+    } as unknown as jest.Mocked<ExchangeConnectionRepository>;
+
     // Default mock implementations
     mockReportRepo.findByPeriod.mockResolvedValue(null);
     mockReportRepo.save.mockResolvedValue(undefined as never);
@@ -86,6 +94,7 @@ describe('ReportGeneratorService', () => {
     service = new ReportGeneratorService(
       mockSnapshotRepo,
       mockReportRepo,
+      mockConnectionRepo,
       mockSigningService
     );
   });
@@ -377,7 +386,7 @@ describe('ReportGeneratorService', () => {
 
     describe('multi-exchange support', () => {
       const createSnapshot = (id: string, timestamp: Date, totalEquity: number, realizedBalance: number, deposits: number, withdrawals: number, exchange: string) => ({
-        id, userUid: 'user_test123', timestamp: timestamp.toISOString(), totalEquity, realizedBalance, unrealizedPnL: totalEquity * 0.02, deposits, withdrawals, exchange, createdAt: timestamp, updatedAt: timestamp
+        id, userUid: 'user_test123', timestamp: timestamp.toISOString(), totalEquity, realizedBalance, unrealizedPnL: totalEquity * 0.02, deposits, withdrawals, exchange, label: '', createdAt: timestamp, updatedAt: timestamp
       });
 
       it('should aggregate equity across multiple exchanges', async () => {
@@ -444,7 +453,7 @@ describe('ReportGeneratorService', () => {
 
     describe('daily returns calculation', () => {
       const createSnapshot = (id: string, timestamp: Date, totalEquity: number, realizedBalance: number, deposits: number, withdrawals: number, exchange: string) => ({
-        id, userUid: 'user_test123', timestamp: timestamp.toISOString(), totalEquity, realizedBalance, unrealizedPnL: totalEquity * 0.02, deposits, withdrawals, exchange, createdAt: timestamp, updatedAt: timestamp
+        id, userUid: 'user_test123', timestamp: timestamp.toISOString(), totalEquity, realizedBalance, unrealizedPnL: totalEquity * 0.02, deposits, withdrawals, exchange, label: '', createdAt: timestamp, updatedAt: timestamp
       });
 
       it('should calculate correct daily returns', async () => {
@@ -556,6 +565,7 @@ describe('ReportGeneratorService', () => {
             deposits: i === 0 ? 100000 : 0,
             withdrawals: 0,
             exchange: 'binance',
+            label: '',
             createdAt: date,
             updatedAt: date,
           });
@@ -582,7 +592,7 @@ describe('ReportGeneratorService', () => {
       it('should calculate max drawdown correctly', async () => {
         const baseDate = new Date('2024-01-01');
         const createSnap = (id: string, timestamp: Date, totalEquity: number, realizedBalance: number, deposits: number, withdrawals: number) => ({
-          id, userUid: 'user_test123', timestamp: timestamp.toISOString(), totalEquity, realizedBalance, unrealizedPnL: totalEquity * 0.02, deposits, withdrawals, exchange: 'binance', createdAt: timestamp, updatedAt: timestamp
+          id, userUid: 'user_test123', timestamp: timestamp.toISOString(), totalEquity, realizedBalance, unrealizedPnL: totalEquity * 0.02, deposits, withdrawals, exchange: 'binance', label: '', createdAt: timestamp, updatedAt: timestamp
         });
         const snapshots = [
           createSnap('s1', new Date(baseDate), 100000, 80000, 100000, 0),

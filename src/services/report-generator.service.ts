@@ -2,6 +2,7 @@ import { injectable, inject } from 'tsyringe';
 import { randomBytes } from 'node:crypto';
 import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repository';
 import { SignedReportRepository } from '../core/repositories/signed-report-repository';
+import { ExchangeConnectionRepository } from '../core/repositories/exchange-connection-repository';
 import { ReportSigningService } from './report-signing.service';
 import { getLogger } from '../utils/secure-enclave-logger';
 import { benchmarkServiceUrl } from '../config';
@@ -18,7 +19,8 @@ import {
   DrawdownPeriod,
   DailyReturn,
   MonthlyReturn,
-  GenerateReportResult
+  GenerateReportResult,
+  ExchangeInfo,
 } from '../types/report.types';
 
 const logger = getLogger('ReportGenerator');
@@ -51,6 +53,7 @@ export class ReportGeneratorService {
   constructor(
     @inject(SnapshotDataRepository) private readonly snapshotRepo: SnapshotDataRepository,
     @inject(SignedReportRepository) private readonly reportRepo: SignedReportRepository,
+    @inject(ExchangeConnectionRepository) private readonly connectionRepo: ExchangeConnectionRepository,
     @inject(ReportSigningService) private readonly signingService: ReportSigningService
   ) {}
 
@@ -158,7 +161,8 @@ export class ReportGeneratorService {
     await this.processBenchmark(request, dailyReturns, metrics);
 
     // 5. Build and sign the financial data
-    const financialData = this.buildFinancialData(request, snapshots, dailyReturns, monthlyReturns, metrics);
+    const exchangeDetails = await this.buildExchangeDetails(request.userUid, snapshots);
+    const financialData = this.buildFinancialData(request, snapshots, dailyReturns, monthlyReturns, metrics, exchangeDetails);
     const signedReport = this.signingService.signFinancialData(financialData, displayParams);
 
     this.logReportGeneration(financialData, displayParams);
@@ -214,7 +218,8 @@ export class ReportGeneratorService {
     snapshots: Array<{ exchange?: string }>,
     dailyReturns: DailyReturn[],
     monthlyReturns: MonthlyReturn[],
-    metrics: ReportMetrics
+    metrics: ReportMetrics,
+    exchangeDetails?: ExchangeInfo[]
   ): SignedFinancialData {
     const firstDay = dailyReturns[0]!;
     const lastDay = dailyReturns.at(-1)!;
@@ -230,10 +235,28 @@ export class ReportGeneratorService {
       benchmark: request.benchmark,
       dataPoints: dailyReturns.length,
       exchanges,
+      exchangeDetails,
       metrics,
       dailyReturns,
       monthlyReturns
     };
+  }
+
+  private async buildExchangeDetails(
+    userUid: string,
+    snapshots: Array<{ exchange?: string }>
+  ): Promise<ExchangeInfo[]> {
+    const exchangeNames = Array.from(new Set(snapshots.map(s => s.exchange || 'unknown')));
+    const [kycMap, paperMap] = await Promise.all([
+      this.connectionRepo.getKycLevelsForUser(userUid),
+      this.connectionRepo.getPaperStatusForUser(userUid),
+    ]);
+
+    return [...exchangeNames].sort((a, b) => a.localeCompare(b)).map(name => ({
+      name,
+      kycLevel: kycMap.get(name),
+      isPaper: paperMap.get(name),
+    }));
   }
 
   private logReportGeneration(financialData: SignedFinancialData, displayParams: DisplayParameters): void {

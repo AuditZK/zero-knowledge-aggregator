@@ -122,6 +122,11 @@ export class HyperliquidConnector extends CryptoExchangeConnector {
     return 'hyperliquid';
   }
 
+  /** Connected to mainnet (api.hyperliquid.xyz) — always live. */
+  async detectIsPaper(): Promise<boolean> {
+    return false;
+  }
+
   /**
    * Get perpetuals account balance (clearinghouse state)
    */

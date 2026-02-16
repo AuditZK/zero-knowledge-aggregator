@@ -6,6 +6,16 @@
  */
 
 // ============================================================================
+// Exchange Info (KYC verification status)
+// ============================================================================
+
+export interface ExchangeInfo {
+  name: string;
+  kycLevel?: string; // "none" | "basic" | "intermediate" | "advanced" | undefined (unsupported)
+  isPaper?: boolean;  // true = paper/testnet, false = live, undefined = unknown
+}
+
+// ============================================================================
 // Request Types
 // ============================================================================
 
@@ -139,6 +149,10 @@ export interface SignedFinancialData {
   // Connected exchanges (SIGNED) - proves which brokers were used
   // This is cryptographically bound to the report via the signature
   exchanges: string[];
+
+  // Exchange details with KYC verification status (SIGNED)
+  // Proves which exchanges are KYC-verified for track record credibility
+  exchangeDetails?: ExchangeInfo[];
 
   // Financial metrics (SIGNED)
   metrics: ReportMetrics;

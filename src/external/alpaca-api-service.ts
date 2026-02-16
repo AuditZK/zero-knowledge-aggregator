@@ -78,6 +78,10 @@ export class AlpacaApiService {
     });
   }
 
+  getIsPaper(): boolean {
+    return this.isPaper;
+  }
+
   /**
    * Test connection to Alpaca
    */

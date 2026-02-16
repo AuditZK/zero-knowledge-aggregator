@@ -40,6 +40,13 @@ export class TradeStationConnector extends RestBrokerConnector {
     return 'tradestation';
   }
 
+  /** Detect simulation account from TradeStation AccountType (Sim* = paper). */
+  async detectIsPaper(): Promise<boolean> {
+    const accounts = await this.api.getAccounts();
+    if (accounts.length === 0) return false;
+    return accounts.every(a => a.AccountType.toLowerCase().startsWith('sim'));
+  }
+
   /**
    * Get authentication headers (OAuth 2.0)
    * Note: Actual auth is handled by TradeStationApiService

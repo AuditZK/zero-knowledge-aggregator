@@ -654,6 +654,11 @@ export class EnclaveServer {
         benchmark: financialData.benchmark || '',
         data_points: financialData.dataPoints,
         exchanges: financialData.exchanges || [],
+        exchange_details: (financialData.exchangeDetails || []).map((e: { name: string; kycLevel?: string; isPaper?: boolean }) => ({
+          name: e.name,
+          kyc_level: e.kycLevel || '',
+          is_paper: e.isPaper || false,
+        })),
 
         // Core metrics
         total_return: metrics.totalReturn,

@@ -78,6 +78,11 @@ export class DeribitConnector extends CryptoExchangeConnector {
     return 'deribit';
   }
 
+  /** Connected to production API (www.deribit.com) — always live. */
+  async detectIsPaper(): Promise<boolean> {
+    return false;
+  }
+
   // ========================================
   // Core IExchangeConnector methods
   // ========================================

@@ -44,6 +44,11 @@ export class CTraderConnector extends RestBrokerConnector {
     return 'ctrader';
   }
 
+  /** Detect paper account from cTrader isLive flag. */
+  async detectIsPaper(): Promise<boolean> {
+    return !this.api.getIsLive();
+  }
+
   /**
    * Get authentication headers
    * Note: cTrader uses query params for auth, not headers

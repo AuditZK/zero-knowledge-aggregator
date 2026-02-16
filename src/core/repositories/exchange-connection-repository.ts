@@ -320,6 +320,54 @@ export class ExchangeConnectionRepository {
     });
   }
 
+  async updateKycLevel(connectionId: string, kycLevel: string): Promise<void> {
+    await this.prisma.exchangeConnection.update({
+      where: { id: connectionId },
+      data: { kycLevel },
+    });
+    logger.info('KYC level updated', { connectionId, kycLevel });
+  }
+
+  async getKycLevelsForUser(userUid: string): Promise<Map<string, string>> {
+    const connections = await this.prisma.exchangeConnection.findMany({
+      where: { userUid, isActive: true },
+      select: { exchange: true, label: true, kycLevel: true },
+    });
+
+    const kycMap = new Map<string, string>();
+    for (const conn of connections) {
+      if (conn.kycLevel) {
+        const key = conn.label ? `${conn.exchange}/${conn.label}` : conn.exchange;
+        kycMap.set(key, conn.kycLevel);
+      }
+    }
+    return kycMap;
+  }
+
+  async updateIsPaper(connectionId: string, isPaper: boolean): Promise<void> {
+    await this.prisma.exchangeConnection.update({
+      where: { id: connectionId },
+      data: { isPaper },
+    });
+    logger.info('Paper status updated', { connectionId, isPaper });
+  }
+
+  async getPaperStatusForUser(userUid: string): Promise<Map<string, boolean>> {
+    const connections = await this.prisma.exchangeConnection.findMany({
+      where: { userUid, isActive: true },
+      select: { exchange: true, label: true, isPaper: true },
+    });
+
+    const paperMap = new Map<string, boolean>();
+    for (const conn of connections) {
+      if (conn.isPaper !== null) {
+        const key = conn.label ? `${conn.exchange}/${conn.label}` : conn.exchange;
+        paperMap.set(key, conn.isPaper);
+      }
+    }
+    return paperMap;
+  }
+
   private mapPrismaConnectionToConnection(prismaConnection: PrismaExchangeConnection): ExchangeConnection {
     return {
       id: prismaConnection.id,
@@ -331,6 +379,8 @@ export class ExchangeConnectionRepository {
       encryptedPassphrase: prismaConnection.encryptedPassphrase || undefined,
       credentialsHash: prismaConnection.credentialsHash || undefined,
       isActive: prismaConnection.isActive,
+      kycLevel: prismaConnection.kycLevel || undefined,
+      isPaper: prismaConnection.isPaper ?? undefined,
       createdAt: prismaConnection.createdAt,
       updatedAt: prismaConnection.updatedAt,
     };
