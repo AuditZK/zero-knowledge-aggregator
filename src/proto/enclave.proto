@@ -141,6 +141,7 @@ message CreateUserConnectionRequest {
   string api_key = 4;            // API key (will be encrypted)
   string api_secret = 5;         // API secret (will be encrypted)
   string passphrase = 6;         // Optional passphrase (will be encrypted)
+  bool exclude_from_report = 7;  // true = analytics only, excluded from certified report
 }
 
 // Response from creating a user with exchange connection

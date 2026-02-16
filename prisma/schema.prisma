@@ -86,6 +86,7 @@ model ExchangeConnection {
   syncIntervalMinutes  Int      @default(1440)  // Sync interval in minutes (1440=daily)
   kycLevel             String?  // Normalized KYC level: "none" | "basic" | "intermediate" | "advanced" (null = unknown/unsupported)
   isPaper              Boolean? // true = paper/testnet, false = live, null = unknown
+  excludeFromReport    Boolean  @default(false) // true = analytics only, not in certified report
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 

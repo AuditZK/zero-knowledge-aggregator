@@ -79,7 +79,8 @@ export class PerformanceMetricsService {
     userUid: string,
     exchange?: string,
     startDate?: Date,
-    endDate?: Date
+    endDate?: Date,
+    excludedKeys?: Set<string>
   ): Promise<PerformanceMetrics | null> {
     logger.info('Calculating performance metrics', {
       userUid,
@@ -89,12 +90,15 @@ export class PerformanceMetricsService {
     });
 
     // Fetch snapshots from repository
-    const snapshots = await this.snapshotRepo.getSnapshotData(
+    const allSnapshots = await this.snapshotRepo.getSnapshotData(
       userUid,
       startDate,
       endDate,
       exchange
     );
+    const snapshots = excludedKeys && excludedKeys.size > 0
+      ? allSnapshots.filter(s => !excludedKeys.has(s.label ? `${s.exchange}/${s.label}` : s.exchange))
+      : allSnapshots;
 
     if (snapshots.length === 0) {
       logger.warn('No snapshots found for metrics calculation', { userUid, exchange });

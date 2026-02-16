@@ -85,6 +85,7 @@ describe('ReportGeneratorService', () => {
     mockConnectionRepo = {
       getKycLevelsForUser: jest.fn().mockResolvedValue(new Map()),
       getPaperStatusForUser: jest.fn().mockResolvedValue(new Map()),
+      getExcludedKeysForUser: jest.fn().mockResolvedValue(new Set()),
     } as unknown as jest.Mocked<ExchangeConnectionRepository>;
 
     // Default mock implementations

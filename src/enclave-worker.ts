@@ -313,10 +313,11 @@ export class EnclaveWorker {
     lastSync: Date | null;
   }> {
     // Get all connections to aggregate (each connection = exchange + label)
+    // Exclude connections marked as excludeFromReport
     const allConnections = (await this.exchangeConnectionRepo.getConnectionsByUser(userUid, true)) ?? [];
-    const connections = exchange
-      ? allConnections.filter(conn => conn.exchange === exchange)
-      : allConnections;
+    const connections = allConnections
+      .filter(conn => !conn.excludeFromReport)
+      .filter(conn => !exchange || conn.exchange === exchange);
 
     let totalBalance = 0;
     let totalEquity = 0;
@@ -334,16 +335,9 @@ export class EnclaveWorker {
         totalRealizedPnl += 0; // Not available in SnapshotData - calculated from equity changes
         totalUnrealizedPnl += snapshot.unrealizedPnL;
 
-        // Extract fees and trades from breakdown_by_market if available
-        let breakdown = snapshot.breakdown_by_market;
-        if (typeof breakdown === 'string') {
-          try { breakdown = JSON.parse(breakdown); } catch { breakdown = undefined; }
-        }
-        const global = (breakdown as Record<string, { trading_fees?: number; funding_fees?: number; trades?: number }> | undefined)?.global;
-        if (global) {
-          totalFees += (global.trading_fees || 0) + (global.funding_fees || 0);
-          totalTrades += global.trades || 0;
-        }
+        const { fees, trades } = this.extractFeesAndTrades(snapshot.breakdown_by_market);
+        totalFees += fees;
+        totalTrades += trades;
 
         const snapshotDate = new Date(snapshot.timestamp);
         if (!lastSync || snapshotDate > lastSync) {
@@ -360,6 +354,19 @@ export class EnclaveWorker {
       totalFees,
       totalTrades,
       lastSync
+    };
+  }
+
+  private extractFeesAndTrades(breakdownRaw: unknown): { fees: number; trades: number } {
+    let breakdown = breakdownRaw;
+    if (typeof breakdown === 'string') {
+      try { breakdown = JSON.parse(breakdown); } catch { return { fees: 0, trades: 0 }; }
+    }
+    const global = (breakdown as Record<string, { trading_fees?: number; funding_fees?: number; trades?: number }> | undefined)?.global;
+    if (!global) return { fees: 0, trades: 0 };
+    return {
+      fees: (global.trading_fees || 0) + (global.funding_fees || 0),
+      trades: global.trades || 0,
     };
   }
 
@@ -399,13 +406,17 @@ export class EnclaveWorker {
         endDate: endDate?.toISOString()
       });
 
-      // Get snapshots from repository
-      const snapshots = await this.snapshotDataRepo.getSnapshotData(
+      // Get snapshots from repository, excluding connections marked excludeFromReport
+      const allSnapshots = await this.snapshotDataRepo.getSnapshotData(
         userUid,
         startDate,
         endDate,
         exchange
       ) ?? [];
+      const excludedKeys = await this.exchangeConnectionRepo.getExcludedKeysForUser(userUid);
+      const snapshots = excludedKeys.size > 0
+        ? allSnapshots.filter(s => !excludedKeys.has(s.label ? `${s.exchange}/${s.label}` : s.exchange))
+        : allSnapshots;
 
       // Map to response format (include breakdown_by_market for volume/fees/orders metrics)
       return snapshots.map(snapshot => {
@@ -463,6 +474,7 @@ export class EnclaveWorker {
     apiKey: string;
     apiSecret: string;
     passphrase?: string;
+    excludeFromReport?: boolean;
   }): Promise<{
     success: boolean;
     userUid?: string;
@@ -505,7 +517,8 @@ export class EnclaveWorker {
         apiKey: request.apiKey,
         apiSecret: request.apiSecret,
         passphrase: request.passphrase,
-        isActive: true
+        isActive: true,
+        excludeFromReport: request.excludeFromReport
       });
 
       logger.info('User and exchange connection created successfully');
@@ -634,11 +647,13 @@ export class EnclaveWorker {
         endDate: endDate?.toISOString()
       });
 
+      const excludedKeys = await this.exchangeConnectionRepo.getExcludedKeysForUser(userUid);
       const metrics = await this.performanceMetricsService.calculateMetrics(
         userUid,
         exchange,
         startDate,
-        endDate
+        endDate,
+        excludedKeys
       );
 
       if (!metrics) {

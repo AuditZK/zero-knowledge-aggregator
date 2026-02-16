@@ -44,6 +44,7 @@ export class ExchangeConnectionRepository {
           encryptedPassphrase,
           credentialsHash,
           isActive: credentials.isActive ?? true,
+          excludeFromReport: credentials.excludeFromReport ?? false,
         },
       });
 
@@ -330,7 +331,7 @@ export class ExchangeConnectionRepository {
 
   async getKycLevelsForUser(userUid: string): Promise<Map<string, string>> {
     const connections = await this.prisma.exchangeConnection.findMany({
-      where: { userUid, isActive: true },
+      where: { userUid, isActive: true, excludeFromReport: false },
       select: { exchange: true, label: true, kycLevel: true },
     });
 
@@ -354,7 +355,7 @@ export class ExchangeConnectionRepository {
 
   async getPaperStatusForUser(userUid: string): Promise<Map<string, boolean>> {
     const connections = await this.prisma.exchangeConnection.findMany({
-      where: { userUid, isActive: true },
+      where: { userUid, isActive: true, excludeFromReport: false },
       select: { exchange: true, label: true, isPaper: true },
     });
 
@@ -366,6 +367,19 @@ export class ExchangeConnectionRepository {
       }
     }
     return paperMap;
+  }
+
+  async getExcludedKeysForUser(userUid: string): Promise<Set<string>> {
+    const connections = await this.prisma.exchangeConnection.findMany({
+      where: { userUid, isActive: true, excludeFromReport: true },
+      select: { exchange: true, label: true },
+    });
+
+    const keys = new Set<string>();
+    for (const conn of connections) {
+      keys.add(conn.label ? `${conn.exchange}/${conn.label}` : conn.exchange);
+    }
+    return keys;
   }
 
   private mapPrismaConnectionToConnection(prismaConnection: PrismaExchangeConnection): ExchangeConnection {
@@ -381,6 +395,7 @@ export class ExchangeConnectionRepository {
       isActive: prismaConnection.isActive,
       kycLevel: prismaConnection.kycLevel || undefined,
       isPaper: prismaConnection.isPaper ?? undefined,
+      excludeFromReport: prismaConnection.excludeFromReport,
       createdAt: prismaConnection.createdAt,
       updatedAt: prismaConnection.updatedAt,
     };

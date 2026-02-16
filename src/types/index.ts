@@ -184,6 +184,7 @@ export interface ExchangeConnection {
   isActive: boolean;
   kycLevel?: string;
   isPaper?: boolean;
+  excludeFromReport: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -196,6 +197,7 @@ export interface ExchangeCredentials {
   apiSecret: string;
   passphrase?: string;
   isActive?: boolean;
+  excludeFromReport?: boolean;
   // IBKR specific fields
   host?: string;
   port?: number;

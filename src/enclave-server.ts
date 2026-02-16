@@ -377,7 +377,8 @@ export class EnclaveServer {
         label: rawRequest.label,
         api_key: rawRequest.api_key,
         api_secret: rawRequest.api_secret,
-        passphrase: rawRequest.passphrase === '' ? undefined : rawRequest.passphrase
+        passphrase: rawRequest.passphrase === '' ? undefined : rawRequest.passphrase,
+        exclude_from_report: rawRequest.exclude_from_report || false
       };
 
       // SECURITY: Validate input before processing
@@ -405,7 +406,8 @@ export class EnclaveServer {
         label: validated.label,
         apiKey: validated.api_key,
         apiSecret: validated.api_secret,
-        passphrase: validated.passphrase
+        passphrase: validated.passphrase,
+        excludeFromReport: validated.exclude_from_report
       });
 
       // Convert to gRPC format
