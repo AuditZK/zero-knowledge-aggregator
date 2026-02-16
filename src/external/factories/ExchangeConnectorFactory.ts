@@ -9,6 +9,7 @@ import { HyperliquidConnector } from '../../connectors/HyperliquidConnector';
 import { CTraderConnector } from '../../connectors/CTraderConnector';
 import { LighterConnector } from '../../connectors/LighterConnector';
 import { MockExchangeConnector } from '../../connectors/MockExchangeConnector';
+import { DeribitConnector } from '../../connectors/DeribitConnector';
 import { IbkrFlexService } from '../ibkr-flex-service';
 import { getLogger } from '../../utils/secure-enclave-logger';
 
@@ -41,6 +42,9 @@ const logger = getLogger('ExchangeConnectorFactory');
  *
  * Supported CFD/Forex brokers:
  *   - cTrader (ctrader) - OAuth 2.0 REST API
+ *
+ * Supported crypto derivatives:
+ *   - Deribit (deribit) - Options, Futures, Perpetuals (BTC/ETH settled)
  *
  * Supported DEX (wallet address only, no private key):
  *   - Hyperliquid (hyperliquid) - Public REST API (read-only)
@@ -75,7 +79,7 @@ export class ExchangeConnectorFactory {
   /**
    * List of stock brokers with custom connectors
    */
-  private static readonly CUSTOM_BROKERS = ['ibkr', 'alpaca', 'tradestation', 'hyperliquid', 'lighter', 'ctrader', 'mock'];
+  private static readonly CUSTOM_BROKERS = ['ibkr', 'alpaca', 'tradestation', 'hyperliquid', 'lighter', 'ctrader', 'deribit', 'mock'];
 
   /**
    * Create an exchange connector instance
@@ -140,6 +144,10 @@ export class ExchangeConnectorFactory {
       case 'ctrader':
         // CFD/Forex broker - OAuth 2.0 flow
         return new CTraderConnector(credentials);
+
+      case 'deribit':
+        // Crypto derivatives (options, futures, perps) - BTC/ETH settled
+        return new DeribitConnector(credentials);
 
       case 'mock':
         // Stress test only - generates random trades, no external API
