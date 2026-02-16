@@ -52,7 +52,8 @@ export const CreateUserConnectionRequestSchema = z.object({
   label: z.string().min(1).max(100),
   api_key: z.string().min(1).max(500),
   api_secret: z.string().max(500), // Allow empty for DEX (Hyperliquid) - only wallet address needed
-  passphrase: z.string().max(500).optional()
+  passphrase: z.string().max(500).optional(),
+  exclude_from_report: z.boolean().optional().default(false)
 });
 
 export const HealthCheckRequestSchema = z.object({}).strict();

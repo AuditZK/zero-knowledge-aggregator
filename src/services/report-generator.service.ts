@@ -136,12 +136,16 @@ export class ReportGeneratorService {
     request: ReportRequest,
     displayParams: DisplayParameters
   ): Promise<GenerateReportResult> {
-    // 1. Fetch and validate snapshots
-    const snapshots = await this.snapshotRepo.getSnapshotData(
+    // 1. Fetch and validate snapshots (exclude connections marked excludeFromReport)
+    const allSnapshots = await this.snapshotRepo.getSnapshotData(
       request.userUid,
       request.startDate ? new Date(request.startDate) : undefined,
       request.endDate ? new Date(request.endDate) : undefined
     );
+    const excludedKeys = await this.connectionRepo.getExcludedKeysForUser(request.userUid);
+    const snapshots = excludedKeys.size > 0
+      ? allSnapshots.filter(s => !excludedKeys.has(s.label ? `${s.exchange}/${s.label}` : s.exchange))
+      : allSnapshots;
 
     if (snapshots.length === 0) {
       return { success: false, error: 'No snapshot data found for the specified period' };
