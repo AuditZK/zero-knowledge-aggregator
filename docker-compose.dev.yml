@@ -15,7 +15,7 @@ services:
     network_mode: host
     environment:
       - NODE_ENV=development
-      - DATABASE_URL=postgresql://enclave_user:enclavepass123@127.0.0.1:5436/aggregator_db?schema=public
+      - DATABASE_URL=postgresql://enclave_user:EnclavePass2026Strong@127.0.0.1:5436/enclave_db?schema=public
       - ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       - JWT_SECRET=local-dev-jwt-secret
       - ENCLAVE_PORT=50053
