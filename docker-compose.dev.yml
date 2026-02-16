@@ -1,3 +1,7 @@
+# Docker Compose - Dev Mode (VPS)
+# Uses existing PostgreSQL on host (trackrecord_postgres_enclave:5436)
+# Usage: docker-compose -f docker-compose.dev.yml up -d --build
+
 services:
   # =============================================
   # Enclave TS - Simulated TEE Environment
@@ -6,26 +10,21 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
-    image: enclave-ts:latest
-    container_name: enclave_ts
-    ports:
-      - "3050:3050"    # REST API
-      - "50053:50051"  # gRPC (host 50053 to avoid conflict with Go on 50051)
+    image: enclave-ts:dev
+    container_name: enclave_ts_dev
+    network_mode: host
     environment:
       - NODE_ENV=development
-      - DATABASE_URL=postgresql://enclave:enclave@enclave-ts-db:5432/enclave_ts?schema=public
+      - DATABASE_URL=postgresql://enclave_user:enclavepass123@127.0.0.1:5436/aggregator_db?schema=public
       - ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       - JWT_SECRET=local-dev-jwt-secret
-      - ENCLAVE_PORT=50051
+      - ENCLAVE_PORT=50053
       - REST_PORT=3050
       - SKIP_ATTESTATION=true
       - GRPC_INSECURE=true
       - ENABLE_ENCLAVE_LOG_STREAMING=true
       - ENABLE_DAILY_SYNC=true
       - LOG_LEVEL=debug
-    depends_on:
-      enclave-ts-db:
-        condition: service_healthy
     restart: unless-stopped
     # --- TEE Simulation Constraints ---
     security_opt:
@@ -39,53 +38,3 @@ services:
           memory: 512M
         reservations:
           memory: 256M
-    networks:
-      - enclave-ts-network
-
-  # =============================================
-  # PostgreSQL - TS Enclave Database
-  # =============================================
-  enclave-ts-db:
-    image: postgres:15-alpine
-    container_name: enclave_ts_db
-    environment:
-      POSTGRES_USER: enclave
-      POSTGRES_PASSWORD: enclave
-      POSTGRES_DB: enclave_ts
-    ports:
-      - "5437:5432"
-    volumes:
-      - enclave-ts-db-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U enclave -d enclave_ts"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - enclave-ts-network
-
-  # =============================================
-  # Prisma Migration Runner (one-shot)
-  # =============================================
-  enclave-ts-migrate:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-    container_name: enclave_ts_migrate
-    environment:
-      - DATABASE_URL=postgresql://enclave:enclave@enclave-ts-db:5432/enclave_ts?schema=public
-    command: ["npx", "prisma", "db", "push", "--skip-generate"]
-    depends_on:
-      enclave-ts-db:
-        condition: service_healthy
-    networks:
-      - enclave-ts-network
-    restart: "no"
-
-volumes:
-  enclave-ts-db-data:
-
-networks:
-  enclave-ts-network:
-    driver: bridge
