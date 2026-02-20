@@ -301,39 +301,26 @@ app.post('/api/v1/credentials/connect', credentialsRateLimiter, async (req, res)
 });
 
 /**
- * Load TLS credentials - prioritize Let's Encrypt over self-signed
+ * Load TLS credentials — requires valid certificates (no self-signed fallback).
+ * Clients verify the certificate via system CA store, so self-signed would break the chain of trust.
  */
 async function loadTlsCredentials(): Promise<https.ServerOptions> {
-  // Try Let's Encrypt certificates first (production)
   const certPath = process.env.TLS_CERT_PATH || '/app/certs/cert.pem';
   const keyPath = process.env.TLS_KEY_PATH || '/app/certs/key.pem';
 
-  if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
-    logger.info('[REST] Using Let\'s Encrypt certificates from filesystem', {
-      certPath,
-      keyPath
-    });
-    return {
-      key: fs.readFileSync(keyPath),
-      cert: fs.readFileSync(certPath)
-    };
+  if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) {
+    logger.error('[REST] TLS certificates not found — refusing to start', { certPath, keyPath });
+    throw new Error(
+      `TLS certificates required but not found (cert: ${certPath}, key: ${keyPath}). ` +
+      'Provision Let\'s Encrypt certificates before starting the REST server.'
+    );
   }
 
-  // Fallback to enclave-generated self-signed certificates
-  logger.warn('[REST] Let\'s Encrypt certs not found, using enclave-generated self-signed certificates');
-
-  try {
-    const tlsService = container.resolve(TlsKeyGeneratorService);
-    const credentials = await tlsService.getCredentials();
-
-    return {
-      key: credentials.privateKey,
-      cert: credentials.certificate
-    };
-  } catch (error: unknown) {
-    logger.error('[REST] Failed to load TLS credentials', { error: extractErrorMessage(error) });
-    throw new Error('No TLS credentials available (neither Let\'s Encrypt nor enclave-generated)');
-  }
+  logger.info('[REST] Loading TLS certificates', { certPath, keyPath });
+  return {
+    key: fs.readFileSync(keyPath),
+    cert: fs.readFileSync(certPath)
+  };
 }
 
 /**
