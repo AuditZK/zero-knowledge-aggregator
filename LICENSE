@@ -1,21 +1,42 @@
-MIT License
+AuditZK Source-Available License (ASAL) v1.0
+Copyright (c) 2026 Jimmy Mouchlach / AuditZK
+All rights reserved.
 
-Copyright (c) 2025 Track Record Platform
+1. License Grant
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+You are granted a limited, non-exclusive, non-transferable,
+non-sublicensable license to:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+- View and download the source code
+- Compile the software
+- Execute the software strictly for audit, security review,
+  reproducibility verification, and research purposes
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+2. No Modification or Redistribution
+
+You may NOT:
+
+- Modify the source code
+- Create derivative works
+- Publish forks
+- Redistribute the source code or binaries
+- Use the software in production
+- Offer it as a service
+- Create any competing product or service
+
+3. Feedback
+
+You may report issues or vulnerabilities privately.
+No right to publish modified versions is granted.
+
+4. Commercial License
+
+Any commercial use requires explicit written authorization.
+
+5. Ownership
+
+All intellectual property rights remain exclusively with AuditZK.
+
+6. Disclaimer
+
+The software is provided "as is", without warranty of any kind.
