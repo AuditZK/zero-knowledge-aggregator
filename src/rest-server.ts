@@ -231,7 +231,7 @@ app.post('/api/v1/credentials/connect', credentialsRateLimiter, async (req, res)
     const apiSecret = decryptedData.api_secret;
     const passphrase = decryptedData.passphrase;
 
-    if (!apiKey || !apiSecret) {
+    if (!apiKey || apiSecret == null) {
       return res.status(400).json({
         success: false,
         error: 'Decrypted payload missing required fields: api_key and api_secret'
