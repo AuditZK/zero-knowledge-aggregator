@@ -326,11 +326,11 @@ export class PerformanceMetricsService {
    * Calculate volatility (standard deviation of returns)
    */
   private calculateVolatility(returns: number[]): number {
-    if (returns.length === 0) return 0;
+    if (returns.length <= 1) return 0;
 
     const mean = returns.reduce((sum, r) => sum + r, 0) / returns.length;
     const squaredDiffs = returns.map(r => Math.pow(r - mean, 2));
-    const variance = squaredDiffs.reduce((sum, d) => sum + d, 0) / returns.length;
+    const variance = squaredDiffs.reduce((sum, d) => sum + d, 0) / (returns.length - 1);
 
     return Math.sqrt(variance);
   }
