@@ -20,6 +20,7 @@ describe('PerformanceMetricsService', () => {
     userUid: 'user123',
     timestamp,
     exchange: 'test-exchange',
+    label: 'test-exchange account',
     totalEquity,
     realizedBalance: totalEquity * 0.8,
     unrealizedPnL: totalEquity * 0.2,
