@@ -109,7 +109,7 @@ export class LighterConnector extends CryptoExchangeConnector {
       throw new Error('Lighter requires a valid wallet address (0x...) as apiKey');
     }
 
-    this.walletAddress = credentials.apiKey.toLowerCase();
+    this.walletAddress = credentials.apiKey;
     this.apiUrl = LIGHTER_API_URL;
 
     this.logger.info('Lighter connector initialized');
