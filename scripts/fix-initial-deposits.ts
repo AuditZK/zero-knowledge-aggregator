@@ -8,10 +8,10 @@
  * Detection logic for multi-label exchanges:
  * - For each user+exchange, find ALL labels sorted by earliest first snapshot
  * - The FIRST label chronologically is the true first connection → FIX
- * - For subsequent labels, compare their first snapshot equity against
- *   the most recent snapshot from other labels just before they started:
- *   - If equity is similar (±30%) and within 3 days → label migration → SKIP
- *   - If equity is very different → new sub-account/wallet → FIX
+ * - For subsequent labels, check if ANY earlier label is still active
+ *   (has snapshots on or after the new label's start date):
+ *   - If earlier labels stopped → label migration (renamed) → SKIP
+ *   - If earlier labels still active → new sub-account/wallet → FIX
  *
  * Usage:
  *   npx ts-node scripts/fix-initial-deposits.ts              # dry-run (default)
@@ -23,10 +23,6 @@ import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
-
-const DAY_MS = 1000 * 60 * 60 * 24;
-const EQUITY_TOLERANCE = 0.3; // 30% tolerance for migration detection
-const TIME_TOLERANCE_DAYS = 3;
 
 interface SnapshotRow {
   id: string;
@@ -51,7 +47,6 @@ async function applyFix(snapshot: SnapshotRow, dryRun: boolean): Promise<void> {
 async function fixInitialDeposits(dryRun: boolean, targetUser?: string) {
   console.log(`\n=== Fix Initial Deposits ${dryRun ? '(DRY RUN)' : '(APPLYING)'} ===\n`);
 
-  // Group by user+exchange (ignoring label)
   const exchangeGroups = await prisma.snapshotData.groupBy({
     by: ['userUid', 'exchange'],
     ...(targetUser ? { where: { userUid: targetUser } } : {}),
@@ -93,7 +88,6 @@ async function fixInitialDeposits(dryRun: boolean, targetUser?: string) {
 
     if (original.totalEquity <= 0) {
       skipped++;
-      // Still process subsequent labels (they might be real sub-accounts)
     } else if (original.deposits >= original.totalEquity) {
       alreadyCorrect++;
     } else {
@@ -113,55 +107,52 @@ async function fixInitialDeposits(dryRun: boolean, targetUser?: string) {
     for (let i = 1; i < labelFirstSnapshots.length; i++) {
       const current = labelFirstSnapshots[i];
 
-      // Skip if equity is 0 or already correct
       if (current.totalEquity <= 0) { skipped++; continue; }
       if (current.deposits >= current.totalEquity) { alreadyCorrect++; continue; }
 
-      // Find the most recent snapshot from ANY OTHER label just before this label started
-      const previousSnapshot = await prisma.snapshotData.findFirst({
-        where: {
-          userUid: group.userUid,
-          exchange: group.exchange,
-          label: { not: current.label },
-          timestamp: { lt: current.timestamp },
-        },
-        orderBy: { timestamp: 'desc' },
-      }) as SnapshotRow | null;
+      // Check if ANY earlier label is still active when this label started
+      // (has snapshots on or after this label's first snapshot date)
+      let earlierLabelStillActive = false;
+      let activeLabel = '';
 
-      let isMigration = false;
-
-      if (previousSnapshot && previousSnapshot.totalEquity > 0) {
-        const timeDiffDays = (current.timestamp.getTime() - previousSnapshot.timestamp.getTime()) / DAY_MS;
-        const equityRatio = current.totalEquity / previousSnapshot.totalEquity;
-
-        // If equity is similar and timestamps are close → label migration
-        if (timeDiffDays <= TIME_TOLERANCE_DAYS && equityRatio > (1 - EQUITY_TOLERANCE) && equityRatio < (1 + EQUITY_TOLERANCE)) {
-          isMigration = true;
-          labelMigrations++;
-          console.log(
-            `[SKIP] ${current.userUid} / ${current.exchange} / ${current.label}` +
-            `\n      First snapshot: ${current.timestamp.toISOString().split('T')[0]}` +
-            `\n      Equity: ${current.totalEquity.toFixed(2)}` +
-            `\n      Previous label "${previousSnapshot.label || '(default)'}" had ${previousSnapshot.totalEquity.toFixed(2)} (${timeDiffDays.toFixed(1)}d ago)` +
-            `\n      → Label migration (equity ratio: ${equityRatio.toFixed(2)}), skipping\n`
-          );
+      for (let j = 0; j < i; j++) {
+        const earlierLabel = labelFirstSnapshots[j];
+        const laterSnapshot = await prisma.snapshotData.findFirst({
+          where: {
+            userUid: group.userUid,
+            exchange: group.exchange,
+            label: earlierLabel.label,
+            timestamp: { gte: current.timestamp },
+          },
+        });
+        if (laterSnapshot) {
+          earlierLabelStillActive = true;
+          activeLabel = earlierLabel.label;
+          break;
         }
       }
 
-      if (!isMigration) {
+      if (earlierLabelStillActive) {
+        // Earlier label still receiving snapshots → new wallet/sub-account
         const depositToAdd = current.totalEquity - current.deposits;
         console.log(
           `[SUB-ACCOUNT] ${current.userUid} / ${current.exchange} / ${current.label}` +
           `\n      First snapshot: ${current.timestamp.toISOString().split('T')[0]}` +
           `\n      Equity: ${current.totalEquity.toFixed(2)}` +
-          (previousSnapshot
-            ? `\n      Previous label "${previousSnapshot.label || '(default)'}" had ${previousSnapshot.totalEquity.toFixed(2)}`
-            : `\n      No previous label found`) +
-          `\n      → New wallet/sub-account` +
+          `\n      Label "${activeLabel || '(default)'}" still active → new wallet` +
           `\n      Adding deposit: +${depositToAdd.toFixed(2)}\n`
         );
         await applyFix(current, dryRun);
         fixed++;
+      } else {
+        // All earlier labels stopped → label migration (same account renamed)
+        labelMigrations++;
+        console.log(
+          `[SKIP] ${current.userUid} / ${current.exchange} / ${current.label}` +
+          `\n      First snapshot: ${current.timestamp.toISOString().split('T')[0]}` +
+          `\n      Equity: ${current.totalEquity.toFixed(2)}` +
+          `\n      All earlier labels stopped → label migration, skipping\n`
+        );
       }
     }
   }
