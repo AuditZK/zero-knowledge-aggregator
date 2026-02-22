@@ -145,14 +145,48 @@ async function fixInitialDeposits(dryRun: boolean, targetUser?: string) {
         await applyFix(current, dryRun);
         fixed++;
       } else {
-        // All earlier labels stopped → label migration (same account renamed)
-        labelMigrations++;
-        console.log(
-          `[SKIP] ${current.userUid} / ${current.exchange} / ${current.label}` +
-          `\n      First snapshot: ${current.timestamp.toISOString().split('T')[0]}` +
-          `\n      Equity: ${current.totalEquity.toFixed(2)}` +
-          `\n      All earlier labels stopped → label migration, skipping\n`
-        );
+        // All earlier labels stopped — but did they actually have equity?
+        // If all earlier labels ended with 0 equity, there was nothing to "migrate"
+        // and this label's equity is genuinely new money → FIX
+        let earlierHadEquity = false;
+        for (let j = 0; j < i; j++) {
+          const earlierLabel = labelFirstSnapshots[j]!;
+          const lastSnapshot = await prisma.snapshotData.findFirst({
+            where: {
+              userUid: group.userUid,
+              exchange: group.exchange,
+              label: earlierLabel.label,
+            },
+            orderBy: { timestamp: 'desc' },
+          }) as SnapshotRow | null;
+          if (lastSnapshot && lastSnapshot.totalEquity > 0) {
+            earlierHadEquity = true;
+            break;
+          }
+        }
+
+        if (earlierHadEquity) {
+          // Real migration (earlier label had equity) → SKIP
+          labelMigrations++;
+          console.log(
+            `[SKIP] ${current.userUid} / ${current.exchange} / ${current.label}` +
+            `\n      First snapshot: ${current.timestamp.toISOString().split('T')[0]}` +
+            `\n      Equity: ${current.totalEquity.toFixed(2)}` +
+            `\n      All earlier labels stopped (with equity) → label migration, skipping\n`
+          );
+        } else {
+          // Earlier labels had 0 equity → this is genuinely new money → FIX
+          const depositToAdd = current.totalEquity - current.deposits;
+          console.log(
+            `[FIX-NEW] ${current.userUid} / ${current.exchange} / ${current.label}` +
+            `\n      First snapshot: ${current.timestamp.toISOString().split('T')[0]}` +
+            `\n      Equity: ${current.totalEquity.toFixed(2)}` +
+            `\n      Earlier labels had 0 equity → new capital` +
+            `\n      Adding deposit: +${depositToAdd.toFixed(2)}\n`
+          );
+          await applyFix(current, dryRun);
+          fixed++;
+        }
       }
     }
   }
