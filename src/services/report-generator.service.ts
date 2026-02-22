@@ -435,16 +435,23 @@ export class ReportGeneratorService {
       }
     }
 
-    // Forward-fill: add last known equity for exchanges not present today
-    for (const [exchange, equity] of state.lastKnownEquity.entries()) {
-      if (!exchangeMap.has(exchange)) {
-        totalEquity += equity;
+    // Virtual withdrawal: treat disappeared exchanges as capital withdrawal
+    let virtualWithdrawal = 0;
+    const disappearedExchanges: string[] = [];
+    for (const prevExchange of state.seenExchanges) {
+      if (!exchangeMap.has(prevExchange)) {
+        virtualWithdrawal += state.lastKnownEquity.get(prevExchange) || 0;
+        disappearedExchanges.push(prevExchange);
       }
+    }
+    for (const ex of disappearedExchanges) {
+      state.seenExchanges.delete(ex);
+      state.lastKnownEquity.delete(ex);
     }
 
     return {
       totalEquity,
-      netDeposits: totalDeposits - totalWithdrawals + virtualDeposit
+      netDeposits: totalDeposits - totalWithdrawals + virtualDeposit - virtualWithdrawal
     };
   }
 
