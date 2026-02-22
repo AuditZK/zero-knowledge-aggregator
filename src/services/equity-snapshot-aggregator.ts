@@ -146,6 +146,19 @@ export class EquitySnapshotAggregator {
 
       const totalFundingFees = await this.calculateFundingFees(connector, swapSymbols, tradesSince);
       const cashflows = await this.fetchCashflows(connector, tradesSince);
+
+      // Detect first non-zero equity snapshot for this exchange: treat initial equity as a deposit
+      // so TWR calculations correctly exclude pre-existing balances.
+      // Uses hasNonZeroEquitySnapshot instead of count to handle API failures
+      // (0-equity snapshots shouldn't block deposit detection for the first real snapshot)
+      if (globalEquity > 0) {
+        const hasRealSnapshot = await this.snapshotDataRepo.hasNonZeroEquitySnapshot(userUid, exchange);
+        if (!hasRealSnapshot) {
+          cashflows.deposits += globalEquity;
+          logger.info(`First real snapshot for ${userUid}/${exchange}/${label}: marking initial equity as deposit (${globalEquity.toFixed(2)})`);
+        }
+      }
+
       const breakdown = this.buildMarketBreakdown(
         balancesByMarket,
         tradesByMarket,

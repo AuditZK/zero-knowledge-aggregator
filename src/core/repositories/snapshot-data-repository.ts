@@ -244,6 +244,22 @@ export class SnapshotDataRepository {
     return this.prisma.snapshotData.count({ where });
   }
 
+  /**
+   * Check if any snapshot with non-zero equity exists for this user+exchange.
+   * Used to detect first "real" snapshot (ignoring 0-equity API failures).
+   */
+  async hasNonZeroEquitySnapshot(userUid: string, exchange: string): Promise<boolean> {
+    const snapshot = await this.prisma.snapshotData.findFirst({
+      where: {
+        userUid,
+        exchange,
+        totalEquity: { gt: 0 },
+      },
+      select: { id: true },
+    });
+    return snapshot !== null;
+  }
+
   private mapPrismaSnapshotDataToSnapshotData(prismaSnapshotData: PrismaSnapshotData): SnapshotData {
     return {
       id: prismaSnapshotData.id,
