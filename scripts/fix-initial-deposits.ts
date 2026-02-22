@@ -84,7 +84,7 @@ async function fixInitialDeposits(dryRun: boolean, targetUser?: string) {
     if (labelFirstSnapshots.length === 0) continue;
 
     // --- Handle the FIRST label (true first connection) ---
-    const original = labelFirstSnapshots[0];
+    const original = labelFirstSnapshots[0]!;
 
     if (original.totalEquity <= 0) {
       skipped++;
@@ -105,7 +105,7 @@ async function fixInitialDeposits(dryRun: boolean, targetUser?: string) {
 
     // --- Handle subsequent labels ---
     for (let i = 1; i < labelFirstSnapshots.length; i++) {
-      const current = labelFirstSnapshots[i];
+      const current = labelFirstSnapshots[i]!;
 
       if (current.totalEquity <= 0) { skipped++; continue; }
       if (current.deposits >= current.totalEquity) { alreadyCorrect++; continue; }
@@ -116,7 +116,7 @@ async function fixInitialDeposits(dryRun: boolean, targetUser?: string) {
       let activeLabel = '';
 
       for (let j = 0; j < i; j++) {
-        const earlierLabel = labelFirstSnapshots[j];
+        const earlierLabel = labelFirstSnapshots[j]!;
         const laterSnapshot = await prisma.snapshotData.findFirst({
           where: {
             userUid: group.userUid,
