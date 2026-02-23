@@ -241,12 +241,12 @@ export class PerformanceMetricsService {
 
     // === Core metrics ===
     const volatility = this.calculateVolatility(dailyReturns);
-    const annualizedVolatility = volatility * Math.sqrt(252); // 252 trading days
+    const annualizedVolatility = volatility * Math.sqrt(365); // 365 calendar days (crypto 24/7)
 
     const avgDailyReturn = dailyReturns.length > 0
       ? dailyReturns.reduce((sum, r) => sum + r, 0) / dailyReturns.length
       : 0;
-    const annualizedReturn = avgDailyReturn * 252;
+    const annualizedReturn = avgDailyReturn * 365;
 
     const sharpeRatio = annualizedVolatility > 0
       ? annualizedReturn / annualizedVolatility
@@ -260,7 +260,7 @@ export class PerformanceMetricsService {
     // Downside deviation (std dev of negative returns only)
     const negativeReturns = dailyReturns.filter(r => r < 0);
     const downsideDeviation = negativeReturns.length > 0
-      ? this.calculateVolatility(negativeReturns) * Math.sqrt(252)
+      ? this.calculateVolatility(negativeReturns) * Math.sqrt(365)
       : 0;
 
     // Sortino Ratio (return / downside deviation)

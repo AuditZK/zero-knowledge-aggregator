@@ -29,7 +29,7 @@ const logger = getLogger('ReportGenerator');
 const ENCLAVE_VERSION = process.env.ENCLAVE_VERSION || '3.0.0';
 
 // Constants
-const TRADING_DAYS_PER_YEAR = 252;
+const TRADING_DAYS_PER_YEAR = 365;
 // NOTE: Risk-free rate set to 0 to align with Analytics Service calculations
 const RISK_FREE_RATE = 0;
 
@@ -327,7 +327,6 @@ export class ReportGeneratorService {
   }>): DailyReturn[] {
     const byDateAndExchange = this.groupSnapshotsByDateAndExchange(snapshots);
     const sortedDates = Array.from(byDateAndExchange.keys()).sort((a, b) => a.localeCompare(b));
-    const exchangeFirstEquity = this.findFirstEquityPerExchange(byDateAndExchange, sortedDates);
 
     const state = this.initDailyReturnState(sortedDates);
     const dailyReturns: DailyReturn[] = [];
@@ -335,7 +334,7 @@ export class ReportGeneratorService {
     for (const dateKey of sortedDates) {
       const exchangeMap = byDateAndExchange.get(dateKey)!;
       const dayData = this.aggregateDailyEquityAndCashflows(
-        exchangeMap, dateKey, state, exchangeFirstEquity
+        exchangeMap, state
       );
 
       const result = this.calculateDailyReturnForDate(dateKey, dayData, state);
@@ -374,47 +373,22 @@ export class ReportGeneratorService {
     return byDateAndExchange;
   }
 
-  private findFirstEquityPerExchange(
-    byDateAndExchange: Map<string, Map<string, Array<{ timestamp: string; totalEquity: number }>>>,
-    sortedDates: string[]
-  ): Map<string, number> {
-    const exchangeFirstEquity = new Map<string, number>();
-
-    for (const dateKey of sortedDates) {
-      const exchangeMap = byDateAndExchange.get(dateKey)!;
-      for (const [exchange, daySnapshots] of exchangeMap.entries()) {
-        if (exchangeFirstEquity.has(exchange) || daySnapshots.length === 0) continue;
-
-        const sorted = [...daySnapshots].sort((a, b) =>
-          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-        );
-        exchangeFirstEquity.set(exchange, sorted[0]!.totalEquity);
-      }
-    }
-
-    return exchangeFirstEquity;
-  }
-
-  private initDailyReturnState(sortedDates: string[]) {
+  private initDailyReturnState(_sortedDates: string[]) {
     return {
       seenExchanges: new Set<string>(),
       lastKnownEquity: new Map<string, number>(),
       previousCloseEquity: null as number | null,
       cumulativeReturn: 1,
-      firstDateKey: sortedDates[0] || ''
     };
   }
 
   private aggregateDailyEquityAndCashflows(
     exchangeMap: Map<string, Array<{ timestamp: string; totalEquity: number; deposits: number; withdrawals: number }>>,
-    dateKey: string,
-    state: { seenExchanges: Set<string>; lastKnownEquity: Map<string, number>; firstDateKey: string },
-    exchangeFirstEquity: Map<string, number>
+    state: { seenExchanges: Set<string>; lastKnownEquity: Map<string, number> },
   ): { totalEquity: number; netDeposits: number } {
     let totalEquity = 0;
     let totalDeposits = 0;
     let totalWithdrawals = 0;
-    let virtualDeposit = 0;
 
     for (const [exchange, daySnapshots] of exchangeMap.entries()) {
       const sorted = [...daySnapshots].sort((a, b) =>
@@ -427,15 +401,16 @@ export class ReportGeneratorService {
       totalWithdrawals += closeSnap.withdrawals;
       state.lastKnownEquity.set(exchange, closeSnap.totalEquity);
 
+      // Track seen exchanges (used by virtual withdrawal below)
       if (!state.seenExchanges.has(exchange)) {
         state.seenExchanges.add(exchange);
-        if (dateKey !== state.firstDateKey) {
-          virtualDeposit += exchangeFirstEquity.get(exchange) || closeSnap.totalEquity;
-        }
       }
     }
+    // NOTE: Virtual deposits removed — the Enclave already marks initial equity as deposit
+    // in snapshot_data.deposits (equity-snapshot-aggregator.ts:157), so adding a virtual
+    // deposit here would double-count.
 
-    // Virtual withdrawal: treat disappeared exchanges as capital withdrawal
+    // Virtual withdrawal: missing exchange = immediate withdrawal of last known equity
     let virtualWithdrawal = 0;
     const disappearedExchanges: string[] = [];
     for (const prevExchange of state.seenExchanges) {
@@ -451,7 +426,7 @@ export class ReportGeneratorService {
 
     return {
       totalEquity,
-      netDeposits: totalDeposits - totalWithdrawals + virtualDeposit - virtualWithdrawal
+      netDeposits: totalDeposits - totalWithdrawals - virtualWithdrawal
     };
   }
 
