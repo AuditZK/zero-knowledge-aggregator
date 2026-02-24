@@ -324,6 +324,7 @@ export class ReportGeneratorService {
     deposits: number;
     withdrawals: number;
     exchange?: string;
+    label?: string;
   }>): DailyReturn[] {
     const byDateAndExchange = this.groupSnapshotsByDateAndExchange(snapshots);
     const sortedDates = Array.from(byDateAndExchange.keys()).sort((a, b) => a.localeCompare(b));
@@ -350,6 +351,7 @@ export class ReportGeneratorService {
     deposits: number;
     withdrawals: number;
     exchange?: string;
+    label?: string;
   }>): Map<string, Map<string, typeof snapshots>> {
     const byDateAndExchange = new Map<string, Map<string, typeof snapshots>>();
 
@@ -357,7 +359,10 @@ export class ReportGeneratorService {
       const dateKey = new Date(snapshot.timestamp).toISOString().split('T')[0];
       if (!dateKey) continue;
 
-      const exchange = snapshot.exchange || 'unknown';
+      // Group by exchange+label to handle multi-account exchanges (e.g. Hyperliquid sub-accounts)
+      const exchange = snapshot.label
+        ? `${snapshot.exchange || 'unknown'}|${snapshot.label}`
+        : (snapshot.exchange || 'unknown');
 
       if (!byDateAndExchange.has(dateKey)) {
         byDateAndExchange.set(dateKey, new Map());
