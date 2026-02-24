@@ -535,13 +535,16 @@ export class ReportGeneratorService {
     // Volatility (annualized)
     const volatility = this.calculateVolatility(returns) * Math.sqrt(TRADING_DAYS_PER_YEAR) * 100;
 
-    // Sharpe Ratio
-    const excessReturn = annualizedReturn - RISK_FREE_RATE;
-    const sharpeRatio = volatility > 0 ? excessReturn / volatility : 0;
+    // Sharpe Ratio: (μ/σ) × √365 (standard arithmetic annualization, rf=0)
+    const avgDailyReturn = returns.length > 0
+      ? returns.reduce((sum, r) => sum + r, 0) / returns.length
+      : 0;
+    const dailyVol = this.calculateVolatility(returns);
+    const sharpeRatio = dailyVol > 0 ? (avgDailyReturn / dailyVol) * Math.sqrt(TRADING_DAYS_PER_YEAR) : 0;
 
     // Sortino Ratio (using downside deviation)
     const downsideDeviation = this.calculateDownsideDeviation(returns) * Math.sqrt(TRADING_DAYS_PER_YEAR) * 100;
-    const sortinoRatio = downsideDeviation > 0 ? excessReturn / downsideDeviation : 0;
+    const sortinoRatio = downsideDeviation > 0 ? (annualizedReturn - RISK_FREE_RATE) / downsideDeviation : 0;
 
     // Max Drawdown
     const maxDrawdown = this.calculateMaxDrawdown(dailyReturns);
