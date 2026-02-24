@@ -335,7 +335,7 @@ export class ReportGeneratorService {
     for (const dateKey of sortedDates) {
       const exchangeMap = byDateAndExchange.get(dateKey)!;
       const dayData = this.aggregateDailyEquityAndCashflows(
-        exchangeMap, state
+        exchangeMap, state, dateKey
       );
 
       const result = this.calculateDailyReturnForDate(dateKey, dayData, state);
@@ -381,19 +381,27 @@ export class ReportGeneratorService {
   private initDailyReturnState(_sortedDates: string[]) {
     return {
       seenExchanges: new Set<string>(),
+      everSeenExchanges: new Set<string>(),
       lastKnownEquity: new Map<string, number>(),
       previousCloseEquity: null as number | null,
       cumulativeReturn: 1,
+      firstDateKey: null as string | null,
     };
   }
 
   private aggregateDailyEquityAndCashflows(
     exchangeMap: Map<string, Array<{ timestamp: string; totalEquity: number; deposits: number; withdrawals: number }>>,
-    state: { seenExchanges: Set<string>; lastKnownEquity: Map<string, number> },
+    state: { seenExchanges: Set<string>; everSeenExchanges: Set<string>; lastKnownEquity: Map<string, number>; firstDateKey: string | null },
+    dateKey: string,
   ): { totalEquity: number; netDeposits: number } {
+    if (state.firstDateKey === null) {
+      state.firstDateKey = dateKey;
+    }
+
     let totalEquity = 0;
     let totalDeposits = 0;
     let totalWithdrawals = 0;
+    let virtualDeposit = 0;
 
     for (const [exchange, daySnapshots] of exchangeMap.entries()) {
       const sorted = [...daySnapshots].sort((a, b) =>
@@ -406,14 +414,15 @@ export class ReportGeneratorService {
       totalWithdrawals += closeSnap.withdrawals;
       state.lastKnownEquity.set(exchange, closeSnap.totalEquity);
 
-      // Track seen exchanges (used by virtual withdrawal below)
       if (!state.seenExchanges.has(exchange)) {
         state.seenExchanges.add(exchange);
+        // Virtual deposit: exchange reappeared after disappearing (was withdrawn then came back)
+        if (dateKey !== state.firstDateKey && state.everSeenExchanges.has(exchange) && closeSnap.deposits === 0) {
+          virtualDeposit += closeSnap.totalEquity;
+        }
       }
+      state.everSeenExchanges.add(exchange);
     }
-    // NOTE: Virtual deposits removed — the Enclave already marks initial equity as deposit
-    // in snapshot_data.deposits (equity-snapshot-aggregator.ts:157), so adding a virtual
-    // deposit here would double-count.
 
     // Virtual withdrawal: missing exchange = immediate withdrawal of last known equity
     let virtualWithdrawal = 0;
@@ -431,7 +440,7 @@ export class ReportGeneratorService {
 
     return {
       totalEquity,
-      netDeposits: totalDeposits - totalWithdrawals - virtualWithdrawal
+      netDeposits: totalDeposits - totalWithdrawals + virtualDeposit - virtualWithdrawal
     };
   }
 
