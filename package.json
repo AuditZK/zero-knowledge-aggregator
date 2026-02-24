@@ -40,7 +40,7 @@
     "auditable"
   ],
   "author": "Track Record Platform",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "dependencies": {
     "@alpacahq/alpaca-trade-api": "^3.1.3",
     "@grpc/grpc-js": "^1.14.1",
