@@ -520,7 +520,8 @@ export class ReportGeneratorService {
    * Calculate core performance metrics
    */
   private calculateCoreMetrics(dailyReturns: DailyReturn[]): CoreMetrics {
-    const returns = dailyReturns.map(d => d.netReturn / 100);
+    // Skip first day (return = 0, no previous day to compare) - aligned with Analytics Service
+    const returns = dailyReturns.slice(1).map(d => d.netReturn / 100);
 
     // Total return
     const lastDay = dailyReturns.at(-1);
@@ -567,7 +568,8 @@ export class ReportGeneratorService {
    * Calculate risk metrics
    */
   private calculateRiskMetrics(dailyReturns: DailyReturn[]): RiskMetrics {
-    const returns = dailyReturns.map(d => d.netReturn);
+    // Skip first day (return = 0, no previous day) - aligned with Analytics Service
+    const returns = dailyReturns.slice(1).map(d => d.netReturn);
     const sortedReturns = [...returns].sort((a, b) => a - b);
 
     // VaR calculations
