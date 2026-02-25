@@ -332,14 +332,13 @@ export class ExchangeConnectionRepository {
   async getKycLevelsForUser(userUid: string): Promise<Map<string, string>> {
     const connections = await this.prisma.exchangeConnection.findMany({
       where: { userUid, isActive: true, excludeFromReport: false },
-      select: { exchange: true, label: true, kycLevel: true },
+      select: { exchange: true, kycLevel: true },
     });
 
     const kycMap = new Map<string, string>();
     for (const conn of connections) {
       if (conn.kycLevel) {
-        const key = conn.label ? `${conn.exchange}/${conn.label}` : conn.exchange;
-        kycMap.set(key, conn.kycLevel);
+        kycMap.set(conn.exchange, conn.kycLevel);
       }
     }
     return kycMap;
@@ -356,14 +355,16 @@ export class ExchangeConnectionRepository {
   async getPaperStatusForUser(userUid: string): Promise<Map<string, boolean>> {
     const connections = await this.prisma.exchangeConnection.findMany({
       where: { userUid, isActive: true, excludeFromReport: false },
-      select: { exchange: true, label: true, isPaper: true },
+      select: { exchange: true, isPaper: true },
     });
 
     const paperMap = new Map<string, boolean>();
     for (const conn of connections) {
       if (conn.isPaper !== null) {
-        const key = conn.label ? `${conn.exchange}/${conn.label}` : conn.exchange;
-        paperMap.set(key, conn.isPaper);
+        // If any connection for this exchange is paper, mark the exchange as paper
+        if (conn.isPaper || !paperMap.has(conn.exchange)) {
+          paperMap.set(conn.exchange, conn.isPaper);
+        }
       }
     }
     return paperMap;
