@@ -136,6 +136,10 @@ export class PerformanceMetricsService {
   private readonly SnapshotType = {} as {
     timestamp: string;
     totalEquity: number;
+    deposits: number;
+    withdrawals: number;
+    exchange: string;
+    label: string;
     breakdown_by_market?: {
       global?: {
         volume?: number;
@@ -147,8 +151,9 @@ export class PerformanceMetricsService {
   };
 
   /**
-   * Aggregate snapshots into daily data points
-   * Handles intraday snapshots by grouping by date (00:00 UTC)
+   * Aggregate snapshots into daily data points with TWR (Time-Weighted Return)
+   * Groups by date AND exchange to track virtual deposits/withdrawals
+   * when exchanges appear/disappear between days.
    */
   private aggregateToDailyData(snapshots: Array<typeof this.SnapshotType>): DailyDataPoint[] {
     const byDate = this.groupSnapshotsByDate(snapshots);
@@ -156,12 +161,21 @@ export class PerformanceMetricsService {
 
     const dailyData: DailyDataPoint[] = [];
     let previousEquity: number | null = null;
+    const seenExchanges = new Set<string>();
+    const everSeenExchanges = new Set<string>();
+    const lastKnownEquity = new Map<string, number>();
+    let isFirstDate = true;
 
     for (const dateKey of sortedDates) {
-      const dataPoint = this.createDailyDataPoint(byDate.get(dateKey)!, dateKey, previousEquity);
+      const daySnapshots = byDate.get(dateKey)!;
+      const dataPoint = this.createDailyDataPointTWR(
+        daySnapshots, dateKey, previousEquity,
+        seenExchanges, everSeenExchanges, lastKnownEquity, isFirstDate
+      );
       if (dataPoint) {
         dailyData.push(dataPoint);
         previousEquity = dataPoint.closeEquity;
+        isFirstDate = false;
       }
     }
 
@@ -184,16 +198,72 @@ export class PerformanceMetricsService {
     return byDate;
   }
 
-  private createDailyDataPoint(
+  /**
+   * Create daily data point with TWR-adjusted returns.
+   * Handles virtual deposits/withdrawals when exchanges appear/disappear.
+   */
+  private createDailyDataPointTWR(
     daySnapshots: Array<typeof this.SnapshotType>,
     dateKey: string,
-    previousEquity: number | null
+    previousEquity: number | null,
+    seenExchanges: Set<string>,
+    everSeenExchanges: Set<string>,
+    lastKnownEquity: Map<string, number>,
+    isFirstDate: boolean
   ): DailyDataPoint | null {
     if (daySnapshots.length === 0) return null;
 
-    // Sum equity across all exchanges for global portfolio view
-    // Each day has one snapshot per exchange, all at 00:00 UTC
-    const totalEquity = daySnapshots.reduce((sum, s) => sum + s.totalEquity, 0);
+    // Group by exchange key for this day
+    const todayExchanges = new Set<string>();
+    let totalEquity = 0;
+    let totalDeposits = 0;
+    let totalWithdrawals = 0;
+    let virtualDeposit = 0;
+
+    for (const snap of daySnapshots) {
+      const exchangeKey = snap.label ? `${snap.exchange}/${snap.label}` : snap.exchange;
+      todayExchanges.add(exchangeKey);
+      totalEquity += snap.totalEquity;
+      totalDeposits += snap.deposits || 0;
+      totalWithdrawals += snap.withdrawals || 0;
+      lastKnownEquity.set(exchangeKey, snap.totalEquity);
+
+      // Virtual deposit: exchange appeared after the first date
+      if (!seenExchanges.has(exchangeKey) && !isFirstDate) {
+        if (everSeenExchanges.has(exchangeKey) && (snap.deposits || 0) === 0) {
+          virtualDeposit += snap.totalEquity;
+        }
+      }
+      everSeenExchanges.add(exchangeKey);
+    }
+
+    // Virtual withdrawal: exchange disappeared (was seen before but not today)
+    let virtualWithdrawal = 0;
+    const disappearedExchanges: string[] = [];
+    for (const prevExchange of seenExchanges) {
+      if (!todayExchanges.has(prevExchange)) {
+        virtualWithdrawal += lastKnownEquity.get(prevExchange) || 0;
+        disappearedExchanges.push(prevExchange);
+      }
+    }
+    for (const ex of disappearedExchanges) {
+      seenExchanges.delete(ex);
+    }
+    for (const ex of todayExchanges) {
+      seenExchanges.add(ex);
+    }
+
+    // TWR: adjust return for cash flows
+    const netDeposits = totalDeposits - totalWithdrawals + virtualDeposit - virtualWithdrawal;
+    let dailyReturnPct = 0;
+    let dailyReturnUsd = 0;
+
+    if (previousEquity !== null && previousEquity > 0) {
+      const adjustedReturn = totalEquity - previousEquity - netDeposits;
+      dailyReturnPct = (adjustedReturn / previousEquity) * 100;
+      dailyReturnUsd = adjustedReturn;
+    }
+
     const metrics = this.sumDayMetrics(daySnapshots);
 
     return {
@@ -202,8 +272,8 @@ export class PerformanceMetricsService {
       closeEquity: totalEquity,
       highEquity: totalEquity,
       lowEquity: totalEquity,
-      dailyReturnPct: this.calculateReturnPct(totalEquity, previousEquity),
-      dailyReturnUsd: previousEquity === null ? 0 : totalEquity - previousEquity,
+      dailyReturnPct,
+      dailyReturnUsd,
       ...metrics
     };
   }
@@ -221,11 +291,6 @@ export class PerformanceMetricsService {
     }
 
     return { volume, trades, fees };
-  }
-
-  private calculateReturnPct(closeEquity: number, previousEquity: number | null): number {
-    if (previousEquity === null || previousEquity <= 0) return 0;
-    return ((closeEquity - previousEquity) / previousEquity) * 100;
   }
 
   /**
