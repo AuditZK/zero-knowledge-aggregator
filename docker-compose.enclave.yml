@@ -33,6 +33,9 @@ services:
       BENCHMARK_SERVICE_URL: ${BENCHMARK_SERVICE_URL:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_SERVER_API_KEY: ${LOG_SERVER_API_KEY:-}
+      # cTrader OAuth app credentials (from GCP metadata via start-enclave.sh)
+      CTRADER_CLIENT_ID: ${CTRADER_CLIENT_ID:-}
+      CTRADER_CLIENT_SECRET: ${CTRADER_CLIENT_SECRET:-}
       # Proxy for geo-restricted exchanges (Binance blocks US IPs)
       EXCHANGE_HTTP_PROXY: ${EXCHANGE_HTTP_PROXY:-}
       PROXY_EXCHANGES: ${PROXY_EXCHANGES:-binance}
