@@ -142,17 +142,24 @@ export class SevSnpAttestationService {
   }
 
   private async fetchAttestation(): Promise<SevSnpReport> {
-    // Linux /dev/sev-guest
-    if (fs.existsSync(this.SEV_GUEST_DEVICE)) {
-      return this.getSevGuestAttestation();
-    }
-    // Azure Confidential VM
+    // Azure: IMDS is the only attestation path
     if (await this.isAzure()) {
       return this.getAzureAttestation();
     }
-    // GCP Confidential VM
+    // GCP: try metadata server first, fall back to /dev/sev-guest (snpguest)
+    // Some GCP VM types expose /dev/sev-guest and support snpguest directly
     if (await this.isGcp()) {
-      return this.getGcpAttestation();
+      try {
+        return await this.getGcpAttestation();
+      } catch (error: unknown) {
+        logger.warn('GCP metadata attestation unavailable, falling back to snpguest', {
+          error: extractErrorMessage(error)
+        });
+      }
+    }
+    // Bare metal / KVM / GCP fallback: raw /dev/sev-guest via snpguest
+    if (fs.existsSync(this.SEV_GUEST_DEVICE)) {
+      return this.getSevGuestAttestation();
     }
     throw new Error('No SEV-SNP attestation method available');
   }
@@ -380,14 +387,12 @@ export class SevSnpAttestationService {
   private async isGcp(): Promise<boolean> {
     try {
       // NOSONAR: GCP Metadata Server only supports HTTP - internal DNS is VM-internal only
-      const response = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/attributes/', { // NOSONAR
+      // Use the base instance endpoint which exists on all GCP VMs
+      const response = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/id', { // NOSONAR
         headers: { 'Metadata-Flavor': 'Google' },
         signal: AbortSignal.timeout(2000)
       });
-      if (response.ok) {
-        const attributes = await response.text();
-        return attributes.includes('confidential-compute');
-      }
+      return response.ok;
     } catch {}
     return false;
   }
@@ -404,7 +409,7 @@ export class SevSnpAttestationService {
       attestationMethod = 'Metadata Server';
     } else if (fs.existsSync(this.SEV_GUEST_DEVICE)) {
       platform = 'Bare Metal / KVM';
-      attestationMethod = '/dev/sev-guest';
+      attestationMethod = 'snpguest (/dev/sev-guest)';
     }
 
     return { platform, sevSnpAvailable: this.isSevSnpAvailable(), attestationMethod };

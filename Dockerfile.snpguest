@@ -1,0 +1,16 @@
+# ============================================================================
+# snpguest builder — build ONCE, tag locally, reuse in main Dockerfile
+#
+# Build: docker build -f Dockerfile.snpguest -t snpguest:0.10.0 .
+# Only needs to be rebuilt when upgrading the snpguest version.
+# ============================================================================
+FROM rust:alpine
+
+RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static perl make
+
+# 1 job ≈ 1 GB RAM — keep low on constrained VMs
+ENV CARGO_BUILD_JOBS=1
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+
+# snpguest 0.10.0 — compatible with kernel 6.17+ (0.6.0 caused ENOTTY on 6.x)
+RUN cargo install snpguest@0.10.0 --root /usr/local --locked

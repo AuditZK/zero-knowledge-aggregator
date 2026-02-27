@@ -6,23 +6,16 @@
 # ============================================================================
 
 # ============================================================================
-# SNPGuest Builder Stage - Build AMD SEV-SNP attestation tool
+# SNPGuest — pulled from pre-built local image (no Rust compilation on deploy)
 # ============================================================================
-# NOTE: Rust compilation is memory-intensive. Options:
-#   1. Use Cloud Build: gcloud builds submit --tag gcr.io/PROJECT/enclave:latest .
-#   2. Increase VM RAM temporarily to 8GB+
-#   3. Build with CARGO_BUILD_JOBS=1 (slower but uses less RAM)
+# Build the snpguest image ONCE on the VM:
+#   docker build -f Dockerfile.snpguest -t snpguest:0.10.0 .
+#
+# Subsequent enclave rebuilds skip Rust entirely (~15 min → ~0 min for this stage).
+# Only rebuild Dockerfile.snpguest when upgrading the snpguest version.
 # ============================================================================
-FROM rust:1.82-alpine AS snpguest-builder
-
-RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static perl make
-
-# Limit parallelism to reduce memory usage (1 job = ~1GB RAM)
-ENV CARGO_BUILD_JOBS=1
-ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
-
-# Install snpguest 0.6.0 with locked dependencies
-RUN cargo install snpguest@0.6.0 --root /usr/local --locked
+ARG SNPGUEST_IMAGE=snpguest:0.10.0
+FROM ${SNPGUEST_IMAGE} AS snpguest-builder
 
 # ============================================================================
 # Node Builder Stage
