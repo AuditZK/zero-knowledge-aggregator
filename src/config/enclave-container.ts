@@ -157,9 +157,13 @@ export async function verifyEnclaveIsolation(): Promise<{
     if (process.env.ENCLAVE_MODE === 'true') {
       logger.error('ENCLAVE_MODE=true but attestation failed - security compromise or misconfiguration');
 
-      // In production, this should ABORT startup
+      // In production, abort unless explicitly bypassed via SKIP_ATTESTATION
       if (process.env.NODE_ENV === 'production') {
-        throw new Error('CRITICAL: Enclave attestation failed in production mode');
+        if (process.env.SKIP_ATTESTATION === 'true') {
+          logger.warn('ATTESTATION BYPASSED via SKIP_ATTESTATION - hardware isolation NOT verified');
+        } else {
+          throw new Error('CRITICAL: Enclave attestation failed in production mode');
+        }
       }
     } else {
       logger.warn('Running in DEVELOPMENT mode (no attestation required)', {
