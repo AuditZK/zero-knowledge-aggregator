@@ -1,6 +1,7 @@
 import { injectable, inject } from 'tsyringe';
 import { KeyDerivationService } from './key-derivation.service';
 import { DEKRepository } from '../repositories/dek-repository';
+import { MemoryProtectionService } from './memory-protection.service';
 import { getLogger, extractErrorMessage } from '../utils/secure-enclave-logger';
 
 const logger = getLogger('KeyManagement');
@@ -183,8 +184,11 @@ export class KeyManagementService {
   }
 
   clearCache(): void {
+    if (this.cachedDEK) {
+      MemoryProtectionService.wipeBuffer(this.cachedDEK);
+    }
     this.cachedDEK = null;
-    logger.info('Key cache cleared');
+    logger.info('Key cache cleared (buffer wiped)');
   }
 
   async isSevSnpAvailable(): Promise<boolean> {

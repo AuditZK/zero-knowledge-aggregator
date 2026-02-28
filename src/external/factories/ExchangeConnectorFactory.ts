@@ -10,6 +10,7 @@ import { CTraderConnector } from '../../connectors/CTraderConnector';
 import { LighterConnector } from '../../connectors/LighterConnector';
 import { MockExchangeConnector } from '../../connectors/MockExchangeConnector';
 import { DeribitConnector } from '../../connectors/DeribitConnector';
+import { MetaTraderConnector } from '../../connectors/MetaTraderConnector';
 import { IbkrFlexService } from '../ibkr-flex-service';
 import { getLogger } from '../../utils/secure-enclave-logger';
 
@@ -42,6 +43,8 @@ const logger = getLogger('ExchangeConnectorFactory');
  *
  * Supported CFD/Forex brokers:
  *   - cTrader (ctrader) - OAuth 2.0 REST API
+ *   - MetaTrader 4 (mt4) - Native TCP protocol via mt-bridge Go service
+ *   - MetaTrader 5 (mt5) - Native TCP protocol via mt-bridge Go service
  *
  * Supported crypto derivatives:
  *   - Deribit (deribit) - Options, Futures, Perpetuals (BTC/ETH settled)
@@ -79,7 +82,7 @@ export class ExchangeConnectorFactory {
   /**
    * List of stock brokers with custom connectors
    */
-  private static readonly CUSTOM_BROKERS = ['ibkr', 'alpaca', 'tradestation', 'hyperliquid', 'lighter', 'ctrader', 'deribit', 'mock'];
+  private static readonly CUSTOM_BROKERS = ['ibkr', 'alpaca', 'tradestation', 'hyperliquid', 'lighter', 'ctrader', 'deribit', 'mt4', 'mt5', 'mock'];
 
   /**
    * Create an exchange connector instance
@@ -148,6 +151,12 @@ export class ExchangeConnectorFactory {
       case 'deribit':
         // Crypto derivatives (options, futures, perps) - BTC/ETH settled
         return new DeribitConnector(credentials);
+
+      case 'mt4':
+      case 'mt5':
+        // MetaTrader 4/5 - Native TCP protocol via mt-bridge Go service
+        // Credentials: apiKey=login, apiSecret=investor_password, passphrase=server:port
+        return new MetaTraderConnector(credentials);
 
       case 'mock':
         // Stress test only - generates random trades, no external API

@@ -10,6 +10,14 @@ import { ReportSigningService } from './services/report-signing.service';
 import { ReportRequest, VerifySignatureRequest, DailyReturn, MonthlyReturn, DrawdownPeriod } from './types/report.types';
 
 const logger = getLogger('EnclaveServer');
+
+const isProduction = process.env.NODE_ENV === 'production';
+
+/** Sanitize error messages for gRPC clients — never leak internals in production. */
+function sanitizeErrorForClient(errorMessage: string): string {
+  if (!isProduction) return errorMessage;
+  return 'Internal server error';
+}
 import {
   SyncJobRequestSchema,
   AggregatedMetricsRequestSchema,
@@ -156,7 +164,7 @@ export class EnclaveServer {
 
       callback({
         code: grpc.status.INTERNAL,
-        message: errorMessage
+        message: sanitizeErrorForClient(errorMessage)
       }, null);
     }
   }
@@ -231,7 +239,7 @@ export class EnclaveServer {
 
       callback({
         code: grpc.status.INTERNAL,
-        message: errorMessage
+        message: sanitizeErrorForClient(errorMessage)
       }, null);
     }
   }
@@ -355,7 +363,7 @@ export class EnclaveServer {
 
       callback({
         code: grpc.status.INTERNAL,
-        message: errorMessage
+        message: sanitizeErrorForClient(errorMessage)
       }, null);
     }
   }
@@ -429,7 +437,7 @@ export class EnclaveServer {
 
       callback({
         code: grpc.status.INTERNAL,
-        message: errorMessage
+        message: sanitizeErrorForClient(errorMessage)
       }, null);
     }
   }
@@ -530,7 +538,7 @@ export class EnclaveServer {
 
       callback({
         code: grpc.status.INTERNAL,
-        message: errorMessage
+        message: sanitizeErrorForClient(errorMessage)
       }, null);
     }
   }
@@ -743,7 +751,7 @@ export class EnclaveServer {
 
       callback({
         code: grpc.status.INTERNAL,
-        message: errorMessage
+        message: sanitizeErrorForClient(errorMessage)
       }, null);
     }
   }
@@ -796,7 +804,7 @@ export class EnclaveServer {
 
       callback({
         code: grpc.status.INTERNAL,
-        message: errorMessage
+        message: sanitizeErrorForClient(errorMessage)
       }, null);
     }
   }
