@@ -173,6 +173,7 @@ export class CTraderApiService {
 
   private ws: WebSocket | null = null;
   private accessToken: string;
+  private readonly refreshTokenValue: string | null;
   private readonly clientId: string;
   private readonly clientSecret: string;
   private accountId: number | null = null;
@@ -190,6 +191,7 @@ export class CTraderApiService {
     }
 
     this.accessToken = credentials.apiKey;
+    this.refreshTokenValue = credentials.apiSecret || null;
     this.clientId = process.env.CTRADER_CLIENT_ID || '';
     this.clientSecret = process.env.CTRADER_CLIENT_SECRET || '';
 
@@ -368,16 +370,39 @@ export class CTraderApiService {
   }
 
   /**
-   * Authenticate a trading account
+   * Authenticate a trading account (auto-refreshes expired tokens)
    */
   private async authenticateAccount(ctidTraderAccountId: number): Promise<void> {
     await this.authenticateApp();
 
-    await this.sendMessage(
-      PayloadType.PROTO_OA_ACCOUNT_AUTH_REQ,
-      { ctidTraderAccountId, accessToken: this.accessToken },
-      PayloadType.PROTO_OA_ACCOUNT_AUTH_RES
-    );
+    try {
+      await this.sendMessage(
+        PayloadType.PROTO_OA_ACCOUNT_AUTH_REQ,
+        { ctidTraderAccountId, accessToken: this.accessToken },
+        PayloadType.PROTO_OA_ACCOUNT_AUTH_RES
+      );
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('CH_ACCESS_TOKEN_INVALID') && this.refreshTokenValue) {
+        logger.info('Access token expired, attempting refresh...');
+        await this.refreshToken(this.refreshTokenValue);
+
+        // Reconnect with new token
+        this.disconnect();
+        await this.connect();
+        await this.authenticateApp();
+
+        await this.sendMessage(
+          PayloadType.PROTO_OA_ACCOUNT_AUTH_REQ,
+          { ctidTraderAccountId, accessToken: this.accessToken },
+          PayloadType.PROTO_OA_ACCOUNT_AUTH_RES
+        );
+
+        logger.info('cTrader account authenticated after token refresh');
+        return;
+      }
+      throw error;
+    }
 
     logger.debug('cTrader account authenticated', { ctidTraderAccountId });
   }
@@ -402,13 +427,32 @@ export class CTraderApiService {
     await this.connect();
     await this.authenticateApp();
 
-    const response = await this.sendMessage<{ ctidTraderAccount?: CTraderAccount[] }>(
-      PayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ,
-      { accessToken: this.accessToken },
-      PayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_RES
-    );
+    try {
+      const response = await this.sendMessage<{ ctidTraderAccount?: CTraderAccount[] }>(
+        PayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ,
+        { accessToken: this.accessToken },
+        PayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_RES
+      );
+      return response.ctidTraderAccount || [];
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('CH_ACCESS_TOKEN_INVALID') && this.refreshTokenValue) {
+        logger.info('Access token expired during getAccounts, attempting refresh...');
+        await this.refreshToken(this.refreshTokenValue);
 
-    return response.ctidTraderAccount || [];
+        this.disconnect();
+        await this.connect();
+        await this.authenticateApp();
+
+        const response = await this.sendMessage<{ ctidTraderAccount?: CTraderAccount[] }>(
+          PayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ,
+          { accessToken: this.accessToken },
+          PayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_RES
+        );
+        return response.ctidTraderAccount || [];
+      }
+      throw error;
+    }
   }
 
   /**
