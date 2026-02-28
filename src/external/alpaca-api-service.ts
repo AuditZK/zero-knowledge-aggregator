@@ -172,15 +172,29 @@ export class AlpacaApiService {
    */
   async getCashflows(since: Date): Promise<AlpacaCashflow[]> {
     try {
-      // Fetch both deposits (CSD) and withdrawals (CSW)
-      const activities = await this.alpaca.getAccountActivities({
-        activityTypes: 'CSD,CSW',
-        after: since.toISOString(),
-        direction: 'desc',
-        pageSize: 500,
-      } as any);
+      // Alpaca SDK uses activityTypes as a path segment (/v2/account/activities/{type})
+      // so we must make separate calls for each activity type
+      const [deposits, withdrawals] = await Promise.all([
+        this.alpaca.getAccountActivities({
+          activityTypes: 'CSD',
+          after: since.toISOString(),
+          direction: 'desc',
+          pageSize: 500,
+        } as any),
+        this.alpaca.getAccountActivities({
+          activityTypes: 'CSW',
+          after: since.toISOString(),
+          direction: 'desc',
+          pageSize: 500,
+        } as any),
+      ]);
 
-      return (activities as AlpacaSDKActivity[]).map((activity) => ({
+      const activities = [
+        ...(deposits as AlpacaSDKActivity[]),
+        ...(withdrawals as AlpacaSDKActivity[]),
+      ];
+
+      return activities.map((activity) => ({
         id: activity.id,
         type: activity.activity_type === 'CSD' ? 'deposit' as const : 'withdrawal' as const,
         amount: Math.abs(parseFloat(activity.net_amount || '0')),
