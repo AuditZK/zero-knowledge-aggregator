@@ -282,7 +282,8 @@ export class LighterConnector extends CryptoExchangeConnector {
 
     for (let page = 0; page < MAX_PAGES; page++) {
       const params: Record<string, string> = {
-        account_id: accountId.toString(),
+        account_index: accountId.toString(),
+        type: 'trade',
       };
       if (cursor) {
         params.cursor = cursor;
