@@ -239,7 +239,9 @@ describe('CTraderApiService', () => {
 
       const service = new CTraderApiService(mockCredentialsNoRefresh);
 
-      await expect(service.getAccounts()).rejects.toThrow('CH_ACCESS_TOKEN_INVALID');
+      await expect(service.getAccounts()).rejects.toThrow(
+        'cTrader access token expired and no refresh token is stored'
+      );
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
@@ -292,6 +294,27 @@ describe('CTraderApiService', () => {
       expect(body.get('refresh_token')).toBe('my_refresh_token');
       expect(body.get('client_id')).toBe('test_client_id');
       expect(body.get('client_secret')).toBe('test_client_secret');
+    });
+
+    it('should call token refresh handler when refresh succeeds', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: 'refreshed_token',
+          refresh_token: 'rotated_refresh_token',
+          expires_in: 7200,
+        }),
+      });
+
+      const onTokenRefreshed = jest.fn();
+      const service = new CTraderApiService(mockCredentials, { onTokenRefreshed });
+      await service.refreshToken('my_refresh_token');
+
+      expect(onTokenRefreshed).toHaveBeenCalledWith({
+        accessToken: 'refreshed_token',
+        refreshToken: 'rotated_refresh_token',
+        expiresIn: 7200,
+      });
     });
 
     it('should throw on refresh failure', async () => {

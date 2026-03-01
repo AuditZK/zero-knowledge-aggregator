@@ -10,8 +10,16 @@ import { EncryptionService } from './encryption-service';
 import { ExchangeCredentials } from '../types';
 import { getLogger, extractErrorMessage } from '../utils/secure-enclave-logger';
 import { TimeUtils } from '../utils/time-utils';
+import type { IExchangeConnector } from '../external/interfaces/IExchangeConnector';
+import type { CTraderRefreshedTokens } from '../external/ctrader-api-service';
 
 const logger = getLogger('TradeSyncService');
+
+interface CTraderTokenAwareConnector extends IExchangeConnector {
+  setTokenRefreshHandler?(
+    handler: ((tokens: CTraderRefreshedTokens) => Promise<void>) | null
+  ): void;
+}
 
 @injectable()
 export class TradeSyncService {
@@ -36,7 +44,11 @@ export class TradeSyncService {
    * Fetch trade count from exchange (memory only - no persistence)
    * Used for status tracking and sync verification
    */
-  private async fetchTradeCount(credentials: ExchangeCredentials, startDate: Date): Promise<number> {
+  private async fetchTradeCount(
+    credentials: ExchangeCredentials,
+    startDate: Date,
+    connectionId: string
+  ): Promise<number> {
     const exchange = credentials.exchange.toLowerCase();
 
     if (!ExchangeConnectorFactory.isSupported(exchange)) {
@@ -44,6 +56,13 @@ export class TradeSyncService {
     }
 
     const connector = this.connectorCache.getOrCreate(exchange, credentials);
+    this.configureCTraderTokenPersistence(
+      exchange,
+      connectionId,
+      credentials,
+      connector as CTraderTokenAwareConnector
+    );
+
     const endDate = new Date();
 
     logger.info(`Fetching trades from ${startDate.toISOString()} to ${endDate.toISOString()}`);
@@ -53,6 +72,41 @@ export class TradeSyncService {
 
     // Return count only - individual trade data is discarded
     return trades.length;
+  }
+
+  private configureCTraderTokenPersistence(
+    exchange: string,
+    connectionId: string,
+    credentials: ExchangeCredentials,
+    connector: CTraderTokenAwareConnector
+  ): void {
+    if (exchange !== 'ctrader') {
+      return;
+    }
+
+    if (!connector.setTokenRefreshHandler) {
+      return;
+    }
+
+    connector.setTokenRefreshHandler(async (tokens: CTraderRefreshedTokens) => {
+      const nextRefreshToken = tokens.refreshToken ?? credentials.apiSecret;
+
+      try {
+        await this.exchangeConnectionRepo.updateConnection(connectionId, {
+          apiKey: tokens.accessToken,
+          apiSecret: nextRefreshToken,
+        });
+
+        credentials.apiKey = tokens.accessToken;
+        credentials.apiSecret = nextRefreshToken;
+        logger.info('Persisted refreshed cTrader OAuth tokens', { connectionId });
+      } catch (error) {
+        logger.warn('Failed to persist refreshed cTrader OAuth tokens', {
+          connectionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
   }
 
   private async testConnectionUnified(credentials: ExchangeCredentials): Promise<boolean> {
@@ -115,7 +169,7 @@ export class TradeSyncService {
       logger.info(`Daily sync for ${credentials.exchange} from ${startOfDay.toISOString()}`);
 
       // Fetch trade count only - trades stay in memory
-      const tradeCount = await this.fetchTradeCount(credentials, startOfDay);
+      const tradeCount = await this.fetchTradeCount(credentials, startOfDay, connectionId);
 
       await this.syncStatusRepo.upsertSyncStatus({
         userUid,

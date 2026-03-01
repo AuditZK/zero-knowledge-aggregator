@@ -19,6 +19,16 @@ const logger = getLogger('CTraderApiService');
  * Rate limits: 50 req/s (non-historical), 5 req/s (historical)
  */
 
+export interface CTraderRefreshedTokens {
+  accessToken: string;
+  refreshToken?: string;
+  expiresIn: number;
+}
+
+export type CTraderTokenRefreshHandler = (
+  tokens: CTraderRefreshedTokens
+) => Promise<void> | void;
+
 // Payload types for cTrader Open API
 const PayloadType = {
   // Authentication
@@ -173,7 +183,7 @@ export class CTraderApiService {
 
   private ws: WebSocket | null = null;
   private accessToken: string;
-  private readonly refreshTokenValue: string | null;
+  private refreshTokenValue: string | null;
   private readonly clientId: string;
   private readonly clientSecret: string;
   private accountId: number | null = null;
@@ -184,8 +194,12 @@ export class CTraderApiService {
   private isConnected = false;
   private isAppAuthenticated = false;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private onTokenRefreshed?: CTraderTokenRefreshHandler;
 
-  constructor(credentials: ExchangeCredentials) {
+  constructor(
+    credentials: ExchangeCredentials,
+    options?: { onTokenRefreshed?: CTraderTokenRefreshHandler }
+  ) {
     if (!credentials.apiKey) {
       throw new Error('cTrader requires apiKey (access_token from OAuth)');
     }
@@ -194,9 +208,14 @@ export class CTraderApiService {
     this.refreshTokenValue = credentials.apiSecret || null;
     this.clientId = process.env.CTRADER_CLIENT_ID || '';
     this.clientSecret = process.env.CTRADER_CLIENT_SECRET || '';
+    this.onTokenRefreshed = options?.onTokenRefreshed;
 
     // Determine if live or demo based on passphrase or default to live
     this.isLive = credentials.passphrase !== 'demo';
+  }
+
+  setTokenRefreshHandler(handler?: CTraderTokenRefreshHandler): void {
+    this.onTokenRefreshed = handler;
   }
 
   getIsLive(): boolean {
@@ -401,6 +420,11 @@ export class CTraderApiService {
         logger.info('cTrader account authenticated after token refresh');
         return;
       }
+      if (msg.includes('CH_ACCESS_TOKEN_INVALID')) {
+        throw new Error(
+          'cTrader access token expired and no refresh token is stored. Reconnect cTrader to renew OAuth tokens.'
+        );
+      }
       throw error;
     }
 
@@ -450,6 +474,11 @@ export class CTraderApiService {
           PayloadType.PROTO_OA_GET_ACCOUNTS_BY_ACCESS_TOKEN_RES
         );
         return response.ctidTraderAccount || [];
+      }
+      if (msg.includes('CH_ACCESS_TOKEN_INVALID')) {
+        throw new Error(
+          'cTrader access token expired and no refresh token is stored. Reconnect cTrader to renew OAuth tokens.'
+        );
       }
       throw error;
     }
@@ -660,7 +689,11 @@ export class CTraderApiService {
   /**
    * Refresh access token using refresh token
    */
-  async refreshToken(refreshToken: string): Promise<{ access_token: string; expires_in: number }> {
+  async refreshToken(refreshToken: string): Promise<{
+    access_token: string;
+    expires_in: number;
+    refresh_token?: string;
+  }> {
     const response = await fetch(`${this.authUrl}/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -677,8 +710,30 @@ export class CTraderApiService {
       throw new Error(`Token refresh failed: ${error}`);
     }
 
-    const tokenData = await response.json() as { access_token: string; expires_in: number };
+    const tokenData = await response.json() as {
+      access_token: string;
+      expires_in: number;
+      refresh_token?: string;
+    };
     this.accessToken = tokenData.access_token;
+    if (tokenData.refresh_token) {
+      this.refreshTokenValue = tokenData.refresh_token;
+    }
+
+    if (this.onTokenRefreshed) {
+      try {
+        await this.onTokenRefreshed({
+          accessToken: tokenData.access_token,
+          refreshToken: tokenData.refresh_token,
+          expiresIn: tokenData.expires_in,
+        });
+      } catch (error) {
+        logger.warn('Failed to persist refreshed cTrader tokens', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     return tokenData;
   }
 }

@@ -54,7 +54,10 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
         .split(',')
         .map(e => e.trim().toLowerCase());
       if (proxyExchanges.includes(exchangeId.toLowerCase())) {
+        // CCXT differentiates httpProxy (HTTP) and httpsProxy (HTTPS).
+        // Binance API is all HTTPS, so both must be set.
         exchangeConfig.httpProxy = proxyUrl;
+        exchangeConfig.httpsProxy = proxyUrl;
       }
     }
 
@@ -191,7 +194,28 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
         return this.cachedMarketTypes;
       }
 
-      await this.exchange.loadMarkets();
+      try {
+        await this.exchange.loadMarkets();
+      } catch (loadError) {
+        // loadMarkets() can fail on network-restricted endpoints (e.g. Binance /sapi/v1/margin/allPairs
+        // in geo-restricted or firewall-constrained environments like the Enclave).
+        // If markets were partially loaded before the error, proceed with what we have.
+        // Otherwise fall back to exchange-specific defaults so the snapshot build can continue.
+        const loadedCount = Object.keys(this.exchange.markets ?? {}).length;
+        if (loadedCount === 0) {
+          const defaults = this.getDefaultMarketTypes();
+          this.logger.warn(
+            `${this.exchangeName}: loadMarkets failed (${(loadError as Error).message}), using defaults: [${defaults.join(', ')}]`
+          );
+          this.cachedMarketTypes = defaults;
+          this.marketTypesExpiry = now + MARKET_CACHE_TTL_MS;
+          return defaults;
+        }
+        this.logger.warn(
+          `${this.exchangeName}: loadMarkets partially failed (${loadedCount} markets loaded), continuing market type detection`
+        );
+      }
+
       const marketTypes = new Set<MarketType>();
 
       for (const market of Object.values(this.exchange.markets)) {
@@ -210,6 +234,23 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
       this.logger.info(`Detected market types for ${this.exchangeName}: ${detected.join(', ')}`);
       return detected;
     });
+  }
+
+  /**
+   * Default market types per exchange, used when loadMarkets() fails entirely.
+   * Based on each exchange's known account structure.
+   */
+  private getDefaultMarketTypes(): MarketType[] {
+    switch (this.exchangeName.toLowerCase()) {
+      case 'binance':
+        return ['spot', 'swap', 'future'];
+      case 'bybit':
+      case 'okx':
+      case 'bitget':
+        return ['spot', 'swap'];
+      default:
+        return ['spot', 'swap'];
+    }
   }
 
   async getBalanceByMarket(marketType: MarketType): Promise<MarketBalanceData> {

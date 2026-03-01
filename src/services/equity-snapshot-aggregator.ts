@@ -3,10 +3,19 @@ import { SnapshotDataRepository } from '../core/repositories/snapshot-data-repos
 import { ExchangeConnectionRepository } from '../core/repositories/exchange-connection-repository';
 import { UserRepository } from '../core/repositories/user-repository';
 import { UniversalConnectorCacheService } from '../core/services/universal-connector-cache.service';
-import type { SnapshotData, IConnectorWithMarketTypes, IConnectorWithBalanceBreakdown, IConnectorWithBalance, MarketBalanceBreakdown, BreakdownByMarket } from '../types';
+import type {
+  SnapshotData,
+  IConnectorWithMarketTypes,
+  IConnectorWithBalanceBreakdown,
+  IConnectorWithBalance,
+  MarketBalanceBreakdown,
+  BreakdownByMarket,
+  ExchangeCredentials,
+} from '../types';
 import { MarketType, getFilteredMarketTypes } from '../types/snapshot-breakdown';
 import { getLogger } from '../utils/secure-enclave-logger';
 import { IExchangeConnector } from '../external/interfaces/IExchangeConnector';
+import type { CTraderRefreshedTokens } from '../external/ctrader-api-service';
 
 const logger = getLogger('EquitySnapshotAggregator');
 
@@ -44,6 +53,9 @@ interface ExtendedConnector extends IExchangeConnector {
   getEarnBalance?(): Promise<{ equity: number; available_margin?: number }>;
   getCashflows?(since: Date): Promise<{ deposits: number; withdrawals: number }>;
   getCashflowsByDate?(since: Date): Promise<Map<string, { deposits: number; withdrawals: number }>>;
+  setTokenRefreshHandler?(
+    handler: ((tokens: CTraderRefreshedTokens) => Promise<void>) | null
+  ): void;
 }
 
 const hasMarketTypes = (connector: unknown): connector is IConnectorWithMarketTypes => typeof (connector as IConnectorWithMarketTypes).detectMarketTypes === 'function';
@@ -224,7 +236,51 @@ export class EquitySnapshotAggregator {
     }
 
     const connector = this.connectorCache.getOrCreate(exchange, credentials);
+    this.configureCTraderTokenPersistence(
+      connector as ExtendedConnector,
+      exchange,
+      connection.id,
+      credentials
+    );
+
     return { connector, syncInterval, currentSnapshot };
+  }
+
+  private configureCTraderTokenPersistence(
+    connector: ExtendedConnector,
+    exchange: string,
+    connectionId: string,
+    credentials: ExchangeCredentials
+  ): void {
+    if (exchange.toLowerCase() !== 'ctrader') {
+      return;
+    }
+
+    if (!connector.setTokenRefreshHandler) {
+      return;
+    }
+
+    connector.setTokenRefreshHandler(async (tokens: CTraderRefreshedTokens) => {
+      const nextRefreshToken = tokens.refreshToken ?? credentials.apiSecret;
+
+      try {
+        await this.connectionRepo.updateConnection(connectionId, {
+          apiKey: tokens.accessToken,
+          apiSecret: nextRefreshToken,
+        });
+
+        // Keep in-memory credentials aligned with persisted values for future refreshes.
+        credentials.apiKey = tokens.accessToken;
+        credentials.apiSecret = nextRefreshToken;
+
+        logger.info('Persisted refreshed cTrader OAuth tokens', { connectionId });
+      } catch (error) {
+        logger.warn('Failed to persist refreshed cTrader OAuth tokens', {
+          connectionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
   }
 
   private async fetchBalancesByMarket(connector: ExtendedConnector, exchange: string) {
