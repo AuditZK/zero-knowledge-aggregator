@@ -179,13 +179,13 @@ export class AlpacaApiService {
           activityTypes: 'CSD',
           after: since.toISOString(),
           direction: 'desc',
-          pageSize: 500,
+          page_size: 100,
         } as any),
         this.alpaca.getAccountActivities({
           activityTypes: 'CSW',
           after: since.toISOString(),
           direction: 'desc',
-          pageSize: 500,
+          page_size: 100,
         } as any),
       ]);
 

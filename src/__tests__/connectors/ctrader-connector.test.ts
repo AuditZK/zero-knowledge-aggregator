@@ -100,6 +100,7 @@ describe('CTraderConnector', () => {
       getCashflows: jest.fn(),
       testConnection: jest.fn(),
       refreshToken: jest.fn(),
+      setTokenRefreshHandler: jest.fn(),
       disconnect: jest.fn(),
     } as unknown as jest.Mocked<CTraderApiService>;
 
@@ -331,6 +332,19 @@ describe('CTraderConnector', () => {
       mockApiService.getAccounts.mockResolvedValue([createMockAccount(12345)]);
 
       await expect(connector.switchAccount(99999)).rejects.toThrow('Account 99999 not found');
+    });
+  });
+
+  describe('setTokenRefreshHandler', () => {
+    it('should delegate token refresh handler to api service', () => {
+      const handler = jest.fn();
+      connector.setTokenRefreshHandler(handler);
+      expect(mockApiService.setTokenRefreshHandler).toHaveBeenCalledWith(handler);
+    });
+
+    it('should clear token refresh handler when null is provided', () => {
+      connector.setTokenRefreshHandler(null);
+      expect(mockApiService.setTokenRefreshHandler).toHaveBeenCalledWith(undefined);
     });
   });
 });

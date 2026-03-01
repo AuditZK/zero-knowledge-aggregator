@@ -4,16 +4,19 @@ import {
   PositionData,
   TradeData,
 } from '../external/interfaces/IExchangeConnector';
-import { CTraderApiService } from '../external/ctrader-api-service';
+import {
+  CTraderApiService,
+} from '../external/ctrader-api-service';
+import type { CTraderTokenRefreshHandler } from '../external/ctrader-api-service';
 import { ExchangeCredentials } from '../types';
 
 /**
  * cTrader Broker Connector
  *
  * Authentication: OAuth 2.0
- * - apiKey = client_id (from cTrader Open API application)
- * - apiSecret = client_secret
- * - passphrase = access_token (obtained via OAuth flow)
+ * - apiKey = access_token (from OAuth callback)
+ * - apiSecret = refresh_token (optional, from OAuth callback)
+ * - passphrase = 'demo' to force demo WS endpoint (otherwise live)
  *
  * Supports:
  * - Balance fetching (account equity, margin)
@@ -29,7 +32,10 @@ export class CTraderConnector extends RestBrokerConnector {
   private accountId: number | null = null;
   protected readonly apiBaseUrl = 'https://openapi.ctrader.com';
 
-  constructor(credentials: ExchangeCredentials) {
+  constructor(
+    credentials: ExchangeCredentials,
+    options?: { onTokenRefreshed?: CTraderTokenRefreshHandler }
+  ) {
     super(credentials);
 
     // OAuth flow from frontend sends access_token in apiKey
@@ -37,7 +43,7 @@ export class CTraderConnector extends RestBrokerConnector {
       throw new Error('cTrader requires apiKey (access_token from OAuth)');
     }
 
-    this.api = new CTraderApiService(credentials);
+    this.api = new CTraderApiService(credentials, options);
   }
 
   getExchangeName(): string {
@@ -55,6 +61,10 @@ export class CTraderConnector extends RestBrokerConnector {
    */
   protected async getAuthHeaders(): Promise<Record<string, string>> {
     return {};
+  }
+
+  setTokenRefreshHandler(handler: CTraderTokenRefreshHandler | null): void {
+    this.api.setTokenRefreshHandler(handler || undefined);
   }
 
   /**
