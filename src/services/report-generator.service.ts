@@ -157,12 +157,12 @@ export class ReportGeneratorService {
       return { success: false, error: 'Insufficient data for report generation (need at least 2 days)' };
     }
 
-    // 3. Calculate all metrics
-    const monthlyReturns = this.aggregateToMonthlyReturns(dailyReturns);
+    // 3. Calculate metrics & enrich with benchmark data BEFORE monthly aggregation
     const metrics = this.buildMetrics(request, dailyReturns);
-
-    // 4. Process benchmark if requested
     await this.processBenchmark(request, dailyReturns, metrics);
+
+    // 4. Aggregate to monthly AFTER benchmark enrichment (so benchmarkReturn is populated)
+    const monthlyReturns = this.aggregateToMonthlyReturns(dailyReturns);
 
     // 5. Build and sign the financial data
     const exchangeDetails = await this.buildExchangeDetails(request.userUid, snapshots);
