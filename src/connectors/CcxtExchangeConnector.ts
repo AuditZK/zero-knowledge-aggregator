@@ -54,9 +54,8 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
         .split(',')
         .map(e => e.trim().toLowerCase());
       if (proxyExchanges.includes(exchangeId.toLowerCase())) {
-        // CCXT differentiates httpProxy (HTTP) and httpsProxy (HTTPS).
-        // Binance API is all HTTPS, so both must be set.
-        exchangeConfig.httpProxy = proxyUrl;
+        // CCXT no longer allows multiple proxy settings simultaneously.
+        // Binance API is all HTTPS, so httpsProxy is sufficient.
         exchangeConfig.httpsProxy = proxyUrl;
       }
     }
