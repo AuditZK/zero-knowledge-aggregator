@@ -190,6 +190,7 @@ export class CTraderApiService {
   private isLive: boolean = true;
   private symbolCache: Map<number, CTraderSymbol> = new Map();
   private pendingRequests: Map<string, PendingRequest> = new Map();
+  private authenticatedAccounts: Set<number> = new Set();
   private msgIdCounter = 0;
   private isConnected = false;
   private isAppAuthenticated = false;
@@ -262,6 +263,7 @@ export class CTraderApiService {
       this.ws.on('close', () => {
         this.isConnected = false;
         this.isAppAuthenticated = false;
+        this.authenticatedAccounts.clear();
         this.stopHeartbeat();
         logger.info('cTrader WebSocket disconnected');
       });
@@ -392,6 +394,10 @@ export class CTraderApiService {
    * Authenticate a trading account (auto-refreshes expired tokens)
    */
   private async authenticateAccount(ctidTraderAccountId: number): Promise<void> {
+    if (this.authenticatedAccounts.has(ctidTraderAccountId)) {
+      return;
+    }
+
     await this.authenticateApp();
 
     try {
@@ -417,6 +423,7 @@ export class CTraderApiService {
           PayloadType.PROTO_OA_ACCOUNT_AUTH_RES
         );
 
+        this.authenticatedAccounts.add(ctidTraderAccountId);
         logger.info('cTrader account authenticated after token refresh');
         return;
       }
@@ -428,6 +435,7 @@ export class CTraderApiService {
       throw error;
     }
 
+    this.authenticatedAccounts.add(ctidTraderAccountId);
     logger.debug('cTrader account authenticated', { ctidTraderAccountId });
   }
 
@@ -684,6 +692,7 @@ export class CTraderApiService {
     }
     this.isConnected = false;
     this.isAppAuthenticated = false;
+    this.authenticatedAccounts.clear();
   }
 
   /**
