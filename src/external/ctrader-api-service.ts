@@ -432,6 +432,28 @@ export class CTraderApiService {
           'cTrader access token expired and no refresh token is stored. Reconnect cTrader to renew OAuth tokens.'
         );
       }
+      if (msg.includes('CANT_ROUTE_REQUEST')) {
+        // Account is registered on the other environment (live vs demo).
+        // Switch servers and retry.
+        const prevEnv = this.isLive ? 'LIVE' : 'DEMO';
+        this.isLive = !this.isLive;
+        const newEnv = this.isLive ? 'LIVE' : 'DEMO';
+        logger.warn(`CANT_ROUTE_REQUEST on ${prevEnv}, retrying on ${newEnv}...`);
+
+        this.disconnect();
+        await this.connect();
+        await this.authenticateApp();
+
+        await this.sendMessage(
+          PayloadType.PROTO_OA_ACCOUNT_AUTH_REQ,
+          { ctidTraderAccountId, accessToken: this.accessToken },
+          PayloadType.PROTO_OA_ACCOUNT_AUTH_RES
+        );
+
+        this.authenticatedAccounts.add(ctidTraderAccountId);
+        logger.info(`cTrader account authenticated on ${newEnv} server`);
+        return;
+      }
       throw error;
     }
 
