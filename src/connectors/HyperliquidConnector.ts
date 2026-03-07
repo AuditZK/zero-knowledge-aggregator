@@ -394,7 +394,7 @@ export class HyperliquidConnector extends CryptoExchangeConnector {
    * Resolve a spot coin identifier (@index or PURR/USDC) to a readable name
    */
   private resolveSpotCoin(coin: string): string {
-    if (coin.includes('/')) return coin.split('/')[0];
+    if (coin.includes('/')) return coin.split('/')[0] ?? coin;
     return this.spotTokenMap?.get(coin) ?? coin;
   }
 
