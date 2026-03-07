@@ -88,6 +88,15 @@ interface HyperliquidFill {
   feeToken: string;
 }
 
+interface HyperliquidSpotMeta {
+  tokens: { name: string; index: number }[];
+}
+
+/** Check if a fill coin represents a spot trade (@index format or PURR/USDC) */
+function isSpotFill(coin: string): boolean {
+  return coin.startsWith('@') || coin.includes('/');
+}
+
 /**
  * Hyperliquid DEX Connector
  *
@@ -103,6 +112,7 @@ interface HyperliquidFill {
 export class HyperliquidConnector extends CryptoExchangeConnector {
   private readonly walletAddress: string;
   private readonly apiUrl: string;
+  private spotTokenMap: Map<string, string> | null = null; // lazily populated
 
   constructor(credentials: ExchangeCredentials) {
     super(credentials);
@@ -241,18 +251,23 @@ export class HyperliquidConnector extends CryptoExchangeConnector {
    */
   async getExecutedOrders(marketType: MarketType, since: Date): Promise<ExecutedOrderData[]> {
     return this.withErrorHandling('getExecutedOrders', async () => {
-      if (marketType === 'spot') {
-        // Spot fills would need a separate endpoint if available
-        this.logger.warn('Spot trade history not yet implemented for Hyperliquid');
-        return [];
-      }
-
       const fills = await this.fetchUserFillsByTime(since.getTime());
 
-      return fills.map(fill => ({
+      // userFillsByTime returns both perp and spot fills — filter by market type
+      const filtered = marketType === 'spot'
+        ? fills.filter(f => isSpotFill(f.coin))
+        : fills.filter(f => !isSpotFill(f.coin));
+
+      if (marketType === 'spot' && filtered.length > 0) {
+        await this.ensureSpotTokenMap();
+      }
+
+      return filtered.map(fill => ({
         id: fill.tid.toString(),
         timestamp: fill.time,
-        symbol: `${fill.coin}/USD:USD`,
+        symbol: marketType === 'spot'
+          ? `${this.resolveSpotCoin(fill.coin)}/USDC`
+          : `${fill.coin}/USD:USD`,
         side: fill.side === 'A' ? 'buy' : 'sell' as 'buy' | 'sell',
         price: Number.parseFloat(fill.px) || 0,
         amount: Math.abs(Number.parseFloat(fill.sz)) || 0,
@@ -364,6 +379,23 @@ export class HyperliquidConnector extends CryptoExchangeConnector {
     }
 
     return response.json() as Promise<T>;
+  }
+
+  /**
+   * Lazily load spot token index → name mapping from spotMeta
+   */
+  private async ensureSpotTokenMap(): Promise<void> {
+    if (this.spotTokenMap) return;
+    const meta = await this.postInfo<HyperliquidSpotMeta>({ type: 'spotMeta' });
+    this.spotTokenMap = new Map(meta.tokens.map(t => [`@${t.index}`, t.name]));
+  }
+
+  /**
+   * Resolve a spot coin identifier (@index or PURR/USDC) to a readable name
+   */
+  private resolveSpotCoin(coin: string): string {
+    if (coin.includes('/')) return coin.split('/')[0];
+    return this.spotTokenMap?.get(coin) ?? coin;
   }
 
   // ========================================
