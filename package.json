@@ -50,7 +50,7 @@
     "axios": "^1.13.5",
     "ccxt": "^4.5.36",
     "express": "^5.1.0",
-    "express-rate-limit": "^8.2.1",
+    "express-rate-limit": "^8.3.0",
     "node-cron": "^4.2.1",
     "reflect-metadata": "^0.2.2",
     "tsyringe": "^4.10.0",
