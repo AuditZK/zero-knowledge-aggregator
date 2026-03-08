@@ -93,7 +93,7 @@ services:
       - NETDATA_CLAIM_URL=https://app.netdata.cloud
       - NETDATA_CLAIM_ROOMS=${NETDATA_CLAIM_ROOMS:-}
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:19999/api/v1/info"]
+      test: ["CMD", "curl", "-sf", "http://localhost:19999/api/v1/info"]
       interval: 30s
       timeout: 10s
       retries: 3
