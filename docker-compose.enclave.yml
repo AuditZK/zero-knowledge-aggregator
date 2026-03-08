@@ -82,7 +82,7 @@ services:
       - apparmor:unconfined
     volumes:
       - netdata_config:/etc/netdata
-      - ./netdata/statsd.d:/etc/netdata/statsd.d:ro
+      - ./netdata/statsd.d:/etc/netdata/statsd.d
       - netdata_lib:/var/lib/netdata
       - netdata_cache:/var/cache/netdata
       - /etc/os-release:/host/etc/os-release:ro
