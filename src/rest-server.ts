@@ -10,7 +10,7 @@ import { TlsKeyGeneratorService } from './services/tls-key-generator.service';
 import { SevSnpAttestationService } from './services/sev-snp-attestation.service';
 import { E2EEncryptionService } from './services/e2e-encryption.service';
 import { ReportSigningService } from './services/report-signing.service';
-import { metricsService } from './services/metrics.service';
+import { statsService } from './services/stats.service';
 
 const logger = getLogger('REST-Server');
 const app = express();
@@ -100,12 +100,7 @@ app.get('/api/v1/attestation', async (_req, res) => {
     const reportSigningPublicKey = reportSigningService.getPublicKey();
     const reportSigningFingerprint = reportSigningService.getPublicKeyFingerprint();
 
-    // Update Prometheus metrics
-    if (attestation.verified) {
-      metricsService.incrementCounter('enclave_attestation_success_total');
-    } else {
-      metricsService.incrementCounter('enclave_attestation_failure_total');
-    }
+    statsService.counter(attestation.verified ? 'attestation.success' : 'attestation.failure');
 
     return res.json({
       attestation: {
@@ -143,7 +138,7 @@ app.get('/api/v1/attestation', async (_req, res) => {
       }
     });
   } catch (error: unknown) {
-    metricsService.incrementCounter('enclave_attestation_failure_total');
+    statsService.counter('attestation.failure');
     logger.error('[REST] Attestation request failed:', error);
     return res.status(500).json({ error: extractErrorMessage(error) });
   }

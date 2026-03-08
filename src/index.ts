@@ -101,21 +101,7 @@ const startEnclave = async () => {
     const httpLogServer = await startHttpLogServer();
     registerSSEBroadcast((log) => httpLogServer.broadcastLog(log));
 
-    // 10. Prometheus metrics
-    if (process.env.METRICS_ENABLED === 'true') {
-      const { metricsService } = await import('./services/metrics.service');
-      const metricsPort = Number.parseInt(process.env.METRICS_PORT || '9090', 10);
-      metricsService.startMetricsServer(metricsPort);
-
-      const { ExchangeConnectionRepository } = await import('./core/repositories/exchange-connection-repository');
-      const connectionRepo = diContainer.resolve(ExchangeConnectionRepository);
-      metricsService.registerCollector(async () => {
-        const count = await connectionRepo.countAllActiveConnections();
-        metricsService.setGauge('exchange_connections_total', count);
-      });
-    }
-
-    // 11. Daily sync scheduler
+    // 10. Daily sync scheduler
     const { DailySyncSchedulerService } = await import('./services/daily-sync-scheduler.service');
     const scheduler = diContainer.resolve(DailySyncSchedulerService);
     scheduler.start();
@@ -142,10 +128,6 @@ const startEnclave = async () => {
         await new Promise<void>((resolve, reject) => {
           restServer.close((err) => err ? reject(err) : resolve());
         });
-        if (process.env.METRICS_ENABLED === 'true') {
-          const { metricsService } = await import('./services/metrics.service');
-          metricsService.stopMetricsServer();
-        }
         await enclaveServer.stop();
         await prisma.$disconnect();
 
