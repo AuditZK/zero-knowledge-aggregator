@@ -20,8 +20,9 @@ services:
       ENCLAVE_MODE: "true"
       ENCLAVE_PORT: 50051
       REST_PORT: 3050
-      METRICS_ENABLED: "true"
-      METRICS_PORT: 9092
+      STATSD_ENABLED: "true"
+      STATSD_HOST: netdata
+      STATSD_PORT: 8125
       SKIP_ATTESTATION: ${SKIP_ATTESTATION:-false}
       ENABLE_ENCLAVE_LOG_STREAMING: "true"
       HTTP_LOG_PORT: 50052
@@ -46,9 +47,6 @@ services:
       - "50051:50051"  # gRPC Server
       - "50052:50052"  # HTTP Log Server (SSE)
       - "3050:3050"    # REST API (Auditable credential submission)
-      # SECURITY: Metrics NOT exposed externally - only via enclave-network
-    expose:
-      - "9092"  # Prometheus scrapes internally via Docker network
     volumes:
       - ./certs:/etc/enclave:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro  # Let's Encrypt certificates
@@ -57,71 +55,45 @@ services:
       - /dev/sev-guest:/dev/sev-guest
     privileged: true
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:9092/metrics', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      test: ["CMD", "node", "-e", "const net=require('net');const s=net.connect(50051,'localhost',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1));"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
 
   # ==========================================
-  # Prometheus (Metrics Collection)
+  # Netdata (Lightweight Monitoring)
   # ==========================================
-  # SECURITY: Internal only - not exposed to internet
-  prometheus:
-    image: prom/prometheus:v2.47.0
-    container_name: prometheus
-    restart: unless-stopped
-    networks:
-      - enclave-network
-    # NO external port exposure - only accessible via enclave-network
-    # Access via: docker exec -it prometheus wget -qO- http://localhost:9090/api/v1/targets
-    expose:
-      - "9090"
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=30d'
-      - '--web.enable-lifecycle'
-      - '--web.listen-address=0.0.0.0:9090'
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # ==========================================
-  # Grafana (Dashboards & Visualization)
-  # ==========================================
-  # SECURITY: Bind to localhost only - use SSH tunnel or reverse proxy for access
-  grafana:
-    image: grafana/grafana:10.2.0
-    container_name: grafana
+  # SECURITY: Bind to localhost only - use SSH tunnel for access
+  # Dashboard: ssh -L 19999:127.0.0.1:19999 user@server → http://localhost:19999
+  netdata:
+    image: netdata/netdata:stable
+    container_name: netdata
+    hostname: enclave-monitor
     restart: unless-stopped
     networks:
       - enclave-network
     ports:
-      - "127.0.0.1:3000:3000"  # Localhost only - requires SSH tunnel
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      # Optional: defaults to 'admin' if not set (change via GCP metadata)
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_AUTH_ANONYMOUS_ENABLED=false
-      - GF_SECURITY_DISABLE_GRAVATAR=true
-      - GF_SECURITY_COOKIE_SECURE=true
-      - GF_SECURITY_STRICT_TRANSPORT_SECURITY=true
+      - "127.0.0.1:19999:19999"  # Dashboard localhost only
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
     volumes:
-      - ./monitoring/grafana-provisioning:/etc/grafana/provisioning:ro
-      - ./monitoring/grafana-dashboards:/var/lib/grafana/dashboards:ro
-      - grafana_data:/var/lib/grafana
-    depends_on:
-      prometheus:
-        condition: service_healthy
+      - netdata_config:/etc/netdata
+      - ./netdata/statsd.d:/etc/netdata/statsd.d:ro
+      - netdata_lib:/var/lib/netdata
+      - netdata_cache:/var/cache/netdata
+      - /etc/os-release:/host/etc/os-release:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    environment:
+      - NETDATA_CLAIM_TOKEN=${NETDATA_CLAIM_TOKEN:-}
+      - NETDATA_CLAIM_URL=https://app.netdata.cloud
+      - NETDATA_CLAIM_ROOMS=${NETDATA_CLAIM_ROOMS:-}
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:19999/api/v1/info"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -131,8 +103,9 @@ networks:
     driver: bridge
 
 volumes:
-  prometheus_data:
-  grafana_data:
+  netdata_config:
+  netdata_lib:
+  netdata_cache:
   vcek_cache:  # Persistent VCEK certificate cache (avoids AMD KDS rate limits)
 
 # ==========================================

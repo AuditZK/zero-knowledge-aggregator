@@ -66,7 +66,7 @@ export CTRADER_CLIENT_ID=$(get_metadata "ctrader-client-id")
 export CTRADER_CLIENT_SECRET=$(get_metadata "ctrader-client-secret")
 export LOG_SERVER_API_KEY=$(get_metadata "log-server-api-key")
 export SKIP_ATTESTATION=$(get_metadata "skip-attestation")
-export GRAFANA_PASSWORD=$(get_metadata "grafana-password")
+export NETDATA_CLAIM_TOKEN=$(get_metadata "netdata-claim-token")
 export ENCLAVE_DOMAIN=$(get_metadata "enclave-domain")
 export EXCHANGE_HTTP_PROXY=$(get_metadata "exchange-http-proxy")
 
@@ -123,10 +123,10 @@ if [[ -n "$BUILD_FLAG" ]]; then
   docker compose -f docker-compose.enclave.yml build enclave-service
 fi
 
-# Start enclave
+# Start services
 cd "$PROJECT_DIR"
-echo -e "${GREEN}Starting enclave service...${NC}"
-docker compose -f docker-compose.enclave.yml up -d enclave-service
+echo -e "${GREEN}Starting enclave + netdata...${NC}"
+docker compose -f docker-compose.enclave.yml up -d
 
 echo ""
 echo -e "${GREEN}Waiting for enclave to start...${NC}"
@@ -138,7 +138,7 @@ if docker ps | grep -q enclave_service; then
   echo -e "${GREEN}Enclave started successfully!${NC}"
   echo -e "${GREEN}========================================${NC}"
   echo ""
-  docker ps | grep enclave_service
+  docker ps | grep -E "enclave_service|netdata"
   echo ""
   echo "View logs: docker logs -f enclave_service"
 else
