@@ -6,6 +6,10 @@ export interface SpotMarketSnapshot {
   volume: number;
   trades: number;
   trading_fees: number;
+  long_trades?: number;
+  short_trades?: number;
+  long_volume?: number;
+  short_volume?: number;
 }
 
 /**
@@ -34,8 +38,8 @@ export interface GlobalSnapshot extends DerivativesMarketSnapshot {
  * {
  *   "timestamp": "2025-11-08T15:00:10",
  *   "breakdown_by_market": {
- *     "global": { equity, available_margin, volume, trades, trading_fees, funding_fees },
- *     "spot": { equity, volume, trades, trading_fees }, // NO funding_fees on spot
+ *     "global": { equity, available_margin, volume, trades, trading_fees, funding_fees, long_trades, short_trades, long_volume, short_volume },
+ *     "spot": { equity, volume, trades, trading_fees, long_trades, short_trades, long_volume, short_volume }, // NO funding_fees on spot
  *     "swap": { equity, volume, trades, trading_fees, funding_fees },
  *     ...
  *   }
