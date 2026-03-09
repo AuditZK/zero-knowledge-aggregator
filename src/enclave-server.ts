@@ -308,6 +308,10 @@ export class EnclaveServer {
         trades?: number;
         trading_fees?: number;
         funding_fees?: number;
+        long_trades?: number;
+        short_trades?: number;
+        long_volume?: number;
+        short_volume?: number;
       }
 
       const response = {
@@ -321,7 +325,11 @@ export class EnclaveServer {
             volume: data.volume || 0,
             trades: data.trades || 0,
             trading_fees: data.trading_fees || 0,
-            funding_fees: data.funding_fees || 0
+            funding_fees: data.funding_fees || 0,
+            long_trades: data.long_trades || 0,
+            short_trades: data.short_trades || 0,
+            long_volume: data.long_volume || 0,
+            short_volume: data.short_volume || 0,
           } : undefined;
 
           return {

@@ -131,6 +131,10 @@ message MarketMetrics {
   int32 trades = 4;  // Number of executed trades (not orders)
   double trading_fees = 5;
   double funding_fees = 6; // Only for swap/perp markets
+  int32 long_trades = 7;   // Number of buy trades
+  int32 short_trades = 8;  // Number of sell trades
+  double long_volume = 9;  // USD volume of buy trades
+  double short_volume = 10; // USD volume of sell trades
 }
 
 // Request to create a user with exchange connection

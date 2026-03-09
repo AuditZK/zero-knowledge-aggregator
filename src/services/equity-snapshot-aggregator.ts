@@ -536,20 +536,28 @@ export class EquitySnapshotAggregator {
     }
   }
 
-  private createDualCaseMetrics(tradingFees: number, fundingFees: number) {
+  private createDualCaseMetrics(tradingFees: number, fundingFees: number, longTrades: number, shortTrades: number, longVolume: number, shortVolume: number) {
     return {
       tradingFees,
       trading_fees: tradingFees,
       fundingFees,
-      funding_fees: fundingFees
+      funding_fees: fundingFees,
+      longTrades,
+      long_trades: longTrades,
+      shortTrades,
+      short_trades: shortTrades,
+      longVolume,
+      long_volume: longVolume,
+      shortVolume,
+      short_volume: shortVolume,
     };
   }
 
-  /** Calculates volume, fees, and trade count from balance or trades. */
+  /** Calculates volume, fees, trade count, and long/short breakdown from balance or trades. */
   private calculateMarketMetrics(
     balance: MarketBalanceBreakdown | undefined,
     trades: MarketTrade[]
-  ): { volume: number; fees: number; trades: number } {
+  ): { volume: number; fees: number; trades: number; longTrades: number; shortTrades: number; longVolume: number; shortVolume: number } {
     const volume = balance?.volume ?? trades.reduce((sum, t) => {
       const tradeCost = t.cost || (t.price * t.amount) || 0;
       return sum + tradeCost;
@@ -560,16 +568,19 @@ export class EquitySnapshotAggregator {
 
     const tradeCount = balance?.trades ?? trades.length;
 
-    return { volume, fees, trades: tradeCount };
+    // Long/short breakdown from trades (balance connectors like IBKR may provide their own)
+    const longTrades = balance?.longTrades ?? trades.filter(t => t.side === 'buy').length;
+    const shortTrades = balance?.shortTrades ?? trades.filter(t => t.side === 'sell').length;
+    const longVolume = balance?.longVolume ?? trades.filter(t => t.side === 'buy').reduce((sum, t) => sum + (t.cost || (t.price * t.amount) || 0), 0);
+    const shortVolume = balance?.shortVolume ?? trades.filter(t => t.side === 'sell').reduce((sum, t) => sum + (t.cost || (t.price * t.amount) || 0), 0);
+
+    return { volume, fees, trades: tradeCount, longTrades, shortTrades, longVolume, shortVolume };
   }
 
   /** Builds market breakdown data structure with dual-case field names. */
   private buildMarketData(
     balance: MarketBalanceBreakdown | undefined,
-    volume: number,
-    trades: number,
-    fees: number,
-    fundingFees: number
+    metrics: { volume: number; trades: number; fees: number; fundingFees: number; longTrades: number; shortTrades: number; longVolume: number; shortVolume: number }
   ): MarketBalanceBreakdown {
     return {
       totalEquityUsd: balance?.totalEquityUsd || 0,
@@ -580,9 +591,9 @@ export class EquitySnapshotAggregator {
       positions: balance?.positions,
       equity: balance?.totalEquityUsd || balance?.equity || 0,
       available_margin: balance?.availableBalance || balance?.available_margin || 0,
-      volume,
-      trades,
-      ...this.createDualCaseMetrics(fees, fundingFees)
+      volume: metrics.volume,
+      trades: metrics.trades,
+      ...this.createDualCaseMetrics(metrics.fees, metrics.fundingFees, metrics.longTrades, metrics.shortTrades, metrics.longVolume, metrics.shortVolume)
     };
   }
 
@@ -604,20 +615,28 @@ export class EquitySnapshotAggregator {
     let totalVolume = 0;
     let totalTrades = 0;
     let totalTradingFees = 0;
+    let totalLongTrades = 0;
+    let totalShortTrades = 0;
+    let totalLongVolume = 0;
+    let totalShortVolume = 0;
 
     for (const marketType of standardMarkets) {
       const marketTrades = classifiedTrades[marketType];
       const balance = balancesByMarket[marketType];
 
-      const { volume, fees, trades } = this.calculateMarketMetrics(balance, marketTrades);
+      const metrics = this.calculateMarketMetrics(balance, marketTrades);
       const fundingForMarket = marketType === 'swap' ? totalFundingFees : 0;
 
-      const marketData = this.buildMarketData(balance, volume, trades, fees, fundingForMarket);
+      const marketData = this.buildMarketData(balance, { ...metrics, fundingFees: fundingForMarket });
       (breakdown as Record<string, MarketBalanceBreakdown>)[marketType] = marketData;
 
-      totalVolume += volume;
-      totalTrades += trades;
-      totalTradingFees += fees;
+      totalVolume += metrics.volume;
+      totalTrades += metrics.trades;
+      totalTradingFees += metrics.fees;
+      totalLongTrades += metrics.longTrades;
+      totalShortTrades += metrics.shortTrades;
+      totalLongVolume += metrics.longVolume;
+      totalShortVolume += metrics.shortVolume;
     }
 
     // Process IBKR-specific market types (stocks, futures_commodities, cfd, forex)
@@ -632,13 +651,21 @@ export class EquitySnapshotAggregator {
       const volume = balance.volume || 0;
       const trades = balance.trades || 0;
       const fees = balance.tradingFees || balance.trading_fees || 0;
+      const longTrades = balance.longTrades || 0;
+      const shortTrades = balance.shortTrades || 0;
+      const longVolume = balance.longVolume || 0;
+      const shortVolume = balance.shortVolume || 0;
 
-      const marketData = this.buildMarketData(balance, volume, trades, fees, 0);
+      const marketData = this.buildMarketData(balance, { volume, trades, fees, fundingFees: 0, longTrades, shortTrades, longVolume, shortVolume });
       (breakdown as Record<string, MarketBalanceBreakdown>)[marketType] = marketData;
 
       totalVolume += volume;
       totalTrades += trades;
       totalTradingFees += fees;
+      totalLongTrades += longTrades;
+      totalShortTrades += shortTrades;
+      totalLongVolume += longVolume;
+      totalShortVolume += shortVolume;
     }
 
     breakdown.global = {
@@ -652,7 +679,7 @@ export class EquitySnapshotAggregator {
       // Global totals (both camelCase and snake_case)
       volume: totalVolume,
       trades: totalTrades,
-      ...this.createDualCaseMetrics(totalTradingFees, totalFundingFees)
+      ...this.createDualCaseMetrics(totalTradingFees, totalFundingFees, totalLongTrades, totalShortTrades, totalLongVolume, totalShortVolume)
     };
 
     return breakdown;

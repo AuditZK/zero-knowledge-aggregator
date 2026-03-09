@@ -59,9 +59,18 @@ export interface MarketBalanceBreakdown {
   trades?: number;          // Number of executed trades (not orders)
   tradingFees?: number;     // Total trading fees (camelCase)
   fundingFees?: number;     // Funding fees - swap/perp only (camelCase)
+  // Long/short breakdown (aggregated from trades, no individual trade details)
+  longTrades?: number;      // Number of buy trades
+  shortTrades?: number;     // Number of sell trades
+  longVolume?: number;      // USD volume of buy trades
+  shortVolume?: number;     // USD volume of sell trades
   // snake_case aliases for gRPC mapping
   trading_fees?: number;    // Alias for tradingFees
   funding_fees?: number;    // Alias for fundingFees
+  long_trades?: number;     // Alias for longTrades
+  short_trades?: number;    // Alias for shortTrades
+  long_volume?: number;     // Alias for longVolume
+  short_volume?: number;    // Alias for shortVolume
   // IBKR format aliases (IbkrFlexConnector uses these)
   equity?: number;
   available_margin?: number;
