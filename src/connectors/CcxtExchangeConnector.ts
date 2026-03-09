@@ -335,6 +335,39 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
       }
     }
 
+    // Binance/Bybit futures: info has top-level equity fields (totalWalletBalance, totalMarginBalance)
+    if (info && typeof info === 'object' && !Array.isArray(info)) {
+      const totalMargin = Number(info.totalMarginBalance) || 0;
+      const totalWallet = Number(info.totalWalletBalance) || 0;
+      const equity = totalMargin || totalWallet;
+      if (equity > 0) {
+        const unrealized = Number(info.totalUnrealizedProfit) || 0;
+        return {
+          equity,
+          realizedBalance: equity - unrealized,
+          available: Number(info.availableBalance) || Number(info.totalCrossWalletBalance) || 0,
+          marginUsed: Number(info.totalInitialMargin) || Number(info.totalPositionInitialMargin) || 0,
+        };
+      }
+    }
+
+    // Bitget v2: info.data[] with marginCoin (newer CCXT versions wrap in data)
+    if (info && !Array.isArray(info) && Array.isArray(info.data)) {
+      for (const asset of info.data as Array<Record<string, unknown>>) {
+        const coin = String(asset.marginCoin || '');
+        if (this.STABLECOINS.includes(coin) && Number(asset.accountEquity) > 0) {
+          const equity = Number(asset.accountEquity);
+          const unrealized = Number(asset.unrealizedPL) || 0;
+          return {
+            equity,
+            realizedBalance: equity - unrealized,
+            available: Number(asset.available) || 0,
+            marginUsed: Number(asset.locked) || 0,
+          };
+        }
+      }
+    }
+
     // Binance, OKX, Bybit, etc.: CCXT parseBalance maps equity → total correctly
     for (const coin of this.STABLECOINS) {
       const bal = balance[coin] as { free?: number; used?: number; total?: number } | undefined;
@@ -348,15 +381,21 @@ export class CcxtExchangeConnector extends CryptoExchangeConnector {
       }
     }
 
-    // Debug: log available keys to understand response structure
+    // Only warn when there's actual data we failed to parse (not just empty accounts)
     const balanceKeys = Object.keys(balance).filter(k => !this.BALANCE_META_KEYS.includes(k));
-    const infoType = info ? (Array.isArray(info) ? 'array' : typeof info) : 'undefined';
-    const infoDataType = info?.data ? (Array.isArray(info.data) ? `array[${(info.data as unknown[]).length}]` : typeof info.data) : 'missing';
-    this.logger.warn(`${this.exchangeName}: no equity found in balance response`, {
-      balanceKeys: balanceKeys.slice(0, 10),
-      infoType,
-      infoDataType,
+    const hasNonZeroBalances = balanceKeys.some(k => {
+      const v = balance[k] as { total?: number } | undefined;
+      return v && Number(v.total) > 0;
     });
+    if (hasNonZeroBalances) {
+      const infoType = info ? (Array.isArray(info) ? 'array' : typeof info) : 'undefined';
+      const infoDataType = info?.data ? (Array.isArray(info.data) ? `array[${(info.data as unknown[]).length}]` : typeof info.data) : 'missing';
+      this.logger.warn(`${this.exchangeName}: no equity found in balance response`, {
+        balanceKeys: balanceKeys.slice(0, 10),
+        infoType,
+        infoDataType,
+      });
+    }
     return { equity: 0, realizedBalance: 0, available: 0, marginUsed: 0 };
   }
 

@@ -479,7 +479,7 @@ export class SevSnpAttestationService {
   private async fetchFromAmdKds(reportPath: string, targetDir: string): Promise<void> {
     await execAsync(`/usr/bin/snpguest fetch vcek pem ${targetDir} ${reportPath}`);
     logger.info('Successfully fetched VCEK certificate from AMD KDS');
-    await execAsync(`/usr/bin/snpguest fetch ca pem ${targetDir} --endorser vcek`);
+    await execAsync(`/usr/bin/snpguest fetch ca pem ${targetDir} --endorser vcek -r ${reportPath}`);
     logger.info('Successfully fetched CA chain from AMD KDS');
   }
 
