@@ -570,25 +570,18 @@ export class ReportGeneratorService {
   private calculateRiskMetrics(dailyReturns: DailyReturn[]): RiskMetrics {
     // Skip first day (return = 0, no previous day) - aligned with Analytics Service
     const returns = dailyReturns.slice(1).map(d => d.netReturn);
-    const sortedReturns = [...returns].sort((a, b) => a - b);
-
-    // VaR calculations
-    const var95Index = Math.max(0, Math.floor(returns.length * 0.05));
-    const var99Index = Math.max(0, Math.floor(returns.length * 0.01));
-
-    const var95 = sortedReturns[var95Index] || 0;
-    const var99 = sortedReturns[var99Index] || 0;
-
-    // Expected Shortfall (CVaR) - average of returns below VaR
-    const tailReturns = sortedReturns.slice(0, var95Index + 1);
-    const expectedShortfall = tailReturns.length > 0
-      ? tailReturns.reduce((sum, r) => sum + r, 0) / tailReturns.length
-      : 0;
 
     // Higher moments
     const mean = returns.reduce((sum, r) => sum + r, 0) / returns.length;
     const variance = returns.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) / returns.length;
     const stdDev = Math.sqrt(variance);
+
+    // Parametric VaR (assumes normal distribution): VaR = μ - z × σ
+    const var95 = stdDev > 0 ? mean - 1.645 * stdDev : 0;
+    const var99 = stdDev > 0 ? mean - 2.326 * stdDev : 0;
+    // Expected Shortfall (CVaR) for normal distribution: ES = μ - σ × φ(z) / (1 - α)
+    const phi95 = Math.exp(-1.645 * 1.645 / 2) / Math.sqrt(2 * Math.PI);
+    const expectedShortfall = stdDev > 0 ? mean - stdDev * (phi95 / 0.05) : 0;
 
     // Skewness
     const skewness = stdDev > 0
