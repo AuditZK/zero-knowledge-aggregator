@@ -69,6 +69,8 @@ export SKIP_ATTESTATION=$(get_metadata "skip-attestation")
 export NETDATA_CLAIM_TOKEN=$(get_metadata "netdata-claim-token")
 export ENCLAVE_DOMAIN=$(get_metadata "enclave-domain")
 export EXCHANGE_HTTP_PROXY=$(get_metadata "exchange-http-proxy")
+export MT_BRIDGE_URL=$(get_metadata "MT_BRIDGE_URL")
+export MT_BRIDGE_HMAC_SECRET=$(get_metadata "MT_BRIDGE_HMAC_SECRET")
 
 # Validate required secrets
 MISSING=""
