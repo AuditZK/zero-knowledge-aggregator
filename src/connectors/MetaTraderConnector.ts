@@ -71,10 +71,14 @@ export class MetaTraderConnector extends BaseExchangeConnector {
         leverage: number;
       }>('GET', `/api/v1/sessions/${this.sessionId}/account-info`);
 
+      // MT5 bridge may return equity = balance (server quirk), so recalculate
+      const unrealizedPnl = resp.unrealized_pnl || 0;
+      const equity = unrealizedPnl !== 0 ? resp.balance + unrealizedPnl : resp.equity;
+
       return {
         balance: resp.balance,
-        equity: resp.equity,
-        unrealizedPnl: resp.unrealized_pnl || resp.equity - resp.balance,
+        equity,
+        unrealizedPnl,
         currency: resp.currency || 'USD',
         marginUsed: resp.margin_used,
         marginAvailable: resp.margin_free,
