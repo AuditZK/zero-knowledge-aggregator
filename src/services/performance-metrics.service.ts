@@ -313,9 +313,7 @@ export class PerformanceMetricsService {
     for (const r of dailyReturns) {
       compoundedReturn *= (1 + r / 100);
     }
-    const geometricDailyReturn = dailyReturns.length > 0
-      ? (Math.pow(compoundedReturn, 1 / dailyReturns.length) - 1) * 100
-      : 0;
+    // geometricDailyReturn not needed directly, annualizedReturn uses compoundedReturn
     const annualizedReturn = dailyReturns.length > 0
       ? (Math.pow(compoundedReturn, 365 / dailyReturns.length) - 1) * 100
       : 0;
@@ -443,11 +441,6 @@ export class PerformanceMetricsService {
         }
       }
 
-      // Also check drawdown at close
-      const drawdownAtClose = ((peak - day.closeEquity) / peak) * 100;
-      if (drawdownAtClose > maxDrawdown) {
-        maxDrawdown = drawdownAtClose;
-      }
     }
 
     return maxDrawdown;
