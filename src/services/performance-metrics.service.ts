@@ -308,10 +308,17 @@ export class PerformanceMetricsService {
     const volatility = this.calculateVolatility(dailyReturns);
     const annualizedVolatility = volatility * Math.sqrt(365); // 365 calendar days (crypto 24/7)
 
-    const avgDailyReturn = dailyReturns.length > 0
-      ? dailyReturns.reduce((sum, r) => sum + r, 0) / dailyReturns.length
+    // Geometric mean daily return (accounts for compounding, unlike arithmetic mean)
+    let compoundedReturn = 1;
+    for (const r of dailyReturns) {
+      compoundedReturn *= (1 + r / 100);
+    }
+    const geometricDailyReturn = dailyReturns.length > 0
+      ? (Math.pow(compoundedReturn, 1 / dailyReturns.length) - 1) * 100
       : 0;
-    const annualizedReturn = avgDailyReturn * 365;
+    const annualizedReturn = dailyReturns.length > 0
+      ? (Math.pow(compoundedReturn, 365 / dailyReturns.length) - 1) * 100
+      : 0;
 
     const sharpeRatio = annualizedVolatility > 0
       ? annualizedReturn / annualizedVolatility
@@ -414,15 +421,26 @@ export class PerformanceMetricsService {
     let maxDrawdown = 0;
 
     for (const day of dailyData) {
+      // Skip days with zero/near-zero equity (API failures)
+      if (day.closeEquity <= 0 || day.highEquity <= 0) continue;
+
       // Update peak with the day's high
       if (day.highEquity > peak) {
         peak = day.highEquity;
       }
 
-      // Check drawdown at the day's low
-      const drawdownAtLow = ((peak - day.lowEquity) / peak) * 100;
-      if (drawdownAtLow > maxDrawdown) {
-        maxDrawdown = drawdownAtLow;
+      // Use closeEquity for drawdown (more reliable than lowEquity which may be 0 from API errors)
+      const drawdownAtClose = ((peak - day.closeEquity) / peak) * 100;
+      if (drawdownAtClose > maxDrawdown) {
+        maxDrawdown = drawdownAtClose;
+      }
+
+      // Only use lowEquity if reasonable (> 10% of close, to filter API glitches)
+      if (day.lowEquity > 0 && day.lowEquity > day.closeEquity * 0.1) {
+        const drawdownAtLow = ((peak - day.lowEquity) / peak) * 100;
+        if (drawdownAtLow > maxDrawdown) {
+          maxDrawdown = drawdownAtLow;
+        }
       }
 
       // Also check drawdown at close
