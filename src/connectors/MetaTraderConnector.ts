@@ -130,6 +130,7 @@ export class MetaTraderConnector extends BaseExchangeConnector {
           symbol: string;
           side: string;
           size: number;
+          open_price: number;
           close_price: number;
           realized_pnl: number;
           commission: number;
@@ -145,7 +146,7 @@ export class MetaTraderConnector extends BaseExchangeConnector {
         symbol: d.symbol,
         side: d.side as 'buy' | 'sell',
         quantity: d.size,
-        price: d.close_price,
+        price: d.close_price || d.open_price,
         fee: Math.abs(d.commission || 0) + Math.abs(d.swap || 0),
         feeCurrency: 'USD',
         timestamp: new Date(d.close_time),
