@@ -459,8 +459,11 @@ export class EquitySnapshotAggregator {
           }));
           const tradesByMarket: Record<string, MarketTrade[]> = {};
           for (const mt of filteredTypes) {
-            tradesByMarket[mt] = mt === 'global' ? marketTrades : [];
+            tradesByMarket[mt] = [];
           }
+          // Put all trades in the first market type (global for basic connectors)
+          const primaryMarket = filteredTypes[0] || 'global';
+          tradesByMarket[primaryMarket as string] = marketTrades;
           logger.info(`${exchange}: Fetched ${marketTrades.length} trades via getTrades()`);
           return { tradesByMarket, swapSymbols: new Set<string>() };
         } catch (err) {
