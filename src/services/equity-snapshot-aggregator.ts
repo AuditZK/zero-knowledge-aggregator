@@ -443,6 +443,30 @@ export class EquitySnapshotAggregator {
     const isCcxtConnector = hasMarketTypes(connector) && connector.getExecutedOrders;
 
     if (!isCcxtConnector) {
+      // Non-CCXT connectors with getTrades() support (e.g. MetaTrader)
+      if (connector.supportsFeature && connector.supportsFeature('trades') && connector.getTrades) {
+        try {
+          const trades = await connector.getTrades(since, new Date());
+          const marketTrades: MarketTrade[] = (trades as Array<{ tradeId: string; symbol: string; side: string; quantity: number; price: number; fee: number; timestamp: Date; realizedPnl?: number }>).map(t => ({
+            id: t.tradeId,
+            timestamp: new Date(t.timestamp).getTime(),
+            symbol: t.symbol,
+            side: t.side,
+            price: t.price || 0,
+            amount: t.quantity || 0,
+            cost: (t.price || 0) * (t.quantity || 0),
+            fee: t.fee ? { cost: t.fee, currency: 'USD' } : undefined,
+          }));
+          const tradesByMarket: Record<string, MarketTrade[]> = {};
+          for (const mt of filteredTypes) {
+            tradesByMarket[mt] = mt === 'global' ? marketTrades : [];
+          }
+          logger.info(`${exchange}: Fetched ${marketTrades.length} trades via getTrades()`);
+          return { tradesByMarket, swapSymbols: new Set<string>() };
+        } catch (err) {
+          logger.warn(`${exchange}: getTrades() failed, falling back to empty`, { error: (err as Error).message });
+        }
+      }
       // IBKR and other connectors: no individual trade storage (alpha protection)
       logger.debug(`${exchange}: Trade metrics from historical summaries only (no individual trade storage)`);
       return this.createEmptyTradesByMarket(filteredTypes);
