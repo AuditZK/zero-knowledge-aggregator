@@ -205,6 +205,13 @@ export class MetaTraderConnector extends BaseExchangeConnector {
     };
 
     if (!json.success) {
+      // Session expired or bridge restarted — reconnect and retry once
+      if (json.error?.code === 'SESSION_NOT_FOUND' && this.sessionId) {
+        this.logger.warn('Session expired, reconnecting...');
+        this.sessionId = null;
+        await this.ensureConnected();
+        return this.callBridge<T>(method, path.replace(/sessions\/[^/]+/, `sessions/${this.sessionId}`), body);
+      }
       throw new Error(
         `mt-bridge [${json.error?.code || 'UNKNOWN'}]: ${json.error?.message || 'Unknown error'}`
       );
