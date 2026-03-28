@@ -509,6 +509,27 @@ export class EnclaveWorker {
         };
       }
 
+      // Step 2.5: Test credentials before saving — fail fast with a clear error
+      try {
+        const testConnector = ExchangeConnectorFactory.create({
+          userUid,
+          exchange: request.exchange,
+          label: request.label,
+          apiKey: request.apiKey,
+          apiSecret: request.apiSecret,
+          passphrase: request.passphrase,
+        });
+        await testConnector.getBalance();
+        logger.info('Credential test passed', { exchange: request.exchange });
+      } catch (testError: unknown) {
+        const msg = extractErrorMessage(testError);
+        logger.warn('Credential test failed — aborting connection creation', {
+          exchange: request.exchange,
+          error: msg,
+        });
+        return { success: false, error: `Invalid credentials: ${msg}` };
+      }
+
       // Step 3: Create exchange connection with encrypted credentials
       await this.exchangeConnectionRepo.createConnection({
         userUid,
