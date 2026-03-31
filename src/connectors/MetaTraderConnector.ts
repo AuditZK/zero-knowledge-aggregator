@@ -141,17 +141,54 @@ export class MetaTraderConnector extends BaseExchangeConnector {
 
       if (!resp) return [];
 
-      return resp.map((d) => ({
-        tradeId: String(d.ticket),
-        symbol: d.symbol,
-        side: d.side as 'buy' | 'sell',
-        quantity: d.size,
-        price: d.close_price || d.open_price,
-        fee: Math.abs(d.commission || 0) + Math.abs(d.swap || 0),
-        feeCurrency: 'USD',
-        timestamp: new Date(d.close_time),
-        realizedPnl: d.realized_pnl,
-      }));
+      return resp
+        .filter((d) => d.symbol !== 'BALANCE')
+        .map((d) => ({
+          tradeId: String(d.ticket),
+          symbol: d.symbol,
+          side: d.side as 'buy' | 'sell',
+          quantity: d.size,
+          price: d.close_price || d.open_price,
+          fee: Math.abs(d.commission || 0) + Math.abs(d.swap || 0),
+          feeCurrency: 'USD',
+          timestamp: new Date(d.close_time),
+          realizedPnl: d.realized_pnl,
+        }));
+    });
+  }
+
+  async getCashflows(since: Date): Promise<{ deposits: number; withdrawals: number }> {
+    return this.withErrorHandling('getCashflows', async () => {
+      await this.ensureConnected();
+
+      const from = Math.floor(since.getTime() / 1000);
+      const to = Math.floor(Date.now() / 1000);
+
+      const resp = await this.callBridge<
+        Array<{
+          ticket: number;
+          symbol: string;
+          side: string;
+          realized_pnl: number;
+          close_time: string;
+        }>
+      >('GET', `/api/v1/sessions/${this.sessionId}/history-deals?from=${from}&to=${to}`);
+
+      if (!resp) return { deposits: 0, withdrawals: 0 };
+
+      let deposits = 0;
+      let withdrawals = 0;
+
+      for (const deal of resp) {
+        if (deal.symbol !== 'BALANCE') continue;
+        if (deal.side === 'deposit') {
+          deposits += deal.realized_pnl;
+        } else if (deal.side === 'withdrawal') {
+          withdrawals += Math.abs(deal.realized_pnl);
+        }
+      }
+
+      return { deposits, withdrawals };
     });
   }
 
