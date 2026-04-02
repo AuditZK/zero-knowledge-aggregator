@@ -69,7 +69,7 @@
     "eslint": "^9.39.1",
     "jest": "^30.2.0",
     "prisma": "^6.19.0",
-    "sonarqube-scanner": "^4.3.4",
+    "sonarqube-scanner": "^4.3.5",
     "ts-jest": "^29.4.6",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.9.3"
@@ -81,6 +81,8 @@
   "overrides": {
     "axios": "^1.13.5",
     "qs": ">=6.14.1",
-    "path-to-regexp": "^8.4.0"
+    "path-to-regexp": "^8.4.0",
+    "node-forge": ">=1.4.0",
+    "handlebars": ">=4.7.9"
   }
 }
