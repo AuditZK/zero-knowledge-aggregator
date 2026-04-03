@@ -192,10 +192,8 @@ export class DailySyncSchedulerService {
   }
 
   /** Admin-only manual trigger. Bypasses schedule, logged for audit. */
-  async triggerManualSync(): Promise<void> {
-    logger.warn('MANUAL SYNC TRIGGERED (bypassing scheduler)');
-    await this.executeDailySync();
-  }
+  // triggerManualSync REMOVED — security: manual snapshots would allow cherry-picking hours.
+  // Snapshots are taken exclusively by the cron job at 00:00 UTC.
 
   getNextSyncTime(): Date {
     const now = new Date();
