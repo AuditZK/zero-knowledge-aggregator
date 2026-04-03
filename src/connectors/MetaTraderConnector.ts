@@ -192,6 +192,42 @@ export class MetaTraderConnector extends BaseExchangeConnector {
     });
   }
 
+  async getCashflowsByDate(since: Date): Promise<Map<string, { deposits: number; withdrawals: number }>> {
+    return this.withErrorHandling('getCashflowsByDate', async () => {
+      await this.ensureConnected();
+
+      const from = Math.floor(since.getTime() / 1000);
+      const to = Math.floor(Date.now() / 1000);
+
+      const resp = await this.callBridge<
+        Array<{
+          ticket: number;
+          symbol: string;
+          side: string;
+          realized_pnl: number;
+          close_time: string;
+        }>
+      >('GET', `/api/v1/sessions/${this.sessionId}/history-deals?from=${from}&to=${to}`);
+
+      const result = new Map<string, { deposits: number; withdrawals: number }>();
+      if (!resp) return result;
+
+      for (const deal of resp) {
+        if (deal.symbol !== 'BALANCE') continue;
+        const dateKey = deal.close_time.split('T')[0].replace(/-/g, '');
+        const entry = result.get(dateKey) || { deposits: 0, withdrawals: 0 };
+        if (deal.side === 'deposit') {
+          entry.deposits += deal.realized_pnl;
+        } else if (deal.side === 'withdrawal') {
+          entry.withdrawals += Math.abs(deal.realized_pnl);
+        }
+        result.set(dateKey, entry);
+      }
+
+      return result;
+    });
+  }
+
   // ========================================
   // Private helpers
   // ========================================
