@@ -214,7 +214,7 @@ export class MetaTraderConnector extends BaseExchangeConnector {
 
       for (const deal of resp) {
         if (deal.symbol !== 'BALANCE') continue;
-        const dateKey = (deal.close_time || new Date().toISOString()).split('T')[0].replace(/-/g, '');
+        const dateKey = (deal.close_time || new Date().toISOString()).split('T')[0]!.replace(/-/g, '');
         const entry = result.get(dateKey) || { deposits: 0, withdrawals: 0 };
         if (deal.side === 'deposit') {
           entry.deposits += deal.realized_pnl;
