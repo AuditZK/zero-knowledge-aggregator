@@ -9,7 +9,8 @@ FROM rust:alpine
 RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static perl make
 
 # 1 job ≈ 1 GB RAM — keep low on constrained VMs
-ENV CARGO_BUILD_JOBS=1
+ARG CARGO_BUILD_JOBS=2
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 # snpguest 0.10.0 — compatible with kernel 6.17+ (0.6.0 caused ENOTTY on 6.x)
