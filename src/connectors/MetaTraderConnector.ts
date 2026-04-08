@@ -141,8 +141,13 @@ export class MetaTraderConnector extends BaseExchangeConnector {
 
       if (!resp) return [];
 
+      // Bridge ignores from/to params — filter client-side
       return resp
-        .filter((d) => d.symbol !== 'BALANCE')
+        .filter((d) => {
+          if (d.symbol === 'BALANCE') return false;
+          const ts = new Date(d.close_time);
+          return ts >= startDate && ts <= endDate;
+        })
         .map((d) => ({
           tradeId: String(d.ticket),
           symbol: d.symbol,
@@ -181,6 +186,9 @@ export class MetaTraderConnector extends BaseExchangeConnector {
 
       for (const deal of resp) {
         if (deal.symbol !== 'BALANCE') continue;
+        // Bridge ignores from/to params — filter client-side
+        const ts = new Date(deal.close_time);
+        if (ts < since || isNaN(ts.getTime())) continue;
         if (deal.side === 'deposit') {
           deposits += deal.realized_pnl;
         } else if (deal.side === 'withdrawal') {
@@ -214,6 +222,9 @@ export class MetaTraderConnector extends BaseExchangeConnector {
 
       for (const deal of resp) {
         if (deal.symbol !== 'BALANCE') continue;
+        // Bridge ignores from/to params — filter client-side
+        const ts = new Date(deal.close_time);
+        if (ts < since || isNaN(ts.getTime())) continue;
         const dateKey = (deal.close_time || new Date().toISOString()).split('T')[0]!.replace(/-/g, '');
         const entry = result.get(dateKey) || { deposits: 0, withdrawals: 0 };
         if (deal.side === 'deposit') {
