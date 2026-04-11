@@ -372,7 +372,5 @@ docker compose -f docker-compose.dev.yml logs -f enclave-go-dev
 ## Next Steps
 
 1. ✅ Setup dev environment
-2. 📝 Lire [AGENTS.md](AGENTS.md) pour les standards de code
-3. 🔍 Lancer l'audit TypeScript → Go avec [.agents/prompts/typescript-to-go-migration.md](.agents/prompts/typescript-to-go-migration.md)
-4. 🧪 Écrire des tests (coverage cible : 70% global, 90% encryption)
-5. 🚀 Feature parity avec la version TypeScript
+2. 🧪 Écrire des tests (coverage cible : 70% global, 90% encryption)
+3. 🚀 Feature parity avec la version TypeScript
