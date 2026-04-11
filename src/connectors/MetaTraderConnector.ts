@@ -57,6 +57,12 @@ export class MetaTraderConnector extends BaseExchangeConnector {
     return (['positions', 'trades'] as ExchangeFeature[]).includes(feature);
   }
 
+  /** Detect paper/demo from MT server name (contains "demo" or "trial"). */
+  async detectIsPaper(): Promise<boolean> {
+    const server = (this.brokerServer || '').toLowerCase();
+    return server.includes('demo') || server.includes('trial');
+  }
+
   async getBalance(): Promise<BalanceData> {
     return this.withErrorHandling('getBalance', async () => {
       await this.ensureConnected();
