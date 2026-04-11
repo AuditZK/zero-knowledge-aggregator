@@ -75,13 +75,15 @@ export class MetaTraderConnector extends BaseExchangeConnector {
       const unrealizedPnl = resp.unrealized_pnl || 0;
       const equity = unrealizedPnl !== 0 ? resp.balance + unrealizedPnl : resp.equity;
 
+      // Use balance as marginAvailable (not margin_free which = equity - margin_used * leverage,
+      // and can be deeply negative or inflated on leveraged CFD accounts).
       return {
         balance: resp.balance,
         equity,
         unrealizedPnl,
         currency: resp.currency || 'USD',
         marginUsed: resp.margin_used,
-        marginAvailable: resp.margin_free,
+        marginAvailable: resp.balance,
       };
     });
   }
