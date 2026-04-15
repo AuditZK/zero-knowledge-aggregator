@@ -718,7 +718,16 @@ export class CTraderApiService {
   }
 
   /**
-   * Refresh access token using refresh token
+   * Refresh access token using refresh token.
+   *
+   * cTrader's token endpoint can return 200 OK with a non-standard body
+   * (error payload, revoked refresh token, or camelCase fields) instead of
+   * a proper OAuth response. We validate the shape explicitly so we don't
+   * silently assign `undefined` to this.accessToken and then emit messages
+   * that strip the field during JSON serialization — which triggers a
+   * "Message missing required fields: accessToken" error on every
+   * subsequent request and persists a null token back to the DB through
+   * the onTokenRefreshed handler.
    */
   async refreshToken(refreshToken: string): Promise<{
     access_token: string;
@@ -738,25 +747,63 @@ export class CTraderApiService {
 
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`Token refresh failed: ${error}`);
+      throw new Error(`cTrader token refresh failed (HTTP ${response.status}): ${error}`);
     }
 
-    const tokenData = await response.json() as {
-      access_token: string;
-      expires_in: number;
+    const rawBody = await response.text();
+    let tokenData: {
+      access_token?: string;
+      accessToken?: string;
+      expires_in?: number;
+      expiresIn?: number;
       refresh_token?: string;
+      refreshToken?: string;
+      errorCode?: string;
+      description?: string;
     };
-    this.accessToken = tokenData.access_token;
-    if (tokenData.refresh_token) {
-      this.refreshTokenValue = tokenData.refresh_token;
+    try {
+      tokenData = JSON.parse(rawBody);
+    } catch {
+      throw new Error(
+        `cTrader token refresh returned non-JSON body (HTTP ${response.status}): ${rawBody.slice(0, 200)}`
+      );
+    }
+
+    // cTrader sometimes returns 200 OK with an error payload instead of
+    // tokens. Surface it explicitly so the caller can mark the connection
+    // as needing re-auth.
+    if (tokenData.errorCode) {
+      throw new Error(
+        `cTrader token refresh returned error ${tokenData.errorCode}: ${tokenData.description || 'no description'}`
+      );
+    }
+
+    // Accept both snake_case (OAuth standard) and camelCase (cTrader has
+    // been observed returning both depending on the endpoint version).
+    const newAccessToken = tokenData.access_token ?? tokenData.accessToken;
+    const newRefreshToken = tokenData.refresh_token ?? tokenData.refreshToken;
+    const newExpiresIn = tokenData.expires_in ?? tokenData.expiresIn ?? 0;
+
+    if (typeof newAccessToken !== 'string' || newAccessToken.length === 0) {
+      // Log only the keys (never the values) so we can diagnose without
+      // leaking credentials into the log stream.
+      throw new Error(
+        `cTrader token refresh response missing access_token. Response keys: [${Object.keys(tokenData).join(', ')}]. ` +
+        `The refresh token is likely revoked or expired — the user must reconnect cTrader.`
+      );
+    }
+
+    this.accessToken = newAccessToken;
+    if (newRefreshToken) {
+      this.refreshTokenValue = newRefreshToken;
     }
 
     if (this.onTokenRefreshed) {
       try {
         await this.onTokenRefreshed({
-          accessToken: tokenData.access_token,
-          refreshToken: tokenData.refresh_token,
-          expiresIn: tokenData.expires_in,
+          accessToken: newAccessToken,
+          refreshToken: newRefreshToken,
+          expiresIn: newExpiresIn,
         });
       } catch (error) {
         logger.warn('Failed to persist refreshed cTrader tokens', {
@@ -765,6 +812,10 @@ export class CTraderApiService {
       }
     }
 
-    return tokenData;
+    return {
+      access_token: newAccessToken,
+      expires_in: newExpiresIn,
+      refresh_token: newRefreshToken,
+    };
   }
 }
