@@ -201,14 +201,23 @@ export class SevSnpAttestationService {
 
     try {
       // Generate attestation report with TLS fingerprint as request data (for TLS binding)
-      // If TLS fingerprint is set, use it; otherwise use random data
+      // If TLS fingerprint is set, use it; otherwise use random data.
+      // Some firmware versions reject specific request data layouts with
+      // "Unknown SEV FW Error 0" — fall back to --random so attestation still
+      // succeeds (losing the TLS binding for that report).
       if (this.tlsFingerprint) {
-        // Write TLS fingerprint (32 bytes) padded to 64 bytes as request data
         const paddedFingerprint = Buffer.alloc(64, 0);
         this.tlsFingerprint.copy(paddedFingerprint, 0);
         fs.writeFileSync(requestPath, paddedFingerprint);
-        await execAsync(`/usr/bin/snpguest report ${reportPath} ${requestPath}`);
-        logger.info('Generated attestation with TLS fingerprint binding');
+        try {
+          await execAsync(`/usr/bin/snpguest report ${reportPath} ${requestPath}`);
+          logger.info('Generated attestation with TLS fingerprint binding');
+        } catch (err) {
+          logger.warn('snpguest report with TLS fingerprint failed, retrying with --random (TLS binding lost)', {
+            error: extractErrorMessage(err),
+          });
+          await execAsync(`/usr/bin/snpguest report ${reportPath} ${requestPath} --random`);
+        }
       } else {
         await execAsync(`/usr/bin/snpguest report ${reportPath} ${requestPath} --random`);
         logger.warn('Generated attestation with random data (no TLS binding)');
