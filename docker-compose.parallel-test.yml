@@ -21,7 +21,7 @@ services:
       context: .
       dockerfile: Dockerfile.parallel-test
     image: enclave-go:parallel-test
-    container_name: enclave_go_test
+    container_name: enclave_go_prod
     restart: "no"  # manual control during testing
     user: root
     environment:
