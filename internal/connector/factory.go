@@ -84,6 +84,15 @@ func (f *Factory) Create(creds *Credentials) (Connector, error) {
 	case "lighter":
 		return NewLighter(creds), nil
 
+	// Multi-asset brokers.
+	// Only Saxo's SIM gateway is reachable. Saxo's access tokens live 20
+	// minutes and its refresh tokens 40 — both shorter than the daily sync — so
+	// a live connection built on them would die within the hour and present as
+	// a broken track record. Live stays unregistered until certificate-based
+	// auth (tokens minted per call, no human) is granted.
+	case "saxo_sim":
+		return NewSaxo(creds, true), nil
+
 	// CFD/Forex brokers
 	case "ctrader":
 		return NewCTrader(creds), nil
@@ -137,6 +146,7 @@ func (f *Factory) SupportedExchanges() []string {
 		"tradestation",
 		"hyperliquid",
 		"lighter",
+		"saxo_sim",
 		"ctrader",
 		"ig",
 		"ig_demo",

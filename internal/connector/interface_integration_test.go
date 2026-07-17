@@ -20,6 +20,7 @@ func TestAllConnectorsImplementInterface(t *testing.T) {
 	var _ Connector = (*Lighter)(nil)
 	var _ Connector = (*CTrader)(nil)
 	var _ Connector = (*IG)(nil)
+	var _ Connector = (*Saxo)(nil)
 	var _ Connector = (*MetaTrader)(nil)
 	var _ Connector = (*MockConnector)(nil)
 	var _ Connector = (*Bitget)(nil)
@@ -51,6 +52,9 @@ func TestOptionalInterfaces(t *testing.T) {
 		// IG funds overnight on CFD positions and books it as its own ledger
 		// row, so the funding fetcher is not swap-only.
 		{"IG", NewIG(&Credentials{APIKey: "k", APISecret: "s", Passphrase: "u"}, false), true, false, true, false, false, true},
+		// Saxo has no CashflowFetcher on purpose: its deposits/withdrawals live
+		// in the account-statement report, whose fields are still unverified.
+		{"Saxo", NewSaxo(&Credentials{APIKey: "tok"}, true), false, false, false, false, false, true},
 		{"Mock", NewMock(), false, false, false, false, false, false},
 	}
 
