@@ -1858,7 +1858,16 @@ func (s *SyncService) reconstructHistory(ctx context.Context, connMeta *reposito
 // EndEquityOverride is irrelevant). Cash flows/fees/trades are folded from
 // /account/activities on top. The midnight pass is the idempotent re-fetch that
 // finalizes.
-var externalRebuilderExchanges = []string{"hyperliquid", "bitget", "binance", "okx", "alpaca"}
+// bybit: same absolute family — the unified-account transaction log carries
+// cashBalance per currency (statement-is-truth, EndEquityOverride ignored), so
+// the midnight pass is the idempotent re-walk that finalizes, as with bitget.
+// Its reach is 2 years, deeper than any other rebuilder we run, but only 7 days
+// per query, so a first rebuild is slow and the module truncates to the span it
+// managed rather than failing. Bybit CloudFront country-blocks THIS enclave's
+// region, which is why the live connector proxies (see factory.go); the
+// rebuilder host reaches api.bybit.com directly and needs no tunnel. A key
+// IP-locked to the enclave egress will still be refused from the rebuilder.
+var externalRebuilderExchanges = []string{"hyperliquid", "bitget", "binance", "okx", "alpaca", "bybit"}
 
 // externalRebuilderSupports reports whether the deployed rebuilder registers
 // this exchange — the gate for every dispatch that carries plaintext
@@ -2680,8 +2689,8 @@ func primaryMarketType(exchange string) string {
 		return connector.MarketStocks
 	case "ctrader", "mt4", "mt5", "ig", "ig_demo":
 		return connector.MarketCFD
-	case "okx":
-		// OKX's GetTrades reads the SWAP fills, so every trade is typed swap,
+	case "okx", "bybit":
+		// Both read their SWAP fills in GetTrades, so every trade is typed swap,
 		// while the unified-account equity has no per-market split to follow.
 		// Left on the spot default, equity filed under spot with the trades
 		// under swap: one bucket carried the equity with no trades, the other
