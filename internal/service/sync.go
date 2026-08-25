@@ -1019,15 +1019,24 @@ func (s *SyncService) SyncUserScheduledDueAtomic(ctx context.Context, userUID st
 		}
 	}
 
-	// Phase 4: Record sync status for all. Skipped results (stale statement)
-	// carry no snapshot but must still surface as "skipped_stale" — silence is
-	// what hid the phantom-snapshot defect.
+	// Phase 4: Record sync status for every result, failures included.
+	//
+	// Failures used to be logged here and dropped, which left a connection that
+	// has NEVER synced with no row in sync_statuses at all. Nothing to mirror
+	// into Neon, so the dashboard showed no error, no banner, no hint — just an
+	// empty account, indefinitely. It only hits connections whose FIRST sync
+	// fails, which means it only ever hit brand-new users, at the exact moment
+	// they were deciding whether the product works (2026-08-23: a cTrader
+	// connection created at 15:21 was still silent two days and two daily
+	// passes later; the user wrote in to say nothing on the site worked).
+	//
+	// recordSyncStatus leaves lastSyncTime untouched on a failure, so this
+	// stays compatible with the retry paths below, which rely on a failed
+	// connection remaining due.
 	for _, r := range results {
-		if r.snapshot != nil || r.Skipped {
-			conn := findConnection(connections, r.Exchange, r.Label)
-			if conn != nil {
-				s.recordSyncStatus(ctx, conn, r, now)
-			}
+		conn := findConnection(connections, r.Exchange, r.Label)
+		if conn != nil {
+			s.recordSyncStatus(ctx, conn, r, now)
 		}
 	}
 
@@ -1035,9 +1044,9 @@ func (s *SyncService) SyncUserScheduledDueAtomic(ctx context.Context, userUID st
 	// rate limit (1018). When two connections share one token (e.g. IBKR CTO+PEA)
 	// the parallel daily pass races them and the loser gets 1018, leaving that
 	// account stale until tomorrow. Retry the loser once after the token's window
-	// clears (~6h) so both refresh the same day. A failed sync records no status,
-	// so the connection stays "due" — the deferred retry, or failing that the next
-	// daily pass, recovers it.
+	// clears (~6h) so both refresh the same day. A failed sync records its error
+	// but not a lastSyncTime, so the connection stays "due" — the deferred retry,
+	// or failing that the next daily pass, recovers it.
 	for _, r := range results {
 		if isRateLimitError(r.Error) {
 			if conn := findConnection(connections, r.Exchange, r.Label); conn != nil {
@@ -1501,6 +1510,21 @@ func isDueByInterval(lastSync *time.Time, intervalMinutes int, now time.Time) bo
 	return current.Sub(last) >= time.Duration(intervalMinutes)*time.Minute
 }
 
+// syncStatusStamp returns the lastSyncTime to persist for a finished attempt.
+//
+// A failure returns nil, which the repository coalesces so the stored value
+// survives. That matters twice over. Stamping an error would make the
+// connection look freshly synced and drop it out of the due set the deferred
+// rate-limit retry and the next daily pass rely on, and it would let a
+// connection that has never once succeeded advertise a "last synced" time it
+// never earned.
+func syncStatusStamp(status string, attempt time.Time) *time.Time {
+	if status == "error" {
+		return nil
+	}
+	return &attempt
+}
+
 func (s *SyncService) recordSyncStatus(ctx context.Context, conn *repository.ExchangeConnection, result *SyncResult, lastAttempt time.Time) {
 	if s.syncStatus == nil || conn == nil || result == nil {
 		return
@@ -1537,7 +1561,7 @@ func (s *SyncService) recordSyncStatus(ctx context.Context, conn *repository.Exc
 		UserUID:      conn.UserUID,
 		Exchange:     conn.Exchange,
 		Label:        conn.Label,
-		LastSyncTime: &lastAttempt,
+		LastSyncTime: syncStatusStamp(status, lastAttempt),
 		Status:       status,
 		TotalTrades:  result.TradeCount,
 		ErrorMessage: errMsg,

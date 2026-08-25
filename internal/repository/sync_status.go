@@ -70,7 +70,11 @@ func (r *SyncStatusRepo) Upsert(ctx context.Context, s *SyncStatus) error {
 		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
 		ON CONFLICT (user_uid, exchange, label)
 		DO UPDATE SET
-			last_sync_time = EXCLUDED.last_sync_time,
+			-- COALESCE, not EXCLUDED: a caller passing NULL is recording an
+			-- attempt that failed, and a failed attempt must not overwrite the
+			-- time of the last real sync. Callers that did sync always pass a
+			-- value, so this only ever preserves.
+			last_sync_time = COALESCE(EXCLUDED.last_sync_time, sync_statuses.last_sync_time),
 			status = EXCLUDED.status,
 			total_trades = EXCLUDED.total_trades,
 			error_message = EXCLUDED.error_message,
@@ -92,7 +96,9 @@ func (r *SyncStatusRepo) upsertTS(ctx context.Context, s *SyncStatus) error {
 		VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT ("userUid", exchange, label)
 		DO UPDATE SET
-			"lastSyncTime" = EXCLUDED."lastSyncTime",
+			-- See the snake_case twin: NULL means "this attempt failed", and a
+			-- failed attempt must not overwrite the time of the last real sync.
+			"lastSyncTime" = COALESCE(EXCLUDED."lastSyncTime", sync_statuses."lastSyncTime"),
 			status = EXCLUDED.status,
 			"totalTrades" = EXCLUDED."totalTrades",
 			"errorMessage" = EXCLUDED."errorMessage",
