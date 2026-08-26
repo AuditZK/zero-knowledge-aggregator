@@ -1,30 +1,32 @@
 module github.com/trackrecord/enclave
 
-// SUPPLY-001: pin to 1.26.5 to pick up the stdlib CVEs fixed across the
-// 1.26.x series. The one reachable at this commit (govulncheck) is
-// GO-2026-5856 (crypto/tls Encrypted Client Hello privacy leak), fixed in
-// 1.26.5 — reached from every TLS path we own: the REST listener, the gRPC
-// mTLS handshake, the cTrader websocket dial and every signed exchange call.
-// 1.26.4 carried GO-2026-5037 (crypto/x509 VerifyHostname), GO-2026-5039
+// SUPPLY-001: pin to 1.26.6 to pick up the stdlib CVEs fixed across the
+// 1.26.x series. Six are reachable at this commit (govulncheck): GO-2026-6090
+// (crypto/tls), GO-2026-6089 and GO-2026-5026 (net/http, the second reached
+// from every signed exchange call), GO-2026-6218 (net/url), GO-2026-6088
+// (encoding/xml), GO-2026-6091 (html/template) and GO-2026-5972
+// (encoding/asn1, reached from ParseEphemeralPublicKey). 1.26.5 carried
+// GO-2026-5856 (crypto/tls Encrypted Client Hello privacy leak); 1.26.4
+// carried GO-2026-5037 (crypto/x509 VerifyHostname), GO-2026-5039
 // (net/textproto error injection) and GO-2026-5038 (mime CPU exhaustion).
 // Earlier pins covered the TLS 1.3 KeyUpdate DoS, x509 chain-building /
 // name-constraint bypasses, net/url IPv6 host parse, os FileInfo root escape
 // (≤1.26.2), html/template escaper-bypass XSS (GO-2026-4982/4980), net
 // NUL-byte panic (GO-2026-4971) and the net/http HTTP/2 SETTINGS infinite
-// loop (GO-2026-4918) (≤1.26.3). The Docker images pin golang:1.26.5-alpine;
+// loop (GO-2026-4918) (≤1.26.3). The Docker images pin golang:1.26.6-alpine;
 // this makes local developer builds match.
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.4.2
+	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.9.2
 	go.uber.org/zap v1.26.0
 	golang.org/x/crypto v0.52.0
 	golang.org/x/sync v0.21.0
 	golang.org/x/term v0.43.0
-	google.golang.org/grpc v1.79.3
-	google.golang.org/protobuf v1.36.10
+	google.golang.org/grpc v1.82.1
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -36,5 +38,5 @@ require (
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 )
