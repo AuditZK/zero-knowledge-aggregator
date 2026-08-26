@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -2130,8 +2131,27 @@ func (s *SyncService) persistHistoricalSnapshots(
 	// construction — it targets days surrounded by existing history. Skipping
 	// keeps UX-001 from stamping the window's first day as starting capital,
 	// which would book the whole account as a deposit on that day.
+	var superseded *repository.Snapshot
 	if !opts.window.isSet() {
-		s.applyInceptionDeposit(ctx, connMeta, snapshots)
+		superseded = s.applyInceptionDeposit(ctx, connMeta, snapshots)
+	}
+	// The connect hook runs the live sync BEFORE this reconstruction, on
+	// purpose (it writes the equity anchor the rebuild dispatch reads). That
+	// live row is the connection's first, so it stamped the inception deposit
+	// on TODAY — and the reconstruction then stamps the real inception day
+	// underneath it, because applyInceptionDeposit only looks for snapshots
+	// EARLIER than its own earliest. Both guards pass, both stamp, and the
+	// account reports roughly twice the capital it was ever given. Riding in
+	// the same batch keeps the correction atomic with the history that
+	// supersedes it.
+	if superseded != nil {
+		snapshots = append(snapshots, superseded)
+		s.logger.Info("clearing the connect-time inception deposit superseded by reconstructed history",
+			zap.String("user_uid", connMeta.UserUID),
+			zap.String("exchange", connMeta.Exchange),
+			zap.String("label", connMeta.Label),
+			zap.Time("cleared_day", superseded.Timestamp),
+		)
 	}
 
 	// Dry run: everything above already happened (including, for non-ZK
@@ -2205,7 +2225,10 @@ func (s *SyncService) persistHistoricalSnapshots(
 // no-older-row check makes the rule stable as the Flex window rolls forward:
 // the old first day stays in DB, so later window starts never get a phantom
 // mid-series deposit. Best-effort — a failed history lookup changes nothing.
-func (s *SyncService) applyInceptionDeposit(ctx context.Context, connMeta *repository.ExchangeConnection, snapshots []*repository.Snapshot) {
+// Returns the pre-existing snapshot whose own inception stamp this series
+// supersedes, with its deposit already zeroed, for the caller to persist in the
+// same batch. Nil when there is nothing to correct.
+func (s *SyncService) applyInceptionDeposit(ctx context.Context, connMeta *repository.ExchangeConnection, snapshots []*repository.Snapshot) *repository.Snapshot {
 	earliest := snapshots[0]
 	for _, sn := range snapshots {
 		if sn.Timestamp.Before(earliest.Timestamp) {
@@ -2213,15 +2236,24 @@ func (s *SyncService) applyInceptionDeposit(ctx context.Context, connMeta *repos
 		}
 	}
 	if earliest.Deposits != 0 || earliest.TotalEquity <= 0 {
-		return
+		return nil
 	}
-	prior, err := s.snapshotRepo.GetByUserAndDateRange(ctx, connMeta.UserUID, time.Unix(0, 0).UTC(), earliest.Timestamp.Add(-time.Second))
+	// One read of the connection's whole existing timeline serves both checks:
+	// whether history already reaches further back (then this is not inception)
+	// and whether a connect-time stamp is now superseded.
+	existing, err := s.snapshotRepo.GetByUserAndDateRange(ctx, connMeta.UserUID, time.Unix(0, 0).UTC(), time.Now().UTC().Add(24*time.Hour))
 	if err != nil {
-		return
+		return nil
 	}
-	for _, p := range prior {
+	mine := make([]*repository.Snapshot, 0, len(existing))
+	for _, p := range existing {
 		if p.Exchange == connMeta.Exchange && p.Label == connMeta.Label {
-			return // history extends further back — this is not the inception day
+			mine = append(mine, p)
+		}
+	}
+	for _, p := range mine {
+		if p.Timestamp.Before(earliest.Timestamp) {
+			return nil // history extends further back — this is not the inception day
 		}
 	}
 	earliest.Deposits = earliest.TotalEquity
@@ -2232,6 +2264,40 @@ func (s *SyncService) applyInceptionDeposit(ctx context.Context, connMeta *repos
 		zap.Time("inception_day", earliest.Timestamp),
 		zap.Float64("deposit", earliest.Deposits),
 	)
+	return supersededConnectStamp(mine, earliest.Timestamp)
+}
+
+// inceptionStampEpsilon is how close deposits must sit to equity to read as a
+// stamp rather than a transfer that happens to land near the balance.
+const inceptionStampEpsilon = 1e-6
+
+// supersededConnectStamp picks out the inception deposit the connect-time live
+// sync wrote moments earlier, now that real history exists beneath it.
+//
+// Deliberately narrow: EXACTLY ONE pre-existing row. That is the signature of
+// the connect flow, where the live sync writes a single day and the
+// reconstruction follows. A connection with a longer live history is a
+// different situation (IBKR re-emits its whole Flex window every sync, and a
+// widened window leaves its own stale stamp behind) and is left alone rather
+// than guessed at.
+//
+// A deposit equal to the day's entire equity is what the stamp looks like; a
+// real transfer of exactly the full balance would mean an account emptied to
+// zero and refunded in full on the one day it was already being reconstructed.
+func supersededConnectStamp(existing []*repository.Snapshot, inception time.Time) *repository.Snapshot {
+	if len(existing) != 1 {
+		return nil
+	}
+	live := existing[0]
+	if !live.Timestamp.After(inception) {
+		return nil
+	}
+	if live.Deposits <= 0 || math.Abs(live.Deposits-live.TotalEquity) > inceptionStampEpsilon {
+		return nil
+	}
+	cleared := *live
+	cleared.Deposits = 0
+	return &cleared
 }
 
 // retryWithBackoff calls fn up to maxAttempts times, sleeping attempt*base
