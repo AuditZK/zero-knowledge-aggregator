@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,6 +45,13 @@ type IBKR struct {
 	token   string // Flex Web Service Token
 	queryID string // Flex Query ID
 	client  *http.Client
+
+	// capabilityWarnings carries statement-shape problems discovered by the
+	// last Flex parse — cash transaction types this connector does not
+	// classify. Surfaced through CapabilityWarner like Binance's key-scope
+	// gaps, because the failure mode is the same shape: money moved, the
+	// number on screen silently stopped being the account.
+	capabilityWarnings []string
 
 	// Cached from last GetBalance call (avoids extra Flex requests)
 	cachedBreakdown []*MarketBalance
@@ -209,12 +217,12 @@ func (i *IBKR) requestFlexReport(ctx context.Context) (string, error) {
 // upstream conditions (busy report generator, rate limit, service hiccup) and
 // NOT credential failures. See IBKR Flex Web Service docs.
 //
-//   1001 - Statement could not be generated at this time. Please try again shortly.
-//   1005 - Currently not available.
-//   1011 - Service unavailable.
-//   1014 - Statement generation failed.
-//   1018 - Too many requests (rate limit).
-//   1019 - Statement is busy generating.
+//	1001 - Statement could not be generated at this time. Please try again shortly.
+//	1005 - Currently not available.
+//	1011 - Service unavailable.
+//	1014 - Statement generation failed.
+//	1018 - Too many requests (rate limit).
+//	1019 - Statement is busy generating.
 //
 // Codes like 1008 (bad token), 1012 (token expired), 1013 (invalid query ID),
 // 1015 (bad request) and 1020 (invalid request) are NOT transient — they mean
@@ -544,6 +552,56 @@ func (i *IBKR) GetCashflows(ctx context.Context, since time.Time) ([]*Cashflow, 
 	return i.parseCashflowsFromReport(report, since)
 }
 
+// flexCapitalTypes are the CashTransaction types that move money across the
+// account boundary. Both spellings of the umbrella type are real: current
+// Flex statements write "Deposits & Withdrawals" (ampersand), older ones
+// "Deposits/Withdrawals" (slash). This parser matched only the slash, so an
+// ordinary wire deposit under the modern spelling was dropped without a
+// trace — the equity stepped up with no recorded inflow, and the step read
+// as a trading gain (a fresh account showed a +9,758 "gain" that was its
+// own funding, 2026-08-25).
+var flexCapitalTypes = map[string]bool{
+	"Deposits":               true,
+	"Withdrawals":            true,
+	"Deposits/Withdrawals":   true,
+	"Deposits & Withdrawals": true,
+}
+
+// flexPerformanceTypes are CashTransaction types that are returns or costs of
+// holding the account — income and charges, not capital. They are excluded
+// from cashflows ON PURPOSE: booking a dividend as a deposit would erase the
+// very return it represents. Named so an absent type is a decision, not an
+// accident. Vocabulary per IBKR Flex statements (CashAction).
+var flexPerformanceTypes = map[string]bool{
+	"Dividends":                    true,
+	"Payment In Lieu Of Dividends": true,
+	"Withholding Tax":              true,
+	"Broker Interest Paid":         true,
+	"Broker Interest Received":     true,
+	"Bond Interest Paid":           true,
+	"Bond Interest Received":       true,
+	"Other Fees":                   true,
+	"Commission Adjustments":       true,
+	"Advisor Fees":                 true,
+}
+
+// parseFlexTimestamp accepts the two timestamp shapes Flex emits.
+func parseFlexTimestamp(v string) (time.Time, bool) {
+	if ts, err := time.Parse("20060102;150405", v); err == nil {
+		return ts, true
+	}
+	if ts, err := time.Parse("20060102", v); err == nil {
+		return ts, true
+	}
+	return time.Time{}, false
+}
+
+// CapabilityWarnings implements CapabilityWarner with the statement-shape
+// gaps found by the last Flex parse.
+func (i *IBKR) CapabilityWarnings() []string {
+	return i.capabilityWarnings
+}
+
 func (i *IBKR) parseCashflowsFromReport(report []byte, since time.Time) ([]*Cashflow, error) {
 	var flex struct {
 		XMLName        xml.Name `xml:"FlexQueryResponse"`
@@ -557,6 +615,16 @@ func (i *IBKR) parseCashflowsFromReport(report []byte, since time.Time) ([]*Cash
 						DateTime string `xml:"dateTime,attr"`
 					} `xml:"CashTransaction"`
 				} `xml:"CashTransactions"`
+				Transfers struct {
+					Transfer []struct {
+						Type         string `xml:"type,attr"`
+						Direction    string `xml:"direction,attr"`
+						CashTransfer string `xml:"cashTransfer,attr"`
+						Currency     string `xml:"currency,attr"`
+						DateTime     string `xml:"dateTime,attr"`
+						Date         string `xml:"date,attr"`
+					} `xml:"Transfer"`
+				} `xml:"Transfers"`
 			} `xml:"FlexStatement"`
 		} `xml:"FlexStatements"`
 	}
@@ -565,38 +633,89 @@ func (i *IBKR) parseCashflowsFromReport(report []byte, since time.Time) ([]*Cash
 		return nil, fmt.Errorf("parse flex cashflows: %w", err)
 	}
 
+	// Statement-shape diagnostic: types and counts ONLY, never amounts. A
+	// type in neither list above is money whose meaning we cannot state —
+	// dropping it silently is what turned a funding wire into a phantom
+	// gain, so it must at least leave a mark someone can find.
+	unknownTypes := map[string]int{}
+
 	var cashflows []*Cashflow
 	for _, tx := range flex.FlexStatements.FlexStatement.CashTransactions.CashTransaction {
-		ts, err := time.Parse("20060102;150405", tx.DateTime)
-		if err != nil {
-			// Try date-only format
-			ts, err = time.Parse("20060102", tx.DateTime)
-			if err != nil {
-				continue
-			}
-		}
-		if ts.Before(since) {
+		ts, ok := parseFlexTimestamp(tx.DateTime)
+		if !ok || ts.Before(since) {
 			continue
 		}
-
 		amount, _ := strconv.ParseFloat(tx.Amount, 64)
 		if amount == 0 {
 			continue
 		}
-
-		isDeposit := tx.Type == "Deposits" || (tx.Type == "Deposits/Withdrawals" && amount > 0)
-		isWithdrawal := tx.Type == "Withdrawals" || (tx.Type == "Deposits/Withdrawals" && amount < 0)
-
-		if !isDeposit && !isWithdrawal {
+		if !flexCapitalTypes[tx.Type] {
+			if !flexPerformanceTypes[tx.Type] {
+				unknownTypes[tx.Type]++
+			}
 			continue
 		}
-
+		// The singular spellings are directional by name; the umbrella
+		// spellings sign by amount. Either way the sign convention out of
+		// here is positive=deposit, negative=withdrawal.
+		if tx.Type == "Deposits" && amount < 0 {
+			amount = -amount
+		}
+		if tx.Type == "Withdrawals" && amount > 0 {
+			amount = -amount
+		}
 		cashflows = append(cashflows, &Cashflow{
-			Amount:    amount, // positive=deposit, negative=withdrawal
+			Amount:    amount,
 			Currency:  tx.Currency,
 			Timestamp: ts,
 		})
 	}
+
+	// Transfers are the other funding channel: cash moved between accounts
+	// (INTERNAL, ACATS, ATON…) never appears under CashTransactions, so a
+	// user who funds this account from another one crosses the perimeter
+	// invisibly without this section. Only the cash component counts — a
+	// pure position transfer (cashTransfer 0) changes holdings, not cash,
+	// and its market value shows up through equity like any position.
+	for _, tr := range flex.FlexStatements.FlexStatement.Transfers.Transfer {
+		raw := tr.DateTime
+		if raw == "" {
+			raw = tr.Date
+		}
+		ts, ok := parseFlexTimestamp(raw)
+		if !ok || ts.Before(since) {
+			continue
+		}
+		cash, _ := strconv.ParseFloat(tr.CashTransfer, 64)
+		if cash == 0 {
+			continue
+		}
+		switch tr.Direction {
+		case "IN":
+			if cash < 0 {
+				cash = -cash
+			}
+		case "OUT":
+			if cash > 0 {
+				cash = -cash
+			}
+		default:
+			unknownTypes["Transfer:"+tr.Direction]++
+			continue
+		}
+		cashflows = append(cashflows, &Cashflow{
+			Amount:    cash,
+			Currency:  tr.Currency,
+			Timestamp: ts,
+		})
+	}
+
+	i.capabilityWarnings = nil
+	for typ, n := range unknownTypes {
+		i.capabilityWarnings = append(i.capabilityWarnings,
+			fmt.Sprintf("ibkr_unclassified_cash_type:%s(x%d)", typ, n))
+	}
+	sort.Strings(i.capabilityWarnings)
 
 	return cashflows, nil
 }
