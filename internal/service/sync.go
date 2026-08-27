@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"net/http"
 	"net/url"
 	"strings"
@@ -391,6 +393,14 @@ type SyncResult struct {
 	// "completed", mirrored to the frontend so the user is asked to widen
 	// the key instead of silently publishing a partial equity.
 	CapabilityWarnings []string `json:"capability_warnings,omitempty"`
+
+	// RetryArmed marks a rate-limited result whose deferred retry IS
+	// scheduled (atomic daily path only). recordSyncStatus keys off it to
+	// write status "pending" instead of "error": a planned re-sync a few
+	// hours out is a report, not a failure, and painting it red is exactly
+	// the "blame the user's credentials" pattern this codebase keeps
+	// re-learning (see CTO/PEA, 2026-08-27).
+	RetryArmed bool `json:"retry_armed,omitempty"`
 
 	// Skipped marks a sync that intentionally wrote nothing because the
 	// broker's freshest statement predates the last trading day — stamping it
@@ -949,14 +959,40 @@ func (s *SyncService) SyncUserScheduledDueAtomic(ctx context.Context, userUID st
 	// a safety margin; other connectors are sub-second so the ceiling never hits.
 	const connTimeout = 5 * time.Minute
 
+	// Most-stale-first, with a short launch stagger. Correctness against the
+	// shared-token 1018 lives in the connector's token gate; this ordering
+	// makes the gate's winner deterministic instead of a goroutine race. For
+	// two accounts on one Flex token the pattern settles into stable slots:
+	// the midnight winner stays 24h-stale at the next midnight and wins
+	// again, while the other account keeps its own deferred-retry slot a few
+	// hours later — both fresh daily, at predictable times.
+	if s.syncStatus != nil {
+		lastSync := make(map[string]time.Time, len(connections))
+		if statuses, serr := s.syncStatus.GetByUser(ctx, userUID); serr == nil {
+			for _, st := range statuses {
+				if st.LastSyncTime != nil {
+					lastSync[st.Exchange+"|"+st.Label] = *st.LastSyncTime
+				}
+			}
+		}
+		sort.SliceStable(connections, func(a, b int) bool {
+			return lastSync[connections[a].Exchange+"|"+connections[a].Label].
+				Before(lastSync[connections[b].Exchange+"|"+connections[b].Label])
+		})
+	}
+
+	const launchStagger = 300 * time.Millisecond
+
+	launchIdx := 0
 	for _, conn := range connections {
 		if !s.isConnectionDue(ctx, conn, now) {
 			continue
 		}
 
 		wg.Add(1)
-		go func(c *repository.ExchangeConnection) {
+		go func(c *repository.ExchangeConnection, headStart time.Duration) {
 			defer wg.Done()
+			time.Sleep(headStart)
 			connSem <- struct{}{}
 			defer func() {
 				<-connSem
@@ -969,7 +1005,8 @@ func (s *SyncService) SyncUserScheduledDueAtomic(ctx context.Context, userUID st
 			mu.Lock()
 			results = append(results, result)
 			mu.Unlock()
-		}(conn)
+		}(conn, time.Duration(launchIdx)*launchStagger)
+		launchIdx++
 	}
 
 	wg.Wait()
@@ -1035,6 +1072,12 @@ func (s *SyncService) SyncUserScheduledDueAtomic(ctx context.Context, userUID st
 	// stays compatible with the retry paths below, which rely on a failed
 	// connection remaining due.
 	for _, r := range results {
+		// Phase 5 below schedules a deferred retry for exactly this
+		// predicate, so the status can honestly say "pending" rather than
+		// "error" — same contract as the skipped_stale case.
+		if isRateLimitError(r.Error) {
+			r.RetryArmed = true
+		}
 		conn := findConnection(connections, r.Exchange, r.Label)
 		if conn != nil {
 			s.recordSyncStatus(ctx, conn, r, now)
@@ -1069,7 +1112,8 @@ const rateLimitRetryDelay = 6 * time.Hour
 // token-level rate limit (1018). Other transient Flex codes (1001/1019 "busy")
 // are NOT treated as rate limits — they clear in seconds, not hours.
 func isRateLimitError(errStr string) bool {
-	return strings.Contains(errStr, "1018") || strings.Contains(errStr, "Too many requests")
+	return strings.Contains(errStr, "1018") || strings.Contains(errStr, "Too many requests") ||
+		strings.Contains(errStr, "shared flex token cooling down")
 }
 
 // lastExpectedStatementDate returns the most recent weekday (UTC) strictly
@@ -1546,6 +1590,14 @@ func (s *SyncService) recordSyncStatus(ctx context.Context, conn *repository.Exc
 		// The machine-readable marker lives in errorMessage.
 		status = "pending"
 		errMsg = "skipped_stale: " + result.SkipReason
+	case result.RetryArmed && result.Error != "":
+		// Rate-limited with a deferred retry armed (shared Flex token). Same
+		// enum constraint as above: "pending" is the honest member — the
+		// re-sync is scheduled, the data is complete up to yesterday, and
+		// nothing is wrong with the user's credentials. Machine-readable
+		// marker in errorMessage, mirroring the skipped_stale contract.
+		status = "pending"
+		errMsg = "deferred_rate_limit: " + result.Error
 	case result.Success:
 		status = "completed"
 		// A successful sync can still carry key-scope warnings — recorded in
@@ -2068,6 +2120,17 @@ func (s *SyncService) syncFromHistoricalProvider(ctx context.Context, connMeta *
 
 	historicalSnapshots, err := provider.GetHistoricalSnapshots(ctx, since)
 	if err != nil {
+		if errors.Is(err, connector.ErrFlexTokenBusy) {
+			// Planned pacing on a shared Flex token, not a failure — the
+			// deferred retry owns the recovery. Error-level here would page
+			// someone every midnight for a mechanism working as designed.
+			s.logger.Info("historical snapshots deferred (shared flex token)",
+				zap.String("user_uid", connMeta.UserUID),
+				zap.String("exchange", connMeta.Exchange),
+				zap.Error(err),
+			)
+			return
+		}
 		s.logger.Error("historical snapshots fetch failed",
 			zap.String("user_uid", connMeta.UserUID),
 			zap.String("exchange", connMeta.Exchange),
