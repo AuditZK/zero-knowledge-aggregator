@@ -33,12 +33,49 @@ var (
 	flexReportCache   = make(map[string]*flexReportEntry)
 	flexReportCacheMu sync.Mutex
 	// flexSingleflight coalesces concurrent fetches for the same token:queryId.
-	// Without it, two parallel syncs for users sharing a Flex token both see a
-	// cache miss and race into IBKR, triggering rate limit 1018.
+	// It does NOT protect two different query IDs sharing one token — that is
+	// what the token gate below is for.
 	flexSingleflight singleflight.Group
+
+	// flexTokenLastReq records the last time each Flex TOKEN went to the
+	// network. IBKR's 1018 rate limit is per token, but the cache and
+	// singleflight above are keyed token:queryID — so a user with two
+	// accounts on one token (CTO+PEA, two query IDs) raced both requests
+	// into IBKR within the same millisecond, every midnight, and the loser
+	// burned a second request on its follow-up GetBalance for good measure.
+	// The gate makes the loser fail locally, instantly and typed, without
+	// spending IBKR's budget; the sync layer's deferred retry (6h) then
+	// picks it up long after the cooldown.
+	flexTokenLastReq   = make(map[string]time.Time)
+	flexTokenLastReqMu sync.Mutex
 )
 
 const flexReportCacheTTL = 5 * time.Minute
+
+// flexTokenCooldown is the observed span of IBKR's per-token Flex limit
+// (~1 request per token per 3h).
+const flexTokenCooldown = 3 * time.Hour
+
+// ErrFlexTokenBusy is returned instead of a network call when the shared
+// Flex token was used too recently. It wraps ErrTransient (this is pacing,
+// not a credential problem) and its message is matched by the sync layer's
+// isRateLimitError, which arms the deferred retry.
+var ErrFlexTokenBusy = fmt.Errorf("%w: shared flex token cooling down", ErrTransient)
+
+// claimFlexToken reports whether the token may go to the network now, and
+// claims it when allowed. The claim is taken BEFORE the request is sent and
+// kept even if the request then fails: a failed send still spent IBKR-side
+// budget, and holding the claim is what stops the same sync cycle from
+// spending a second one.
+func claimFlexToken(token string, now time.Time) (lastUse time.Time, ok bool) {
+	flexTokenLastReqMu.Lock()
+	defer flexTokenLastReqMu.Unlock()
+	if last, used := flexTokenLastReq[token]; used && now.Sub(last) < flexTokenCooldown {
+		return last, false
+	}
+	flexTokenLastReq[token] = now
+	return time.Time{}, true
+}
 
 // IBKR implements Connector for Interactive Brokers via Flex Query
 type IBKR struct {
@@ -101,6 +138,23 @@ func (i *IBKR) fetchFlexReport(ctx context.Context) ([]byte, error) {
 			return xml, nil
 		}
 		flexReportCacheMu.Unlock()
+
+		if last, ok := claimFlexToken(i.token, time.Now()); !ok {
+			// Our own report from earlier in this window is still usable —
+			// a slow sync whose 5-minute cache lapsed mid-cycle, or an admin
+			// re-parse after a deploy, keeps working on the same-day XML.
+			flexReportCacheMu.Lock()
+			if entry, ok2 := flexReportCache[key]; ok2 && time.Since(entry.fetchedAt) < flexTokenCooldown {
+				xml := entry.xml
+				flexReportCacheMu.Unlock()
+				return xml, nil
+			}
+			flexReportCacheMu.Unlock()
+			return nil, fmt.Errorf("%w (in use %s ago; retry after ~%s UTC)",
+				ErrFlexTokenBusy,
+				time.Since(last).Round(time.Second),
+				last.Add(flexTokenCooldown).UTC().Format("15:04"))
+		}
 
 		refCode, err := i.requestFlexReport(ctx)
 		if err != nil {
