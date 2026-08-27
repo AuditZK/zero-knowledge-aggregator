@@ -341,6 +341,15 @@ var stablecoinsUSD = map[string]struct{}{
 	"DAI": {}, "FDUSD": {}, "TUSD": {},
 }
 
+// ErrSpotPricingUnavailable marks a sync refused because the venue's spot
+// price map could not be fetched while non-stablecoin holdings were present.
+// The per-asset tolerance in ValueSpotHoldingsUSD (dust and delisted coins
+// contribute 0) is deliberate; degrading a WHOLE wallet to stables-only when
+// the map fetch fails is not — a snapshot written with a wrong equity poisons
+// the TWR forever, while a skipped sync heals on the next pass. Wraps
+// ErrTransient: this is a retry, not a credential problem.
+var ErrSpotPricingUnavailable = fmt.Errorf("%w: spot price map unavailable", ErrTransient)
+
 // IsStablecoinUSD reports whether asset is a USD-pegged stablecoin valued 1:1.
 func IsStablecoinUSD(asset string) bool {
 	_, ok := stablecoinsUSD[strings.ToUpper(strings.TrimSpace(asset))]

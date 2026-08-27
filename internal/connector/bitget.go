@@ -112,13 +112,16 @@ func (b *Bitget) GetBalance(ctx context.Context) (*Balance, error) {
 	}
 
 	// One public all-tickers call prices every non-stable coin; skipped for
-	// pure-stable accounts, and a fetch failure degrades to stables-only
-	// rather than failing the sync.
+	// pure-stable accounts. A fetch failure FAILS the sync (transient) rather
+	// than degrading to stables-only — the silent degrade replayed CONN-12
+	// intermittently on a connector listed as fixed.
 	priceMap := map[string]float64{}
 	if hasNonStable {
-		if pm, perr := b.fetchPriceMap(ctx); perr == nil {
-			priceMap = pm
+		pm, perr := b.fetchPriceMap(ctx)
+		if perr != nil {
+			return nil, fmt.Errorf("%w: bitget spot tickers: %v", ErrSpotPricingUnavailable, perr)
 		}
+		priceMap = pm
 	}
 	spotEquity := ValueSpotHoldingsUSD(holdings, priceMap)
 
@@ -320,13 +323,17 @@ func (b *Bitget) GetCashflows(ctx context.Context, since time.Time) ([]*Cashflow
 	}
 	mixBills := b.fetchMixBills(ctx, since, now) // best-effort per product
 
-	// Price map only when a non-stable coin shows up in the window.
+	// Price map only when a non-stable coin shows up in the window. Same
+	// contract as GetBalance: no map while non-stables are present means the
+	// cashflow would be valued 0 and silently lost — fail transient instead.
 	priceMap := map[string]float64{}
 	for _, sb := range spotBills {
 		if !IsStablecoinUSD(sb.coin) {
-			if pm, perr := b.fetchPriceMap(ctx); perr == nil {
-				priceMap = pm
+			pm, perr := b.fetchPriceMap(ctx)
+			if perr != nil {
+				return nil, fmt.Errorf("%w: bitget spot tickers: %v", ErrSpotPricingUnavailable, perr)
 			}
+			priceMap = pm
 			break
 		}
 	}
