@@ -77,14 +77,18 @@ func (k *KuCoin) TestConnection(ctx context.Context) error {
 }
 
 func (k *KuCoin) GetBalance(ctx context.Context) (*Balance, error) {
-	body, err := k.doRequest(ctx, "GET", "/api/v1/accounts?type=trade")
+	// No type filter: the old "?type=trade" hid the main (funding) sub-account
+	// entirely, so even STABLECOINS parked there were dropped from equity.
+	// One call returns every sub-account, one row per (currency, type).
+	body, err := k.doRequest(ctx, "GET", "/api/v1/accounts")
 	if err != nil {
-		return nil, fmt.Errorf("trade balance: %w", err)
+		return nil, fmt.Errorf("balance: %w", err)
 	}
 
 	var resp struct {
 		Data []struct {
 			Currency  string `json:"currency"`
+			Type      string `json:"type"`
 			Balance   string `json:"balance"`
 			Available string `json:"available"`
 			Holds     string `json:"holds"`
@@ -94,19 +98,41 @@ func (k *KuCoin) GetBalance(ctx context.Context) (*Balance, error) {
 		return nil, fmt.Errorf("parse balance: %w", err)
 	}
 
-	stablecoins := []string{"USDT", "USDC", "USD"}
-	totalEquity := 0.0
+	// CONN-12: value every holding, not just the stablecoins. Only the spot
+	// wallets count — "margin" rows would double-count borrowed collateral.
+	perCurrency := map[string]float64{}
 	totalAvailable := 0.0
+	hasNonStable := false
 	for _, a := range resp.Data {
-		for _, sc := range stablecoins {
-			if strings.EqualFold(a.Currency, sc) {
-				bal, _ := strconv.ParseFloat(a.Balance, 64)
-				avail, _ := strconv.ParseFloat(a.Available, 64)
-				totalEquity += bal
-				totalAvailable += avail
-			}
+		if a.Type != "trade" && a.Type != "main" {
+			continue
+		}
+		bal, _ := strconv.ParseFloat(a.Balance, 64)
+		if bal <= 0 {
+			continue
+		}
+		asset := strings.ToUpper(a.Currency)
+		perCurrency[asset] += bal
+		if IsStablecoinUSD(asset) {
+			avail, _ := strconv.ParseFloat(a.Available, 64)
+			totalAvailable += avail
+		} else {
+			hasNonStable = true
 		}
 	}
+	var holdings []SpotHolding
+	for asset, amount := range perCurrency {
+		holdings = append(holdings, SpotHolding{Asset: asset, Amount: amount})
+	}
+	priceMap := map[string]float64{}
+	if hasNonStable {
+		pm, perr := k.fetchPriceMap(ctx)
+		if perr != nil {
+			return nil, fmt.Errorf("%w: kucoin all tickers: %v", ErrSpotPricingUnavailable, perr)
+		}
+		priceMap = pm
+	}
+	totalEquity := ValueSpotHoldingsUSD(holdings, priceMap)
 
 	return &Balance{
 		Equity:    totalEquity,
@@ -217,4 +243,33 @@ func (k *KuCoin) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade,
 // GetCashflows returns nil — not reliably available on KuCoin.
 func (k *KuCoin) GetCashflows(_ context.Context, _ time.Time) ([]*Cashflow, error) {
 	return nil, nil
+}
+
+// fetchPriceMap loads every spot pair in one public call, keyed Binance-style
+// (BTC-USDT -> BTCUSDT).
+func (k *KuCoin) fetchPriceMap(ctx context.Context) (map[string]float64, error) {
+	body, err := retryHTTP(k.base.Client, func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, "GET", k.base.BaseURL+"/api/v1/market/allTickers", nil)
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Data struct {
+			Ticker []struct {
+				Symbol string          `json:"symbol"`
+				Last   json.RawMessage `json:"last"`
+			} `json:"ticker"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	prices := make(map[string]float64, len(resp.Data.Ticker))
+	for _, t := range resp.Data.Ticker {
+		if p := ParseLooseNumber(t.Last); p > 0 {
+			prices[strings.ToUpper(strings.ReplaceAll(t.Symbol, "-", ""))] = p
+		}
+	}
+	return prices, nil
 }

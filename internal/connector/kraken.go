@@ -117,38 +117,145 @@ func (k *Kraken) GetBalance(ctx context.Context) (*Balance, error) {
 		return nil, err
 	}
 
-	var usdLikeTotal float64
+	// CONN-12 on Kraken, two defects in one function.
+	//
+	// The first is the shared one: only USD-like assets counted, so BTC/ETH
+	// holdings were dropped from equity entirely.
+	//
+	// The second was worse and is DELETED rather than fixed: when the USD-like
+	// total came out at zero, the old code summed the raw QUANTITIES of every
+	// asset into a USD figure — 1.5 BTC contributed 1.5 USD. That is not an
+	// understatement, it is a number with no unit, and a wrong equity poisons
+	// the TWR forever. A typed failure is worth more than a fabricated total.
+	var holdings []SpotHolding
+	var stableTotal float64
+	hasNonStable := false
 	for asset, amountStr := range resp.Result {
-		if !isUSDLikeKrakenAsset(asset) {
+		amount, _ := strconv.ParseFloat(amountStr, 64)
+		if amount <= 0 {
 			continue
 		}
-		amount, _ := strconv.ParseFloat(amountStr, 64)
-		usdLikeTotal += amount
-	}
-
-	// Fallback when account has no USD-like assets.
-	if usdLikeTotal == 0 {
-		for _, amountStr := range resp.Result {
-			amount, _ := strconv.ParseFloat(amountStr, 64)
-			usdLikeTotal += amount
+		norm := normalizeKrakenAsset(asset)
+		holdings = append(holdings, SpotHolding{Asset: norm, Amount: amount})
+		if IsStablecoinUSD(norm) {
+			stableTotal += amount
+		} else {
+			hasNonStable = true
 		}
 	}
 
+	priceMap := map[string]float64{}
+	if hasNonStable {
+		pm, perr := k.fetchPriceMap(ctx)
+		if perr != nil {
+			return nil, fmt.Errorf("%w: kraken public ticker: %v", ErrSpotPricingUnavailable, perr)
+		}
+		priceMap = pm
+	}
+	total := ValueSpotHoldingsUSD(holdings, priceMap)
+
 	return &Balance{
-		Available: usdLikeTotal,
-		Equity:    usdLikeTotal,
+		Available: total,
+		Equity:    total,
 		Currency:  "USD",
 	}, nil
 }
 
-func isUSDLikeKrakenAsset(asset string) bool {
-	asset = strings.ToUpper(strings.TrimSpace(asset))
-	switch asset {
-	case "ZUSD", "USD", "USDT", "USDC", "USDS", "USDP":
-		return true
-	default:
-		return false
+// normalizeKrakenAsset maps Kraken's own asset codes onto the plain tickers
+// the shared valuation expects. Kraken keeps legacy X/Z prefixes (XXBT, XETH,
+// ZUSD), uses XBT for bitcoin and XDG for dogecoin, and suffixes staked or
+// yield-bearing variants (ETH2.S, DOT.S, USDC.F) — all of which are the same
+// underlying asset for valuation purposes.
+func normalizeKrakenAsset(asset string) string {
+	a := strings.ToUpper(strings.TrimSpace(asset))
+	if i := strings.IndexByte(a, '.'); i > 0 {
+		a = a[:i] // ETH2.S -> ETH2, USDC.F -> USDC
 	}
+	if a == "ETH2" {
+		a = "ETH" // staked ether tracks ether; a blanket "2" trim would
+		// also maul any asset whose ticker legitimately ends in 2
+	}
+	switch a {
+	case "XXBT", "XBT":
+		return "BTC"
+	case "XETH":
+		return "ETH"
+	case "XXDG", "XDG":
+		return "DOGE"
+	case "XLTC":
+		return "LTC"
+	case "XXRP":
+		return "XRP"
+	case "XXLM":
+		return "XLM"
+	case "XZEC":
+		return "ZEC"
+	case "XXMR":
+		return "XMR"
+	case "XREP":
+		return "REP"
+	case "XMLN":
+		return "MLN"
+	}
+	// Z-prefixed fiat: ZUSD -> USD, ZEUR -> EUR.
+	if len(a) == 4 && strings.HasPrefix(a, "Z") {
+		return a[1:]
+	}
+	return a
+}
+
+// krakenQuoteSuffixes are checked longest-first so ZUSD wins over USD and
+// USDT/USDC are not truncated to USD.
+var krakenQuoteSuffixes = []string{"ZUSD", "USDT", "USDC", "USD"}
+
+// fetchPriceMap loads every public pair in one call and keys it Binance-style
+// (<ASSET>USDT) so ValueSpotHoldingsUSD resolves it. Kraken pair names carry
+// no separator (AAVEUSD, XXBTZUSD), and some carry a venue suffix after a
+// colon (AAVEUSD:BTNL) which is skipped.
+func (k *Kraken) fetchPriceMap(ctx context.Context) (map[string]float64, error) {
+	body, err := retryHTTP(k.client, func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet, krakenAPI+"/0/public/Ticker", nil)
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Result map[string]struct {
+			C []json.RawMessage `json:"c"` // [last trade price, lot volume]
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	prices := make(map[string]float64, len(resp.Result))
+	for pair, t := range resp.Result {
+		if len(t.C) == 0 || strings.ContainsRune(pair, ':') {
+			continue
+		}
+		price := ParseLooseNumber(t.C[0])
+		if price <= 0 {
+			continue
+		}
+		name := strings.ToUpper(pair)
+		for _, suffix := range krakenQuoteSuffixes {
+			if !strings.HasSuffix(name, suffix) {
+				continue
+			}
+			base := normalizeKrakenAsset(strings.TrimSuffix(name, suffix))
+			if base == "" {
+				break
+			}
+			key := base + "USDT"
+			// Longest suffix wins, and the first pair seen for an asset wins
+			// over later ones, so a plain AAVEUSD is not overwritten by an
+			// exotic variant.
+			if _, seen := prices[key]; !seen {
+				prices[key] = price
+			}
+			break
+		}
+	}
+	return prices, nil
 }
 
 func (k *Kraken) GetPositions(ctx context.Context) ([]*Position, error) {

@@ -137,20 +137,41 @@ func (h *Huobi) GetBalance(ctx context.Context) (*Balance, error) {
 		return nil, fmt.Errorf("parse balance: %w", err)
 	}
 
-	stablecoins := []string{"usdt", "usdc", "usd"}
-	totalEquity := 0.0
+	// CONN-12, worst case alongside Coinbase: Huobi is spot-only here
+	// (GetPositions returns nil), so an account holding only crypto reported
+	// an equity of ZERO. The list carries one row per (currency, type), so
+	// amounts are accumulated per currency before valuation.
+	perCurrency := map[string]float64{}
 	totalAvailable := 0.0
+	hasNonStable := false
 	for _, b := range resp.Data.List {
-		for _, sc := range stablecoins {
-			if strings.EqualFold(b.Currency, sc) {
-				amount, _ := strconv.ParseFloat(b.Balance, 64)
-				totalEquity += amount
-				if b.Type == "trade" {
-					totalAvailable += amount
-				}
+		amount, _ := strconv.ParseFloat(b.Balance, 64)
+		if amount <= 0 {
+			continue
+		}
+		asset := strings.ToUpper(b.Currency)
+		perCurrency[asset] += amount
+		if IsStablecoinUSD(asset) {
+			if b.Type == "trade" {
+				totalAvailable += amount
 			}
+		} else {
+			hasNonStable = true
 		}
 	}
+	var holdings []SpotHolding
+	for asset, amount := range perCurrency {
+		holdings = append(holdings, SpotHolding{Asset: asset, Amount: amount})
+	}
+	priceMap := map[string]float64{}
+	if hasNonStable {
+		pm, perr := h.fetchPriceMap(ctx)
+		if perr != nil {
+			return nil, fmt.Errorf("%w: huobi market tickers: %v", ErrSpotPricingUnavailable, perr)
+		}
+		priceMap = pm
+	}
+	totalEquity := ValueSpotHoldingsUSD(holdings, priceMap)
 
 	return &Balance{
 		Equity:    totalEquity,
@@ -221,4 +242,31 @@ func (h *Huobi) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade, 
 // GetCashflows returns nil — not reliably available on Huobi.
 func (h *Huobi) GetCashflows(_ context.Context, _ time.Time) ([]*Cashflow, error) {
 	return nil, nil
+}
+
+// fetchPriceMap loads every spot pair in one public call. Huobi lowercases its
+// symbols (zigusdt), so they are upper-cased into the Binance-style key.
+func (h *Huobi) fetchPriceMap(ctx context.Context) (map[string]float64, error) {
+	body, err := retryHTTP(h.base.Client, func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, "GET", h.base.BaseURL+"/market/tickers", nil)
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Data []struct {
+			Symbol string          `json:"symbol"`
+			Close  json.RawMessage `json:"close"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	prices := make(map[string]float64, len(resp.Data))
+	for _, t := range resp.Data {
+		if p := ParseLooseNumber(t.Close); p > 0 {
+			prices[strings.ToUpper(t.Symbol)] = p
+		}
+	}
+	return prices, nil
 }

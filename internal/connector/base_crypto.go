@@ -356,6 +356,23 @@ func IsStablecoinUSD(asset string) bool {
 	return ok
 }
 
+// ParseLooseNumber reads a JSON value that a venue may send either quoted or
+// bare. Verified against the live public tickers on 2026-08-27: BingX sends
+// lastPrice as a bare number and Huobi sends close the same way, while Gate,
+// KuCoin and Kraken quote theirs. Decoding either shape means a venue
+// switching representation cannot silently zero out every price.
+func ParseLooseNumber(raw json.RawMessage) float64 {
+	s := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	if s == "" || s == "null" {
+		return 0
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
 // SpotHolding is one non-zero spot balance line: an asset and the total amount
 // held (free + locked).
 type SpotHolding struct {

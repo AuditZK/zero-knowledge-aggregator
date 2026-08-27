@@ -88,19 +88,33 @@ func (g *Gate) GetBalance(ctx context.Context) (*Balance, error) {
 		return nil, fmt.Errorf("parse spot balance: %w", err)
 	}
 
-	stablecoins := []string{"USDT", "USDC", "USD"}
-	spotEquity := 0.0
+	// CONN-12: value every holding, not just the stablecoins.
+	var holdings []SpotHolding
 	spotAvailable := 0.0
+	hasNonStable := false
 	for _, a := range spotResp {
-		for _, sc := range stablecoins {
-			if strings.EqualFold(a.Currency, sc) {
-				avail, _ := strconv.ParseFloat(a.Available, 64)
-				locked, _ := strconv.ParseFloat(a.Locked, 64)
-				spotEquity += avail + locked
-				spotAvailable += avail
-			}
+		avail, _ := strconv.ParseFloat(a.Available, 64)
+		locked, _ := strconv.ParseFloat(a.Locked, 64)
+		total := avail + locked
+		if total <= 0 {
+			continue
+		}
+		holdings = append(holdings, SpotHolding{Asset: a.Currency, Amount: total})
+		if IsStablecoinUSD(a.Currency) {
+			spotAvailable += avail
+		} else {
+			hasNonStable = true
 		}
 	}
+	priceMap := map[string]float64{}
+	if hasNonStable {
+		pm, perr := g.fetchPriceMap(ctx)
+		if perr != nil {
+			return nil, fmt.Errorf("%w: gate spot tickers: %v", ErrSpotPricingUnavailable, perr)
+		}
+		priceMap = pm
+	}
+	spotEquity := ValueSpotHoldingsUSD(holdings, priceMap)
 
 	// Futures balance (ignore error — account may not have futures)
 	futuresEquity := 0.0
@@ -220,4 +234,30 @@ func (g *Gate) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade, e
 // GetCashflows returns nil — not reliably available on Gate.io.
 func (g *Gate) GetCashflows(_ context.Context, _ time.Time) ([]*Cashflow, error) {
 	return nil, nil
+}
+
+// fetchPriceMap loads every spot pair in one public call, keyed Binance-style
+// (LINK_USDT -> LINKUSDT).
+func (g *Gate) fetchPriceMap(ctx context.Context) (map[string]float64, error) {
+	body, err := retryHTTP(g.base.Client, func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, "GET", g.base.BaseURL+"/api/v4/spot/tickers", nil)
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Gate returns a bare top-level array, not an envelope.
+	var tickers []struct {
+		CurrencyPair string          `json:"currency_pair"`
+		Last         json.RawMessage `json:"last"`
+	}
+	if err := json.Unmarshal(body, &tickers); err != nil {
+		return nil, err
+	}
+	prices := make(map[string]float64, len(tickers))
+	for _, t := range tickers {
+		if p := ParseLooseNumber(t.Last); p > 0 {
+			prices[strings.ToUpper(strings.ReplaceAll(t.CurrencyPair, "_", ""))] = p
+		}
+	}
+	return prices, nil
 }
