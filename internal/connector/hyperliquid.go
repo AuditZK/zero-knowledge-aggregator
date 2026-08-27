@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -97,32 +98,27 @@ func (h *Hyperliquid) GetBalance(ctx context.Context) (*Balance, error) {
 	// Fix: add only the spot portion NOT reserved as perp margin
 	// (= total − hold). For pure-spot users (no perp positions, hold=0)
 	// this is identical to the prior behavior.
+	// A spot fetch/parse failure now FAILS the sync instead of silently
+	// reporting perps-only equity — the same class of understatement CONN-12
+	// documents, just triggered by a network blip instead of a filter.
 	spotResp, err := h.postInfo(ctx, map[string]interface{}{
 		"type": "spotClearinghouseState",
 		"user": h.walletAddress,
 	})
-	if err == nil {
-		var spotState struct {
-			Balances []struct {
-				Coin  string `json:"coin"`
-				Total string `json:"total"`
-				Hold  string `json:"hold"`
-			} `json:"balances"`
-		}
-		if json.Unmarshal(spotResp, &spotState) == nil {
-			for _, b := range spotState.Balances {
-				if b.Coin != "USDC" && b.Coin != "USDT" {
-					continue
-				}
-				total, _ := strconv.ParseFloat(b.Total, 64)
-				hold, _ := strconv.ParseFloat(b.Hold, 64)
-				free := total - hold
-				if free > 0 {
-					equity += free
-				}
-			}
-		}
+	if err != nil {
+		return nil, fmt.Errorf("get spot clearinghouse state: %w", err)
 	}
+	var spotState struct {
+		Balances []hlSpotBalance `json:"balances"`
+	}
+	if err := json.Unmarshal(spotResp, &spotState); err != nil {
+		return nil, fmt.Errorf("parse spot clearinghouse state: %w", err)
+	}
+	spotVal, err := h.valueSpotBalancesUSD(ctx, spotState.Balances)
+	if err != nil {
+		return nil, err
+	}
+	equity += spotVal
 
 	return &Balance{
 		Equity:        equity,
@@ -256,6 +252,128 @@ func (h *Hyperliquid) GetTrades(ctx context.Context, start, end time.Time) ([]*T
 	return trades, nil
 }
 
+// hlSpotBalance is one spot balance line as spotClearinghouseState returns it.
+type hlSpotBalance struct {
+	Coin  string `json:"coin"`
+	Total string `json:"total"`
+	Hold  string `json:"hold"`
+}
+
+// fetchSpotPriceMap returns token name → USD price for every spot pair quoted
+// in USDC, from a single spotMetaAndAssetCtxs call. The response is a 2-part
+// array: [0] spotMeta (tokens with indices, universe of pairs whose `tokens`
+// field is [baseIdx, quoteIdx]) and [1] one asset context per universe entry.
+// midPx, falling back to markPx for pairs with an empty book.
+func (h *Hyperliquid) fetchSpotPriceMap(ctx context.Context) (map[string]float64, error) {
+	resp, err := h.postInfo(ctx, map[string]interface{}{"type": "spotMetaAndAssetCtxs"})
+	if err != nil {
+		return nil, err
+	}
+	var parts []json.RawMessage
+	if err := json.Unmarshal(resp, &parts); err != nil {
+		return nil, fmt.Errorf("parse spotMetaAndAssetCtxs: %w", err)
+	}
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("spotMetaAndAssetCtxs: expected 2 parts, got %d", len(parts))
+	}
+	var meta struct {
+		Tokens []struct {
+			Name  string `json:"name"`
+			Index int    `json:"index"`
+		} `json:"tokens"`
+		Universe []struct {
+			Tokens []int `json:"tokens"`
+		} `json:"universe"`
+	}
+	if err := json.Unmarshal(parts[0], &meta); err != nil {
+		return nil, fmt.Errorf("parse spot meta: %w", err)
+	}
+	var ctxs []struct {
+		MidPx  string `json:"midPx"`
+		MarkPx string `json:"markPx"`
+	}
+	if err := json.Unmarshal(parts[1], &ctxs); err != nil {
+		return nil, fmt.Errorf("parse spot asset ctxs: %w", err)
+	}
+
+	nameByIndex := make(map[int]string, len(meta.Tokens))
+	usdcIndex := -1
+	for _, t := range meta.Tokens {
+		nameByIndex[t.Index] = t.Name
+		if t.Name == "USDC" {
+			usdcIndex = t.Index
+		}
+	}
+	prices := make(map[string]float64)
+	for i, u := range meta.Universe {
+		if i >= len(ctxs) || len(u.Tokens) != 2 || u.Tokens[1] != usdcIndex {
+			continue
+		}
+		base := nameByIndex[u.Tokens[0]]
+		if base == "" {
+			continue
+		}
+		px, _ := strconv.ParseFloat(ctxs[i].MidPx, 64)
+		if px <= 0 {
+			px, _ = strconv.ParseFloat(ctxs[i].MarkPx, 64)
+		}
+		if px > 0 {
+			prices[strings.ToUpper(base)] = px
+		}
+	}
+	return prices, nil
+}
+
+// valueSpotBalancesUSD converts spot balances to their USD contribution to
+// equity — the ONE valuation both GetBalance and GetBalanceByMarket use, so
+// the two reads of the same wallet can no longer disagree (CONN-12: one
+// filtered USDC/USDT and dropped every token, the other summed raw token
+// QUANTITIES with no price at all).
+//
+// Stablecoins contribute total − hold: USDC reserved as perp collateral is
+// already inside marginSummary.accountValue (incident 2026-05-24), so only
+// the unreserved portion may be added. Every other token contributes its FULL
+// amount at its USDC mid price — token holdings are never part of
+// accountValue, and a token sitting in an open spot order is still owned.
+// A token with no resolvable USDC pair contributes 0 (dust and delisted
+// tolerance), but when the price map itself cannot be fetched while tokens
+// are held, the sync fails as transient instead of silently writing a
+// stables-only equity.
+func (h *Hyperliquid) valueSpotBalancesUSD(ctx context.Context, balances []hlSpotBalance) (float64, error) {
+	var stableFree float64
+	var tokens []hlSpotBalance
+	for _, b := range balances {
+		total, _ := strconv.ParseFloat(b.Total, 64)
+		if total <= 0 {
+			continue
+		}
+		if IsStablecoinUSD(b.Coin) {
+			hold, _ := strconv.ParseFloat(b.Hold, 64)
+			if free := total - hold; free > 0 {
+				stableFree += free
+			}
+			continue
+		}
+		tokens = append(tokens, b)
+	}
+	if len(tokens) == 0 {
+		return stableFree, nil
+	}
+
+	prices, err := h.fetchSpotPriceMap(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("%w: hyperliquid spot price map: %v", ErrSpotPricingUnavailable, err)
+	}
+	value := stableFree
+	for _, b := range tokens {
+		total, _ := strconv.ParseFloat(b.Total, 64)
+		if px := prices[strings.ToUpper(strings.TrimSpace(b.Coin))]; px > 0 {
+			value += total * px
+		}
+	}
+	return value, nil
+}
+
 func (h *Hyperliquid) postInfo(ctx context.Context, body interface{}) (json.RawMessage, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
@@ -369,28 +487,29 @@ func (h *Hyperliquid) GetBalanceByMarket(ctx context.Context) ([]*MarketBalance,
 		})
 	}
 
-	// Spot balance
+	// Spot balance — through the same valuation as GetBalance, so the spot
+	// bucket in breakdown_by_market equals the spot leg of the equity. The
+	// old inline sum here added raw token QUANTITIES (1 HYPE counted as 1
+	// USD) and included the USDC hold that accountValue already carries.
 	spotResp, err := h.postInfo(ctx, map[string]interface{}{
 		"type": "spotClearinghouseState",
 		"user": h.walletAddress,
 	})
-	if err == nil {
-		var spotState struct {
-			Balances []struct {
-				Token string `json:"token"`
-				Total string `json:"total"`
-			} `json:"balances"`
-		}
-		if json.Unmarshal(spotResp, &spotState) == nil {
-			spotTotal := 0.0
-			for _, b := range spotState.Balances {
-				val, _ := strconv.ParseFloat(b.Total, 64)
-				spotTotal += val
-			}
-			if spotTotal > 0 {
-				balances = append(balances, &MarketBalance{MarketType: MarketSpot, Equity: spotTotal})
-			}
-		}
+	if err != nil {
+		return nil, fmt.Errorf("get spot clearinghouse state: %w", err)
+	}
+	var spotState struct {
+		Balances []hlSpotBalance `json:"balances"`
+	}
+	if err := json.Unmarshal(spotResp, &spotState); err != nil {
+		return nil, fmt.Errorf("parse spot clearinghouse state: %w", err)
+	}
+	spotVal, err := h.valueSpotBalancesUSD(ctx, spotState.Balances)
+	if err != nil {
+		return nil, err
+	}
+	if spotVal > 0 {
+		balances = append(balances, &MarketBalance{MarketType: MarketSpot, Equity: spotVal})
 	}
 
 	return balances, nil
