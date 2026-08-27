@@ -76,16 +76,35 @@ func (c *Coinbase) GetBalance(ctx context.Context) (*Balance, error) {
 		return nil, fmt.Errorf("parse accounts: %w", err)
 	}
 
-	stablecoins := []string{"USDT", "USDC", "USD"}
-	totalEquity := 0.0
+	// CONN-12, worst case: Coinbase has no futures leg (GetPositions returns
+	// nil), so spot IS the account. Summing only stablecoins meant an account
+	// holding nothing but BTC reported an equity of ZERO — read by the user as
+	// a broken connection rather than a wrong number.
+	var holdings []SpotHolding
+	hasNonStable := false
 	for _, a := range resp.Data {
-		for _, sc := range stablecoins {
-			if strings.EqualFold(a.Balance.Currency, sc) || strings.EqualFold(a.Currency.Code, sc) {
-				amount, _ := strconv.ParseFloat(a.Balance.Amount, 64)
-				totalEquity += amount
-			}
+		asset := a.Balance.Currency
+		if asset == "" {
+			asset = a.Currency.Code
+		}
+		amount, _ := strconv.ParseFloat(a.Balance.Amount, 64)
+		if amount <= 0 {
+			continue
+		}
+		holdings = append(holdings, SpotHolding{Asset: asset, Amount: amount})
+		if !IsStablecoinUSD(asset) {
+			hasNonStable = true
 		}
 	}
+	priceMap := map[string]float64{}
+	if hasNonStable {
+		pm, perr := c.fetchPriceMap(ctx)
+		if perr != nil {
+			return nil, fmt.Errorf("%w: coinbase exchange rates: %v", ErrSpotPricingUnavailable, perr)
+		}
+		priceMap = pm
+	}
+	totalEquity := ValueSpotHoldingsUSD(holdings, priceMap)
 
 	return &Balance{
 		Equity:    totalEquity,
@@ -107,4 +126,34 @@ func (c *Coinbase) GetTrades(_ context.Context, _, _ time.Time) ([]*Trade, error
 // GetCashflows returns nil — not reliably available on Coinbase basic API.
 func (c *Coinbase) GetCashflows(_ context.Context, _ time.Time) ([]*Cashflow, error) {
 	return nil, nil
+}
+
+// fetchPriceMap builds a Binance-style price map from Coinbase's public
+// exchange-rates endpoint. Those rates are INVERTED (they answer "how much of
+// asset X is one USD worth"), so the USD price of an asset is 1/rate. Rates
+// at or below zero are skipped rather than inverted into an absurd price.
+func (c *Coinbase) fetchPriceMap(ctx context.Context) (map[string]float64, error) {
+	body, err := retryHTTP(c.base.Client, func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, "GET", c.base.BaseURL+"/v2/exchange-rates?currency=USD", nil)
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Data struct {
+			Rates map[string]string `json:"rates"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	prices := make(map[string]float64, len(resp.Data.Rates))
+	for asset, rateStr := range resp.Data.Rates {
+		rate, perr := strconv.ParseFloat(rateStr, 64)
+		if perr != nil || rate <= 0 {
+			continue
+		}
+		prices[strings.ToUpper(asset)+"USDT"] = 1 / rate
+	}
+	return prices, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -61,7 +62,9 @@ func (b *BingX) GetBalance(ctx context.Context) (*Balance, error) {
 	available, _ := strconv.ParseFloat(resp.Data.Balance.Available, 64)
 	unrealized, _ := strconv.ParseFloat(resp.Data.Balance.UnrealizedPnL, 64)
 
-	// Spot balance (best effort)
+	// Spot balance (best effort on the fetch; strict on the valuation).
+	// CONN-12: the old loop summed only USDT/USDC/USD and silently dropped
+	// every other holding, so a spot bag of BTC counted as nothing.
 	spotBody, err := b.signedGET(ctx, "/openApi/spot/v1/account/balance", "")
 	if err == nil {
 		var spotResp struct {
@@ -74,17 +77,31 @@ func (b *BingX) GetBalance(ctx context.Context) (*Balance, error) {
 			} `json:"data"`
 		}
 		if json.Unmarshal(spotBody, &spotResp) == nil {
-			stablecoins := []string{"USDT", "USDC", "USD"}
+			var holdings []SpotHolding
+			hasNonStable := false
 			for _, bal := range spotResp.Data.Balances {
-				for _, sc := range stablecoins {
-					if strings.EqualFold(bal.Asset, sc) {
-						free, _ := strconv.ParseFloat(bal.Free, 64)
-						locked, _ := strconv.ParseFloat(bal.Locked, 64)
-						equity += free + locked
-						available += free
-					}
+				free, _ := strconv.ParseFloat(bal.Free, 64)
+				locked, _ := strconv.ParseFloat(bal.Locked, 64)
+				total := free + locked
+				if total <= 0 {
+					continue
+				}
+				holdings = append(holdings, SpotHolding{Asset: bal.Asset, Amount: total})
+				if IsStablecoinUSD(bal.Asset) {
+					available += free
+				} else {
+					hasNonStable = true
 				}
 			}
+			priceMap := map[string]float64{}
+			if hasNonStable {
+				pm, perr := b.fetchPriceMap(ctx)
+				if perr != nil {
+					return nil, fmt.Errorf("%w: bingx spot tickers: %v", ErrSpotPricingUnavailable, perr)
+				}
+				priceMap = pm
+			}
+			equity += ValueSpotHoldingsUSD(holdings, priceMap)
 		}
 	}
 
@@ -205,4 +222,31 @@ func (b *BingX) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade, 
 // GetCashflows returns nil — not reliably available on BingX.
 func (b *BingX) GetCashflows(_ context.Context, _ time.Time) ([]*Cashflow, error) {
 	return nil, nil
+}
+
+// fetchPriceMap loads every spot pair's last price in one public call and
+// keys it Binance-style (BTC-USDT -> BTCUSDT) for ValueSpotHoldingsUSD.
+func (b *BingX) fetchPriceMap(ctx context.Context) (map[string]float64, error) {
+	body, err := retryHTTP(b.base.Client, func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, "GET", b.base.BaseURL+"/openApi/spot/v1/ticker/24hr", nil)
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Data []struct {
+			Symbol    string          `json:"symbol"`
+			LastPrice json.RawMessage `json:"lastPrice"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	prices := make(map[string]float64, len(resp.Data))
+	for _, t := range resp.Data {
+		if p := ParseLooseNumber(t.LastPrice); p > 0 {
+			prices[strings.ToUpper(strings.ReplaceAll(t.Symbol, "-", ""))] = p
+		}
+	}
+	return prices, nil
 }
