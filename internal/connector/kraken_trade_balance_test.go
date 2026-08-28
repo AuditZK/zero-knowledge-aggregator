@@ -90,3 +90,41 @@ func TestKrakenGetBalance_TradeBalanceUnavailableKeepsSpotFigures(t *testing.T) 
 		t.Errorf("got equity=%v available=%v unrealized=%v, want 51000/51000/0", b.Equity, b.Available, b.UnrealizedPnL)
 	}
 }
+
+// Kraken lists CHF only as USDCHF. The XBTCHF trader who was the first real
+// Kraken account (2026-08-28) holds CHF whenever out of BTC; that balance was
+// unpriceable and valued at zero.
+func TestKrakenGetBalance_PricesUSDBaseFiatByInversion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/0/private/Balance":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":  []string{},
+				"result": map[string]string{"CHF": "8000.0000", "ZUSD": "100.0000"},
+			})
+		case "/0/public/Ticker":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": []string{},
+				"result": map[string]interface{}{
+					"USDCHF":   map[string]interface{}{"c": []string{"0.80000", "1.0"}},
+					"XXBTZUSD": map[string]interface{}{"c": []string{"100000.0", "1.0"}},
+				},
+			})
+		case "/0/private/TradeBalance":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": []string{"EGeneral:Permission denied"}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	b, err := newTestKraken(srv.URL).GetBalance(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 8000 CHF / 0.80 = 10,000 USD, plus 100 USD.
+	if b.Equity < 10099.99 || b.Equity > 10100.01 {
+		t.Errorf("equity = %v, want 10100 (CHF priced by inverting USDCHF)", b.Equity)
+	}
+}

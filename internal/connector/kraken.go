@@ -284,10 +284,12 @@ func (k *Kraken) fetchPriceMap(ctx context.Context) (map[string]float64, error) 
 			continue
 		}
 		name := strings.ToUpper(pair)
+		matched := false
 		for _, suffix := range krakenQuoteSuffixes {
 			if !strings.HasSuffix(name, suffix) {
 				continue
 			}
+			matched = true
 			base := normalizeKrakenAsset(strings.TrimSuffix(name, suffix))
 			if base == "" {
 				break
@@ -301,8 +303,43 @@ func (k *Kraken) fetchPriceMap(ctx context.Context) (map[string]float64, error) 
 			}
 			break
 		}
+		if matched {
+			continue
+		}
+		// Fiats Kraken quotes the other way round (USDCHF, USDJPY, USDCAD):
+		// there is no CHFUSD pair, so a CHF balance was unpriceable and valued
+		// at zero. A trader on XBTCHF holds CHF whenever they are out of BTC,
+		// and read an equity collapse each time. Invert the USD-base quote.
+		if fiat, ok := krakenUSDBaseFiat(name); ok {
+			key := fiat + "USDT"
+			if _, seen := prices[key]; !seen {
+				prices[key] = 1 / price
+			}
+		}
 	}
 	return prices, nil
+}
+
+// krakenInvertedFiats are the fiats Kraken lists only as USD<fiat>.
+var krakenInvertedFiats = map[string]bool{"CHF": true, "JPY": true, "CAD": true, "AUD": true, "GBP": true, "EUR": true}
+
+// krakenUSDBaseFiat reports the fiat of a USD-base pair name (USDCHF,
+// ZUSDZCHF), or false for anything else.
+func krakenUSDBaseFiat(name string) (string, bool) {
+	rest := ""
+	switch {
+	case strings.HasPrefix(name, "ZUSD"):
+		rest = strings.TrimPrefix(name, "ZUSD")
+	case strings.HasPrefix(name, "USD"):
+		rest = strings.TrimPrefix(name, "USD")
+	default:
+		return "", false
+	}
+	fiat := normalizeKrakenAsset(rest)
+	if !krakenInvertedFiats[fiat] {
+		return "", false
+	}
+	return fiat, true
 }
 
 func (k *Kraken) GetPositions(ctx context.Context) ([]*Position, error) {
