@@ -1920,7 +1920,16 @@ func (s *SyncService) reconstructHistory(ctx context.Context, connMeta *reposito
 // region, which is why the live connector proxies (see factory.go); the
 // rebuilder host reaches api.bybit.com directly and needs no tunnel. A key
 // IP-locked to the enclave egress will still be refused from the rebuilder.
-var externalRebuilderExchanges = []string{"hyperliquid", "bitget", "binance", "okx", "alpaca", "bybit", "kraken"}
+//
+// mexc, lighter: back in the list on 2026-08-28. Both were dropped on
+// 2026-05-28 because the prod rebuilder did not register them yet; it has
+// since 2026-07-08, and their modules now honour EndEquityOverride exactly
+// like hyperliquid (calibrated MTM walk anchored on the midnight snapshot),
+// which is the condition (b) above. The lighter module needs a read-only
+// "ro:" token — a bare wallet address cannot read fills — and answers a
+// credential error otherwise, which the connect hook reports as a rebuild
+// failure without touching the live connection.
+var externalRebuilderExchanges = []string{"hyperliquid", "bitget", "binance", "okx", "alpaca", "bybit", "kraken", "mexc", "lighter"}
 
 // externalRebuilderSupports reports whether the deployed rebuilder registers
 // this exchange — the gate for every dispatch that carries plaintext
