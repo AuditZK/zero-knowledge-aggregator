@@ -447,7 +447,7 @@ func (s *SyncService) SyncUser(ctx context.Context, userUID string) ([]*SyncResu
 					UserUID:  userUID,
 					Exchange: c.Exchange,
 					Label:    c.Label,
-					Error:    egressSyncError("manual sync blocked", allowErr),
+					Error:    fmt.Sprintf("manual sync blocked: %v", allowErr),
 				}
 			case !allowed:
 				result = &SyncResult{
@@ -523,7 +523,7 @@ func (s *SyncService) SyncExchange(ctx context.Context, userUID, exchange string
 		return &SyncResult{
 			UserUID:  userUID,
 			Exchange: exchange,
-			Error:    egressSyncError("", err),
+			Error:    err.Error(),
 		}
 	}
 	if len(connections) == 0 {
@@ -542,7 +542,7 @@ func (s *SyncService) SyncExchange(ctx context.Context, userUID, exchange string
 				UserUID:  userUID,
 				Exchange: conn.Exchange,
 				Label:    conn.Label,
-				Error:    egressSyncError("manual sync blocked", allowErr),
+				Error:    fmt.Sprintf("manual sync blocked: %v", allowErr),
 			}
 		}
 		if !allowed {
@@ -580,7 +580,7 @@ func (s *SyncService) SyncConnectionScheduledByLabel(ctx context.Context, userUI
 			UserUID:  userUID,
 			Exchange: exchange,
 			Label:    label,
-			Error:    egressSyncError("lookup connection", err),
+			Error:    fmt.Sprintf("lookup connection: %v", err),
 		}
 	}
 	return s.syncConnection(ctx, conn)
@@ -593,7 +593,7 @@ func (s *SyncService) SyncExchangeScheduled(ctx context.Context, userUID, exchan
 		return &SyncResult{
 			UserUID:  userUID,
 			Exchange: exchange,
-			Error:    egressSyncError("", err),
+			Error:    err.Error(),
 		}
 	}
 	if len(connections) == 0 {
@@ -659,7 +659,7 @@ func (s *SyncService) syncConnection(ctx context.Context, connMeta *repository.E
 	// 1. Get decrypted credentials
 	creds, err := s.connSvc.GetDecryptedCredentialsByLabel(ctx, connMeta.UserUID, connMeta.Exchange, connMeta.Label)
 	if err != nil {
-		result.Error = egressSyncError("get credentials", err)
+		result.Error = fmt.Sprintf("get credentials: %v", err)
 		s.logger.Error("sync failed: get credentials",
 			zap.String("user_uid", connMeta.UserUID),
 			zap.String("exchange", connMeta.Exchange),
@@ -672,7 +672,7 @@ func (s *SyncService) syncConnection(ctx context.Context, connMeta *repository.E
 	// 2. Get or create connector (cached, TS parity: UniversalConnectorCache)
 	conn, err := s.getOrCreateConnector(connMeta.Exchange, connMeta.UserUID, connMeta.Label, creds)
 	if err != nil {
-		result.Error = egressSyncError("create connector", err)
+		result.Error = fmt.Sprintf("create connector: %v", err)
 		return result
 	}
 
@@ -696,7 +696,7 @@ func (s *SyncService) syncConnection(ctx context.Context, connMeta *repository.E
 	// 3. Get balance
 	balance, err := s.fetchBalanceWithCollapseGuard(ctx, conn, connMeta)
 	if err != nil {
-		result.Error = egressSyncError("get balance", err)
+		result.Error = fmt.Sprintf("get balance: %v", err)
 		s.logger.Error("sync failed: get balance",
 			zap.String("user_uid", connMeta.UserUID),
 			zap.String("exchange", connMeta.Exchange),
@@ -903,7 +903,7 @@ func (s *SyncService) syncConnection(ctx context.Context, connMeta *repository.E
 
 	// Save snapshot individually (non-atomic path, used by manual sync)
 	if err := s.snapshotRepo.Upsert(ctx, snapshot); err != nil {
-		result.Error = egressSyncError("save snapshot", err)
+		result.Error = fmt.Sprintf("save snapshot: %v", err)
 		s.logger.Error("sync failed: save snapshot",
 			zap.String("user_uid", connMeta.UserUID),
 			zap.String("exchange", connMeta.Exchange),
@@ -1040,7 +1040,7 @@ func (s *SyncService) SyncUserScheduledDueAtomic(ctx context.Context, userUID st
 			for _, r := range results {
 				if r.snapshot != nil && r.Error == "" {
 					r.Success = false
-					r.Error = egressSyncError("atomic save failed", err)
+					r.Error = fmt.Sprintf("atomic save failed: %v", err)
 				}
 			}
 		} else {
@@ -1287,15 +1287,15 @@ func (s *SyncService) buildConnectionSnapshot(ctx context.Context, connMeta *rep
 
 	creds, err := s.connSvc.GetDecryptedCredentialsByLabel(ctx, connMeta.UserUID, connMeta.Exchange, connMeta.Label)
 	if err != nil {
-		result.Error = egressSyncError("get credentials", err)
-		s.logger.Error(classifySyncError("get credentials: "+err.Error()), zap.String("exchange", connMeta.Exchange), zap.String("step", "decrypt"), zap.Duration("elapsed", time.Since(start)), zap.Error(err))
+		result.Error = fmt.Sprintf("get credentials: %v", err)
+		s.logger.Error(classifySyncError(result.Error), zap.String("exchange", connMeta.Exchange), zap.String("step", "decrypt"), zap.Duration("elapsed", time.Since(start)), zap.Error(err))
 		return result
 	}
 
 	conn, err := s.getOrCreateConnector(connMeta.Exchange, connMeta.UserUID, connMeta.Label, creds)
 	if err != nil {
-		result.Error = egressSyncError("create connector", err)
-		s.logger.Error(classifySyncError("create connector: "+err.Error()), zap.String("exchange", connMeta.Exchange), zap.String("step", "connector"), zap.Duration("elapsed", time.Since(start)), zap.Error(err))
+		result.Error = fmt.Sprintf("create connector: %v", err)
+		s.logger.Error(classifySyncError(result.Error), zap.String("exchange", connMeta.Exchange), zap.String("step", "connector"), zap.Duration("elapsed", time.Since(start)), zap.Error(err))
 		return result
 	}
 
@@ -1316,8 +1316,8 @@ func (s *SyncService) buildConnectionSnapshot(ctx context.Context, connMeta *rep
 
 	balance, err := s.fetchBalanceWithCollapseGuard(ctx, conn, connMeta)
 	if err != nil {
-		result.Error = egressSyncError("get balance", err)
-		s.logger.Error(classifySyncError("get balance: "+err.Error()), zap.String("exchange", connMeta.Exchange), zap.String("label", connMeta.Label), zap.String("step", "get_balance"), zap.Duration("elapsed", time.Since(start)), zap.Error(err))
+		result.Error = fmt.Sprintf("get balance: %v", err)
+		s.logger.Error(classifySyncError(result.Error), zap.String("exchange", connMeta.Exchange), zap.String("label", connMeta.Label), zap.String("step", "get_balance"), zap.Duration("elapsed", time.Since(start)), zap.Error(err))
 		return result
 	}
 	s.logger.Info("balance fetched", zap.String("exchange", connMeta.Exchange), zap.String("label", connMeta.Label), zap.Duration("elapsed", time.Since(start)))
