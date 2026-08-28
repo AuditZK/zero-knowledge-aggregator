@@ -24,6 +24,7 @@ type Kraken struct {
 	apiKey    string
 	apiSecret string
 	client    *http.Client
+	baseURL   string // krakenAPI in production; a fake server in tests
 }
 
 // NewKraken creates a new Kraken connector.
@@ -32,6 +33,7 @@ func NewKraken(creds *Credentials) *Kraken {
 		apiKey:    creds.APIKey,
 		apiSecret: creds.APISecret,
 		client:    &http.Client{Timeout: 30 * time.Second},
+		baseURL:   krakenAPI,
 	}
 }
 
@@ -73,7 +75,7 @@ func (k *Kraken) doPrivate(ctx context.Context, path string, params url.Values) 
 			return nil, err
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, krakenAPI+path, strings.NewReader(postData))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, k.baseURL+path, strings.NewReader(postData))
 		if err != nil {
 			return nil, err
 		}
@@ -154,10 +156,55 @@ func (k *Kraken) GetBalance(ctx context.Context) (*Balance, error) {
 	}
 	total := ValueSpotHoldingsUSD(holdings, priceMap)
 
+	// Spot margin. /Balance lists the assets but knows nothing about open
+	// margin positions, so a trader long on margin read an equity that ignored
+	// their unrealized P&L and a "free margin" equal to the whole wallet.
+	// TradeBalance carries both (same Query Funds permission). Best-effort:
+	// an account with margin disabled, or a transient failure, keeps the
+	// spot-only figures rather than failing the sync.
+	unrealized, marginUsed := 0.0, 0.0
+	if tb, terr := k.fetchTradeBalance(ctx); terr == nil {
+		unrealized, marginUsed = tb.unrealizedPnL, tb.marginUsed
+	}
+
 	return &Balance{
-		Available: total,
-		Equity:    total,
-		Currency:  "USD",
+		// Our own valuation less what the positions lock, rather than Kraken's
+		// `mf`: theirs counts only collateral-eligible assets, so a wallet
+		// holding non-collateral coins would read a free margin below its
+		// spot value even with no position open.
+		Available:     total - marginUsed,
+		Equity:        total + unrealized,
+		UnrealizedPnL: unrealized,
+		Currency:      "USD",
+	}, nil
+}
+
+// krakenTradeBalance is the slice of /0/private/TradeBalance this connector
+// uses. Kraken documents: e = tb + n (equity), mf = e − m (free margin).
+type krakenTradeBalance struct {
+	unrealizedPnL float64 // n: unrealized net P&L of open margin positions
+	marginUsed    float64 // m: margin amount of open positions
+}
+
+func (k *Kraken) fetchTradeBalance(ctx context.Context) (*krakenTradeBalance, error) {
+	params := url.Values{}
+	params.Set("asset", "ZUSD")
+	body, err := k.doPrivate(ctx, "/0/private/TradeBalance", params)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Result struct {
+			N json.RawMessage `json:"n"`
+			M json.RawMessage `json:"m"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	return &krakenTradeBalance{
+		unrealizedPnL: ParseLooseNumber(resp.Result.N),
+		marginUsed:    ParseLooseNumber(resp.Result.M),
 	}, nil
 }
 
@@ -214,7 +261,7 @@ var krakenQuoteSuffixes = []string{"ZUSD", "USDT", "USDC", "USD"}
 // colon (AAVEUSD:BTNL) which is skipped.
 func (k *Kraken) fetchPriceMap(ctx context.Context) (map[string]float64, error) {
 	body, err := retryHTTP(k.client, func() (*http.Request, error) {
-		return http.NewRequestWithContext(ctx, http.MethodGet, krakenAPI+"/0/public/Ticker", nil)
+		return http.NewRequestWithContext(ctx, http.MethodGet, k.baseURL+"/0/public/Ticker", nil)
 	})
 	if err != nil {
 		return nil, err
