@@ -50,14 +50,15 @@ func TestReconstructHistory_BybitReachesTheRebuilder(t *testing.T) {
 }
 
 func TestExternalRebuilderSupports_Bybit(t *testing.T) {
-	for _, name := range []string{"bybit", "BYBIT", " Bybit "} {
+	// kraken joined the gate on 2026-08-28, when its ledger-walk module shipped.
+	for _, name := range []string{"bybit", "BYBIT", " Bybit ", "kraken"} {
 		if !externalRebuilderSupports(name) {
 			t.Fatalf("externalRebuilderSupports(%q) = false", name)
 		}
 	}
 	// Still outside the gate: the rebuilder has no module for them, and
 	// dispatching would egress credentials for a guaranteed 400.
-	for _, name := range []string{"kraken", "kucoin", "coinbase", "gate", "mexc", "lighter"} {
+	for _, name := range []string{"kucoin", "coinbase", "gate", "mexc", "lighter"} {
 		if externalRebuilderSupports(name) {
 			t.Fatalf("externalRebuilderSupports(%q) = true, but no module exists", name)
 		}
