@@ -38,6 +38,10 @@ var valueScrubRegexes = []*regexp.Regexp{
 	// HTTP Basic authorization header — the base64 payload holds
 	// key:secret and must be dropped whole.
 	regexp.MustCompile(`(?i)Authorization:\s*Basic\s+[A-Za-z0-9+/=._-]+`),
+	// IBKR Flex bearer token — the Flex endpoint takes no auth header, so
+	// the token can only travel as `?t=<token>` and lands in any *url.Error
+	// text (SEC-11). Anchored on a query delimiter so `&at=` cannot match.
+	regexp.MustCompile(`(?i)[?&]t=[^&\s"'\\]+`),
 }
 
 // scrubSensitiveSubstrings applies every valueScrubRegex to s, replacing

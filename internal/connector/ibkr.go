@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -167,6 +168,7 @@ func (i *IBKR) fetchFlexReport(ctx context.Context) ([]byte, error) {
 
 		flexReportCacheMu.Lock()
 		flexReportCache[key] = &flexReportEntry{xml: report, fetchedAt: time.Now()}
+		evictFlexReportCache(time.Now())
 		flexReportCacheMu.Unlock()
 		return report, nil
 	})
@@ -174,6 +176,35 @@ func (i *IBKR) fetchFlexReport(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 	return v.([]byte), nil
+}
+
+// flexReportCacheMaxEntries caps the process-wide Flex cache. Each entry can
+// hold up to IBKRFlexMaxResponseBytes of XML, and nothing ever removed one:
+// the map grew one entry per token:queryID for the life of the process, which
+// on a large IBKR estate is a slow OOM against the production GOMEMLIMIT.
+// CONN-15b, bounded the way internal/errtrack/store.go bounds its groups.
+const flexReportCacheMaxEntries = 256
+
+// evictFlexReportCache drops entries no read can still use, then trims the
+// oldest until the cap holds. Caller must hold flexReportCacheMu. Recency is
+// fetchedAt: an entry is only ever rewritten by a fresh fetch, so insertion
+// order and use order coincide.
+func evictFlexReportCache(now time.Time) {
+	for key, entry := range flexReportCache {
+		if now.Sub(entry.fetchedAt) >= flexTokenCooldown {
+			delete(flexReportCache, key)
+		}
+	}
+	for len(flexReportCache) > flexReportCacheMaxEntries {
+		var oldestKey string
+		var oldest time.Time
+		for key, entry := range flexReportCache {
+			if oldestKey == "" || entry.fetchedAt.Before(oldest) {
+				oldestKey, oldest = key, entry.fetchedAt
+			}
+		}
+		delete(flexReportCache, oldestKey)
+	}
 }
 
 func (i *IBKR) Exchange() string {
@@ -223,7 +254,7 @@ func (i *IBKR) requestFlexReport(ctx context.Context) (string, error) {
 
 	resp, err := i.client.Do(req)
 	if err != nil {
-		return "", err
+		return "", i.transportErr(err)
 	}
 
 	// CONN-AUDIT-001: bounded read with the higher IBKR Flex cap (statements
@@ -314,7 +345,7 @@ func (i *IBKR) getFlexReport(ctx context.Context, refCode string) ([]byte, error
 
 		resp, err := i.client.Do(req)
 		if err != nil {
-			return nil, err
+			return nil, i.transportErr(err)
 		}
 
 		// CONN-AUDIT-001: Flex statement download — use the higher cap.
@@ -361,6 +392,21 @@ func preview(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// transportErr rebuilds a *url.Error so the Flex token flexURL puts in the
+// query string cannot ride out on the message (SEC-11). http.Client.Do prints
+// the full URL, and net/http's own stripPassword only removes userinfo — the
+// chain is dropped on purpose so no errors.As can recover the raw URL.
+func (i *IBKR) transportErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := scrubSecret(err.Error(), i.token)
+	if esc := url.QueryEscape(i.token); esc != i.token {
+		msg = scrubSecret(msg, esc)
+	}
+	return errors.New(msg)
 }
 
 // scrubSecret replaces every literal occurrence of secret in s with "***"

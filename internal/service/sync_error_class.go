@@ -1,6 +1,10 @@
 package service
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/trackrecord/enclave/internal/errsanitize"
+)
 
 // classifySyncError maps a wrapped sync-failure string to a stable log
 // message. Each return value becomes a distinct errtrack fingerprint so
@@ -8,10 +12,9 @@ import "strings"
 // exchange" from "OAuth refresh failed" instead of collapsing every
 // snapshot failure under one generic group.
 //
-// The classifier reads only the error text — values fed to it are
-// already the result of `fmt.Sprintf("...: %v", err)` and have flowed
-// through the connector/decrypt layers, none of which interpolate
-// secrets (LOG-001 audited paths). Returned messages are constants.
+// It reads the RAW error text, which may carry a credential a vendor put
+// in a URL query string (SEC-11) — safe only because every return value is
+// a constant. Never surface its input; use egressSyncError for that.
 func classifySyncError(errStr string) string {
 	s := errStr
 	switch {
@@ -68,4 +71,25 @@ func classifySyncError(errStr string) string {
 		return "sync: exchange unreachable"
 	}
 	return "sync: snapshot build failed"
+}
+
+// genericSyncFailure is what a client sees when the failure matches no
+// actionable category — never the raw text.
+const genericSyncFailure = "sync failed"
+
+// egressSyncError renders err for SyncResult.Error. That field is persisted
+// in sync_statuses and serialised to REST and gRPC clients without passing
+// through either output sanitizer (SEC-12), so raw error text — a vendor URL
+// carrying the credential in its query string (SEC-11), pgx detail, an
+// internal host:port — must never reach it. The full error stays in the log
+// at the call site.
+func egressSyncError(op string, err error) string {
+	msg := errsanitize.Category(err.Error())
+	if msg == "" {
+		msg = genericSyncFailure
+	}
+	if op == "" {
+		return msg
+	}
+	return op + ": " + msg
 }

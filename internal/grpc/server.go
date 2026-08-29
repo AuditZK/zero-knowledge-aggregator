@@ -13,6 +13,7 @@ import (
 	pb "github.com/trackrecord/enclave/api/proto"
 	"github.com/trackrecord/enclave/internal/attestation"
 	"github.com/trackrecord/enclave/internal/auth"
+	"github.com/trackrecord/enclave/internal/errsanitize"
 	"github.com/trackrecord/enclave/internal/repository"
 	"github.com/trackrecord/enclave/internal/service"
 	"github.com/trackrecord/enclave/internal/validation"
@@ -282,55 +283,10 @@ func (s *Server) sanitizeErrorForClient(err error) string {
 	return s.sanitizeMessageForClient(err.Error())
 }
 
-// userFacingErrorPatterns maps a substring that marks an error as safe to
-// surface to the end-user (a category of failure they can act on — wrong
-// credentials, IP not whitelisted, etc.) to a fixed, infrastructure-free
-// message. SEC-07: returning the RAW error text on a match leaked internal
-// detail (e.g. "dial tcp internal-db:5432: connect: connection refused"
-// matches "connection refused"); we now return the category's canonical
-// message and never the raw text. First match wins, so list more specific
-// substrings before more general ones.
-type userFacingError struct {
-	substr  string
-	message string
-}
-
-// Category messages shared by several match substrings — kept as constants so
-// the same user-facing text isn't duplicated across rows.
-const (
-	msgExchangeUnreachable = "could not reach the exchange endpoint"
-	msgExchangeTimeout     = "the exchange request timed out"
-	msgIPNotWhitelisted    = "server IP not whitelisted on the exchange"
-	msgServiceUnavailable  = "service temporarily unavailable"
-)
-
-var userFacingErrorPatterns = []userFacingError{
-	{"invalid credentials", "invalid credentials"},
-	{"invalid api key", "invalid API key"},
-	{"invalid signature", "invalid API signature"},
-	{"auth_failed", "authentication failed"},
-	{"unauthorized", "unauthorized"},
-	{"insufficient permission", "insufficient API key permissions"},
-	{"permission denied", "permission denied"},
-	{"ip not whitelist", msgIPNotWhitelisted},
-	{"ip restricted", msgIPNotWhitelisted},
-	{"whitelist", msgIPNotWhitelisted},
-	{"no such host", msgExchangeUnreachable},
-	{"connection refused", msgExchangeUnreachable},
-	{"deadline exceeded", msgExchangeTimeout},
-	{"timeout", msgExchangeTimeout},
-	{"validation failed", "validation failed"},
-	{"protocol_error", "protocol error"},
-	{"failed to create connection", "failed to create connection"},
-	{"failed to create user", "failed to create user"},
-	{"already exists", "resource already exists"},
-	{"not found", "resource not found"},
-	{"database not configured", msgServiceUnavailable},
-	{"sync service not available", msgServiceUnavailable},
-	{"report service not available", msgServiceUnavailable},
-	{"service not available", msgServiceUnavailable},
-}
-
+// sanitizeMessageForClient collapses msg to a fixed category message in
+// production (SEC-07) so an internal host:port, file path or stack fragment
+// cannot ride out on a matched category. Development passes the raw text
+// through for local debugging.
 func (s *Server) sanitizeMessageForClient(msg string) string {
 	if msg == "" {
 		return ""
@@ -338,11 +294,8 @@ func (s *Server) sanitizeMessageForClient(msg string) string {
 	if !s.isProduction() {
 		return msg
 	}
-	lower := strings.ToLower(msg)
-	for _, p := range userFacingErrorPatterns {
-		if strings.Contains(lower, p.substr) {
-			return p.message
-		}
+	if m := errsanitize.Category(msg); m != "" {
+		return m
 	}
 	return genericInternalError
 }
