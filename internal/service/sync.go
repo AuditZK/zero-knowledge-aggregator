@@ -2307,7 +2307,7 @@ func (s *SyncService) applyInceptionDeposit(ctx context.Context, connMeta *repos
 			earliest = sn
 		}
 	}
-	if earliest.Deposits != 0 || earliest.TotalEquity <= 0 {
+	if earliest.TotalEquity <= 0 {
 		return nil
 	}
 	// One read of the connection's whole existing timeline serves both checks:
@@ -2323,20 +2323,36 @@ func (s *SyncService) applyInceptionDeposit(ctx context.Context, connMeta *repos
 			mine = append(mine, p)
 		}
 	}
+	stamp, superseded := resolveInception(earliest, mine)
+	if stamp {
+		earliest.Deposits = earliest.TotalEquity
+		s.logger.Info("inception deposit stamped on reconstructed series (UX-001)",
+			zap.String("user_uid", connMeta.UserUID),
+			zap.String("exchange", connMeta.Exchange),
+			zap.String("label", connMeta.Label),
+			zap.Time("inception_day", earliest.Timestamp),
+			zap.Float64("deposit", earliest.Deposits),
+		)
+	}
+	return superseded
+}
+
+// resolveInception decides, for a reconstructed series landing on a
+// connection's existing rows, whether its earliest day needs the UX-001 stamp
+// and whether a connect-time stamp beneath it is now superseded.
+//
+// The two are independent. A series whose earliest day already carries its
+// deposit (the external rebuilder reads it off the ledger) needs no stamp, but
+// the connect-time stamp it lands under is superseded all the same. Coupling
+// the clearing to the stamping left such a stamp in place: a whole balance
+// booked as a mid-series deposit, read as -31% on the day.
+func resolveInception(earliest *repository.Snapshot, mine []*repository.Snapshot) (stamp bool, superseded *repository.Snapshot) {
 	for _, p := range mine {
 		if p.Timestamp.Before(earliest.Timestamp) {
-			return nil // history extends further back — this is not the inception day
+			return false, nil // history extends further back — this is not the inception day
 		}
 	}
-	earliest.Deposits = earliest.TotalEquity
-	s.logger.Info("inception deposit stamped on reconstructed series (UX-001)",
-		zap.String("user_uid", connMeta.UserUID),
-		zap.String("exchange", connMeta.Exchange),
-		zap.String("label", connMeta.Label),
-		zap.Time("inception_day", earliest.Timestamp),
-		zap.Float64("deposit", earliest.Deposits),
-	)
-	return supersededConnectStamp(mine, earliest.Timestamp)
+	return earliest.Deposits == 0, supersededConnectStamp(mine, earliest.Timestamp)
 }
 
 // inceptionStampEpsilon is how close deposits must sit to equity to read as a

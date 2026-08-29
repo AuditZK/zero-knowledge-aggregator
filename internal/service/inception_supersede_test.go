@@ -101,3 +101,55 @@ func TestSupersededConnectStamp_NoExistingHistory(t *testing.T) {
 		t.Fatal("invented a correction for a connection with no prior snapshots")
 	}
 }
+
+// The external rebuilder dates the inception deposit off the ledger, so the
+// reconstructed series arrives with its earliest day already stamped. The
+// connect-time stamp it lands under must still be cleared — coupling the two
+// left it in place on a second Bybit account: the live sync wrote today's row
+// as a first sync (deposit = whole balance), the rebuild filled 258 days
+// beneath it a minute later, and the aggregate read the day as -31%.
+func TestResolveInception_ClearsStampUnderALedgerDatedSeries(t *testing.T) {
+	earliest := snap(day(2025, time.December, 14), 107.27, 107.27)
+	live := snap(day(2026, time.August, 29), 8139.34, 8139.34)
+
+	stamp, superseded := resolveInception(earliest, []*repository.Snapshot{live})
+	if stamp {
+		t.Fatal("re-stamped an earliest day that already carries its ledger deposit")
+	}
+	if superseded == nil {
+		t.Fatal("the connect-time stamp survived beneath a ledger-dated series")
+	}
+	if superseded.Deposits != 0 || !superseded.Timestamp.Equal(live.Timestamp) {
+		t.Fatalf("cleared the wrong row: %+v", superseded)
+	}
+}
+
+// The original path: a series with no deposit on its earliest day gets the
+// stamp AND clears the connect-time row.
+func TestResolveInception_StampsAndClearsWhenSeriesCarriesNoDeposit(t *testing.T) {
+	earliest := snap(day(2026, time.June, 8), 43, 0)
+	live := snap(day(2026, time.August, 26), 10093.99, 10093.99)
+
+	stamp, superseded := resolveInception(earliest, []*repository.Snapshot{live})
+	if !stamp {
+		t.Fatal("an unstamped inception day was left without its deposit")
+	}
+	if superseded == nil {
+		t.Fatal("the connect-time stamp survived")
+	}
+}
+
+// Rows older than the series mean the batch is a window, not the inception:
+// neither stamp nor clearing, whatever the earliest day carries.
+func TestResolveInception_OlderHistoryDisablesBoth(t *testing.T) {
+	older := snap(day(2026, time.May, 1), 500, 500)
+	for _, earliest := range []*repository.Snapshot{
+		snap(day(2026, time.June, 8), 43, 0),
+		snap(day(2026, time.June, 8), 43, 43),
+	} {
+		stamp, superseded := resolveInception(earliest, []*repository.Snapshot{older})
+		if stamp || superseded != nil {
+			t.Fatalf("acted on a window inside longer history: stamp=%v superseded=%+v", stamp, superseded)
+		}
+	}
+}
