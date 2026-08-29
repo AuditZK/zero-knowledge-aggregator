@@ -77,3 +77,11 @@ doc/plan-balance-reconciled-cashflow.md
 !CONTRIBUTING.md
 !CHANGELOG.md
 !CODE_OF_CONDUCT.md
+
+# Local operator notes / handoff plans — never committed (contains host + ops detail)
+.handoff/
+
+# Agent working directory — never committed. CLAUDE.md only avoided this by
+# falling under the blanket *.md rule above; settings.json had nothing covering
+# it and would have gone up on the first `git add .`.
+.claude/
