@@ -53,8 +53,13 @@ services:
     # Required keys in .env.production (the enclave fatals at boot if any
     # are missing — see internal/config/config.go and main.go validators):
     #   DATABASE_URL, ENCRYPTION_KEY, ENCLAVE_JWT_SECRET, CORS_ORIGIN,
-    #   GRPC_CLIENT_CERT_CN_ALLOWLIST, MT_BRIDGE_URL, MT_BRIDGE_HMAC_SECRET,
+    #   GRPC_CLIENT_CERT_CN_ALLOWLIST,
     #   LOG_STREAM_API_KEY, TLS_CERT_PATH, TLS_KEY_PATH
+    # Required to serve MT4/MT5 accounts (CFG-005 — the bridge connect call
+    # carries the investor password in cleartext, so the enclave fatals on a
+    # non-https URL and MetaTrader connectors refuse to build when unset):
+    #   MT_BRIDGE_URL must be https:// AND
+    #   MT_BRIDGE_HMAC_SECRET (≥24 chars; same value as the bridge)
     # Required when REBUILDER_SERVICE_URL is set (see environment: below):
     #   REBUILDER_INTERNAL_TOKEN (≥24 chars; same value as the rebuilder's
     #     env, otherwise the rebuilder rejects with 401)

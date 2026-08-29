@@ -95,7 +95,7 @@ func (f *Factory) Create(creds *Credentials) (Connector, error) {
 	case "ig_demo":
 		return NewIG(creds, true), nil
 	case "mt4", "mt5", "exness":
-		return NewMetaTrader(creds), nil
+		return NewMetaTrader(creds)
 
 	// Testing. The mock connector fabricates balances and trades; it must never
 	// feed the signed-report pipeline, so it is unavailable in production.

@@ -33,3 +33,36 @@ func TestCheckBenchmarkConfig(t *testing.T) {
 		})
 	}
 }
+
+// CFG-005: the mt-bridge connect call carries the MT investor password in
+// cleartext and its signature is only as strong as MT_BRIDGE_HMAC_SECRET, so
+// production refuses to boot on an http link or a weak key. An unset URL
+// (MetaTrader disabled) and development are exempt.
+func TestCheckMTBridgeConfig(t *testing.T) {
+	const secret = "mt-abcdefghijklmnopqrstuvwx" // ≥24 chars
+
+	cases := []struct {
+		name    string
+		url     string
+		secret  string
+		isDev   bool
+		wantErr bool
+	}{
+		{"unset url ok", "", "", false, false},
+		{"dev http no secret ok", "http://mt-bridge:8090", "", true, false},
+		{"prod http rejected", "http://mt-bridge:8090", secret, false, true},
+		{"prod https no secret rejected", "https://mt-bridge.internal", "", false, true},
+		{"prod https short secret rejected", "https://mt-bridge.internal", "tooshort", false, true},
+		{"prod https with secret ok", "https://mt-bridge.internal", secret, false, false},
+		{"prod scheme is case-insensitive", "HTTPS://mt-bridge.internal", secret, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkMTBridgeConfig(tc.url, tc.secret, tc.isDev)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("checkMTBridgeConfig(%q, secretLen=%d, dev=%v) err=%v, wantErr=%v",
+					tc.url, len(tc.secret), tc.isDev, err, tc.wantErr)
+			}
+		})
+	}
+}

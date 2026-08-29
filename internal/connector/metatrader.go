@@ -35,9 +35,18 @@ type MetaTrader struct {
 	sessionID string
 }
 
+// mtBridgeMinSecretLen is the floor CFG-005 enforces at boot; repeated here
+// because the connector is also reachable from tools that skip main.go.
+const mtBridgeMinSecretLen = 24
+
 // NewMetaTrader creates a MetaTrader connector.
 // creds.APIKey=login, creds.APISecret=investor password, creds.Passphrase=server[:port].
-func NewMetaTrader(creds *Credentials) *MetaTrader {
+//
+// SEC-13: the bridge connect call carries the investor password in cleartext
+// JSON, so production refuses to build the connector unless the link is
+// https:// and the request signature is keyed on a real secret. Development
+// keeps the loopback http default.
+func NewMetaTrader(creds *Credentials) (*MetaTrader, error) {
 	login, _ := strconv.Atoi(strings.TrimSpace(creds.APIKey))
 	exchange := strings.ToLower(strings.TrimSpace(creds.Exchange))
 	switch exchange {
@@ -48,7 +57,15 @@ func NewMetaTrader(creds *Credentials) *MetaTrader {
 	}
 
 	bridgeURL := strings.TrimRight(strings.TrimSpace(os.Getenv("MT_BRIDGE_URL")), "/")
-	if bridgeURL == "" {
+	hmacSecret := strings.TrimSpace(os.Getenv("MT_BRIDGE_HMAC_SECRET"))
+	if isProductionEnv() {
+		if !strings.HasPrefix(strings.ToLower(bridgeURL), "https://") {
+			return nil, fmt.Errorf("mt-bridge unavailable: MT_BRIDGE_URL must be https:// in production")
+		}
+		if len(hmacSecret) < mtBridgeMinSecretLen {
+			return nil, fmt.Errorf("mt-bridge unavailable: MT_BRIDGE_HMAC_SECRET must be at least %d characters in production", mtBridgeMinSecretLen)
+		}
+	} else if bridgeURL == "" {
 		bridgeURL = "http://mt-bridge:8090"
 	}
 
@@ -58,9 +75,9 @@ func NewMetaTrader(creds *Credentials) *MetaTrader {
 		password:   creds.APISecret,
 		server:     strings.TrimSpace(creds.Passphrase),
 		bridgeURL:  bridgeURL,
-		hmacSecret: os.Getenv("MT_BRIDGE_HMAC_SECRET"),
+		hmacSecret: hmacSecret,
 		client:     &http.Client{Timeout: 30 * time.Second},
-	}
+	}, nil
 }
 
 func (m *MetaTrader) Exchange() string {

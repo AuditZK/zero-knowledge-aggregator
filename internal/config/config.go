@@ -108,6 +108,22 @@ type Config struct {
 	// set; otherwise the client refuses to start.
 	RebuilderInternalToken string
 
+	// MTBridgeURL points at the mt-bridge service, which terminates the
+	// MT4/MT5 protocol on the enclave's behalf. The connect call carries the
+	// account's investor password in cleartext JSON, so a non-https URL puts
+	// a live credential on the wire; production refuses to boot on one
+	// (CFG-005). Empty = MT connectors unavailable, dev falls back to
+	// http://mt-bridge:8090. Parsed from MT_BRIDGE_URL.
+	MTBridgeURL string
+
+	// MTBridgeHMACSecret is the shared secret the enclave signs every bridge
+	// call with (X-MT-Bridge-Signature). Empty means an HMAC keyed on the
+	// empty string — computable by anyone, so it authenticates nothing and
+	// any container on the network can impersonate the enclave to the
+	// bridge. Required, ≥24 chars, whenever MTBridgeURL is set in
+	// production. Parsed from MT_BRIDGE_HMAC_SECRET.
+	MTBridgeHMACSecret string
+
 	// HistorySyncNotifyURL, when set, is the base URL the enclave POSTs a
 	// best-effort "history rebuilt" ping to after a connection's historical
 	// backfill completes. The enclave appends the userUID to the path
@@ -237,10 +253,13 @@ func Load() *Config {
 		RebuilderInternalToken: strings.TrimSpace(getEnv("REBUILDER_INTERNAL_TOKEN", "")),
 		HistorySyncNotifyURL:   strings.TrimSpace(getEnv("HISTORY_SYNC_NOTIFY_URL", "")),
 
+		MTBridgeURL:        strings.TrimRight(strings.TrimSpace(getEnv("MT_BRIDGE_URL", "")), "/"),
+		MTBridgeHMACSecret: strings.TrimSpace(getEnv("MT_BRIDGE_HMAC_SECRET", "")),
+
 		HandoffPeerURL:            strings.TrimSpace(getEnv("HANDOFF_PEER_URL", "")),
 		HandoffPeerTLSFingerprint: strings.TrimSpace(getEnv("HANDOFF_PEER_TLS_FINGERPRINT", "")),
 		HandoffSignedAllowlist:    getEnv("HANDOFF_SIGNED_ALLOWLIST", ""),
-		LegacyMasterKeyHex:    strings.TrimSpace(getEnv("LEGACY_MASTER_KEY_HEX", "")),
+		LegacyMasterKeyHex:        strings.TrimSpace(getEnv("LEGACY_MASTER_KEY_HEX", "")),
 
 		MeasurementAutoRecovery:         getEnvBool("MEASUREMENT_AUTO_RECOVERY", true),
 		MeasurementRecoveryLookbackDays: getEnvInt("MEASUREMENT_RECOVERY_LOOKBACK_DAYS", 180),

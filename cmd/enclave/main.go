@@ -379,6 +379,18 @@ func main() {
 		metricsSvc = service.NewMetricsService(snapshotRepo)
 	}
 
+	// CFG-005: the mt-bridge connect call ships the account's investor
+	// password in cleartext JSON, and the X-MT-Bridge-Signature it carries is
+	// keyed on MT_BRIDGE_HMAC_SECRET — empty means anyone can compute it.
+	// Same fail-closed stance as the rebuilder (CFG-002/CFG-003), which
+	// crosses the same boundary with the same kind of secret.
+	if err := checkMTBridgeConfig(cfg.MTBridgeURL, cfg.MTBridgeHMACSecret, cfg.IsDevelopment()); err != nil {
+		logger.Fatal("mt-bridge configuration rejected (CFG-005)",
+			zap.Error(err),
+			zap.String("hint", "MT4/MT5 credentials leave the enclave over this link; set MT_BRIDGE_URL to an https:// endpoint with a ≥24-char MT_BRIDGE_HMAC_SECRET, or unset MT_BRIDGE_URL to disable MetaTrader"),
+		)
+	}
+
 	// 11c. Wire HTTP proxy for geo-restricted exchanges (e.g. Binance from EU).
 	// Set EXCHANGE_HTTP_PROXY=socks5://user:pass@host:port (or http://)
 	// and PROXY_EXCHANGES=binance (comma-separated, default: binance).
@@ -862,6 +874,28 @@ func refreshSignerAttestation(
 // isHTTPSURL reports whether url uses the https scheme (case-insensitive).
 func isHTTPSURL(url string) bool {
 	return strings.HasPrefix(strings.ToLower(url), "https://")
+}
+
+// mtBridgeMinSecretLen mirrors the rebuilder token floor (CFG-002): short
+// enough to type, long enough that the HMAC key is not guessable.
+const mtBridgeMinSecretLen = 24
+
+// checkMTBridgeConfig returns a non-nil error when the MetaTrader bridge is
+// misconfigured for production (CFG-005). Returns nil when the URL is unset
+// (MetaTrader disabled — the connector itself refuses to build in production
+// without it) or in development, where a loopback bridge over http is the
+// normal setup.
+func checkMTBridgeConfig(url, secret string, isDev bool) error {
+	if url == "" || isDev {
+		return nil
+	}
+	if !isHTTPSURL(url) {
+		return fmt.Errorf("MT_BRIDGE_URL must be https:// in production (the connect call carries the MT investor password in cleartext)")
+	}
+	if len(secret) < mtBridgeMinSecretLen {
+		return fmt.Errorf("MT_BRIDGE_HMAC_SECRET must be at least %d characters when MT_BRIDGE_URL is set in production (an empty or short key makes X-MT-Bridge-Signature forgeable)", mtBridgeMinSecretLen)
+	}
+	return nil
 }
 
 // checkBenchmarkConfig returns a non-nil error when the benchmark integration
