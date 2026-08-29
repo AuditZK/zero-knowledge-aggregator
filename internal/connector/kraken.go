@@ -398,52 +398,85 @@ func (k *Kraken) GetPositions(ctx context.Context) ([]*Position, error) {
 	return positions, nil
 }
 
+// krakenTradesPageSize is Kraken's fixed page size for TradesHistory; the
+// endpoint ignores a count parameter and always returns 50.
+const krakenTradesPageSize = 50
+
+// krakenMaxTradePages bounds the ofs walk. Reaching it is an error, not a
+// truncation: a silently short trade list is indistinguishable from a quiet
+// period. Same contract as igMaxTransactionPages and bitgetMaxBillPages.
+const krakenMaxTradePages = 100
+
 func (k *Kraken) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade, error) {
-	params := url.Values{}
-	params.Set("type", "all")
-	params.Set("start", strconv.FormatInt(start.Unix(), 10))
-	params.Set("end", strconv.FormatInt(end.Unix(), 10))
-	params.Set("trades", "true")
+	trades := make([]*Trade, 0)
+	seen := make(map[string]struct{})
 
-	body, err := k.doPrivate(ctx, "/0/private/TradesHistory", params)
-	if err != nil {
-		return nil, err
-	}
+	for page := 0; ; page++ {
+		if page >= krakenMaxTradePages {
+			return nil, fmt.Errorf("kraken trades history exceeded %d pages", krakenMaxTradePages)
+		}
 
-	var resp struct {
-		Result struct {
-			Trades map[string]struct {
-				Pair  string  `json:"pair"`
-				Type  string  `json:"type"` // buy/sell
-				Price string  `json:"price"`
-				Vol   string  `json:"vol"`
-				Fee   string  `json:"fee"`
-				Time  float64 `json:"time"`
-			} `json:"trades"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, err
-	}
+		params := url.Values{}
+		params.Set("type", "all")
+		params.Set("start", strconv.FormatInt(start.Unix(), 10))
+		params.Set("end", strconv.FormatInt(end.Unix(), 10))
+		params.Set("trades", "true")
+		if page > 0 {
+			params.Set("ofs", strconv.Itoa(page*krakenTradesPageSize))
+		}
 
-	trades := make([]*Trade, 0, len(resp.Result.Trades))
-	for id, t := range resp.Result.Trades {
-		price, _ := strconv.ParseFloat(t.Price, 64)
-		qty, _ := strconv.ParseFloat(t.Vol, 64)
-		fee, _ := strconv.ParseFloat(t.Fee, 64)
+		body, err := k.doPrivate(ctx, "/0/private/TradesHistory", params)
+		if err != nil {
+			return nil, err
+		}
 
-		trades = append(trades, &Trade{
-			ID:          id,
-			Symbol:      t.Pair,
-			Side:        strings.ToLower(t.Type),
-			Price:       price,
-			Quantity:    qty,
-			Fee:         fee,
-			FeeCurrency: "USD",
-			RealizedPnL: 0,
-			Timestamp:   time.Unix(int64(t.Time), int64((t.Time-math.Floor(t.Time))*1e9)).UTC(),
-			MarketType:  MarketSpot,
-		})
+		var resp struct {
+			Result struct {
+				Count  int `json:"count"`
+				Trades map[string]struct {
+					Pair  string  `json:"pair"`
+					Type  string  `json:"type"` // buy/sell
+					Price string  `json:"price"`
+					Vol   string  `json:"vol"`
+					Fee   string  `json:"fee"`
+					Time  float64 `json:"time"`
+				} `json:"trades"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return nil, err
+		}
+		if len(resp.Result.Trades) == 0 {
+			break
+		}
+
+		for id, t := range resp.Result.Trades {
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+
+			price, _ := strconv.ParseFloat(t.Price, 64)
+			qty, _ := strconv.ParseFloat(t.Vol, 64)
+			fee, _ := strconv.ParseFloat(t.Fee, 64)
+
+			trades = append(trades, &Trade{
+				ID:          id,
+				Symbol:      t.Pair,
+				Side:        strings.ToLower(t.Type),
+				Price:       price,
+				Quantity:    qty,
+				Fee:         fee,
+				FeeCurrency: "USD",
+				RealizedPnL: 0,
+				Timestamp:   time.Unix(int64(t.Time), int64((t.Time-math.Floor(t.Time))*1e9)).UTC(),
+				MarketType:  MarketSpot,
+			})
+		}
+
+		if len(trades) >= resp.Result.Count {
+			break
+		}
 	}
 
 	sort.Slice(trades, func(i, j int) bool {

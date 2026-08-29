@@ -36,6 +36,22 @@ func (b *BingX) TestConnection(ctx context.Context) error {
 	return err
 }
 
+// parseBingXAmount refuses to swallow a malformed financial value: a dropped
+// ParseFloat error reads as a zero balance, indistinguishable from a real
+// empty account. An absent field stays 0 — BingX omits wallets the account
+// never opened.
+func parseBingXAmount(field, raw string) (float64, error) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return 0, nil
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse swap %s: %w", field, err)
+	}
+	return f, nil
+}
+
 func (b *BingX) GetBalance(ctx context.Context) (*Balance, error) {
 	// Swap (perpetual futures) balance
 	body, err := b.signedGET(ctx, "/openApi/swap/v2/user/balance", "")
@@ -58,9 +74,25 @@ func (b *BingX) GetBalance(ctx context.Context) (*Balance, error) {
 		return nil, fmt.Errorf("parse swap balance: %w", err)
 	}
 
-	equity, _ := strconv.ParseFloat(resp.Data.Balance.Equity, 64)
-	available, _ := strconv.ParseFloat(resp.Data.Balance.Available, 64)
-	unrealized, _ := strconv.ParseFloat(resp.Data.Balance.UnrealizedPnL, 64)
+	// CONN-15a: BingX answers business errors with HTTP 200 and code != 0,
+	// leaving Data empty. Without this the empty strings below parsed to 0
+	// and TestConnection accepted invalid credentials.
+	if resp.Code != 0 {
+		return nil, fmt.Errorf("swap balance: bingx code %d: %s", resp.Code, vendorErrorDetail(string(body)))
+	}
+
+	equity, err := parseBingXAmount("equity", resp.Data.Balance.Equity)
+	if err != nil {
+		return nil, err
+	}
+	available, err := parseBingXAmount("availableMargin", resp.Data.Balance.Available)
+	if err != nil {
+		return nil, err
+	}
+	unrealized, err := parseBingXAmount("unrealizedProfit", resp.Data.Balance.UnrealizedPnL)
+	if err != nil {
+		return nil, err
+	}
 
 	// Spot balance (best effort on the fetch; strict on the valuation).
 	// CONN-12: the old loop summed only USDT/USDC/USD and silently dropped

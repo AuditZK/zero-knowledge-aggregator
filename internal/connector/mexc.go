@@ -62,11 +62,8 @@ func (m *MEXC) GetBalance(ctx context.Context) (*Balance, error) {
 		return nil, fmt.Errorf("parse spot balance: %w", err)
 	}
 
-	spotEquity := 0.0
-	spotAvailable := 0.0
-	stablecoins := []string{"USDT", "USDC", "USD", "BUSD", "DAI", "FDUSD"}
-
-	// Sum stablecoins + convert altcoins to USD via ticker
+	var totalHoldings, freeHoldings []SpotHolding
+	hasNonStable := false
 	for _, b := range spotResp.Balances {
 		free, _ := strconv.ParseFloat(b.Free, 64)
 		locked, _ := strconv.ParseFloat(b.Locked, 64)
@@ -74,26 +71,30 @@ func (m *MEXC) GetBalance(ctx context.Context) (*Balance, error) {
 		if total <= 0 {
 			continue
 		}
-
-		isStable := false
-		for _, sc := range stablecoins {
-			if strings.EqualFold(b.Asset, sc) {
-				isStable = true
-				spotEquity += total
-				spotAvailable += free
-				break
-			}
+		asset := strings.ToUpper(strings.TrimSpace(b.Asset))
+		totalHoldings = append(totalHoldings, SpotHolding{Asset: asset, Amount: total})
+		if free > 0 {
+			freeHoldings = append(freeHoldings, SpotHolding{Asset: asset, Amount: free})
 		}
-
-		// Convert altcoins to USD via MEXC ticker
-		if !isStable {
-			price := m.fetchTickerPrice(ctx, b.Asset)
-			if price > 0 {
-				spotEquity += total * price
-				spotAvailable += free * price
-			}
+		if !IsStablecoinUSD(asset) {
+			hasNonStable = true
 		}
 	}
+
+	// CONN-13: one public all-tickers call replaces the per-altcoin ticker
+	// fetch, whose 429s dropped an asset from the equity with no error at all.
+	// A fetch failure now FAILS the sync (transient) instead of publishing a
+	// wallet valued stables-only.
+	priceMap := map[string]float64{}
+	if hasNonStable {
+		pm, perr := FetchBinanceStylePriceMap(ctx, m.base.Client, m.base.BaseURL)
+		if perr != nil {
+			return nil, fmt.Errorf("%w: mexc spot tickers: %v", ErrSpotPricingUnavailable, perr)
+		}
+		priceMap = pm
+	}
+	spotEquity := ValueSpotHoldingsUSD(totalHoldings, priceMap)
+	spotAvailable := ValueSpotHoldingsUSD(freeHoldings, priceMap)
 
 	// Futures balance via contract.mexc.com
 	futuresEquity := 0.0
@@ -114,18 +115,14 @@ func (m *MEXC) GetBalance(ctx context.Context) (*Balance, error) {
 		}
 		if json.Unmarshal(futBody, &futResp) == nil && futResp.Success {
 			for _, a := range futResp.Data {
-				if a.Equity > 0 {
-					for _, sc := range stablecoins {
-						if strings.EqualFold(a.Currency, sc) {
-							futuresEquity += a.Equity
-							futuresAvailable += a.AvailableBalance
-							// TS parity: realizedBalance = cashBalance (deposited cash +
-							// realised P&L). unrealizedPnL = equity - cashBalance.
-							// Using availableBalance instead overstates unrealized by
-							// positionMargin. See CcxtExchangeConnector.ts extractSwapEquity.
-							futuresCash += a.CashBalance
-						}
-					}
+				if a.Equity > 0 && IsStablecoinUSD(a.Currency) {
+					futuresEquity += a.Equity
+					futuresAvailable += a.AvailableBalance
+					// TS parity: realizedBalance = cashBalance (deposited cash +
+					// realised P&L). unrealizedPnL = equity - cashBalance.
+					// Using availableBalance instead overstates unrealized by
+					// positionMargin. See CcxtExchangeConnector.ts extractSwapEquity.
+					futuresCash += a.CashBalance
 				}
 			}
 		}
@@ -207,33 +204,6 @@ func (m *MEXC) GetFundingFees(ctx context.Context, symbols []string, since time.
 	}
 
 	return fees, nil
-}
-
-// fetchTickerPrice gets the USDT price for an asset from MEXC public ticker.
-func (m *MEXC) fetchTickerPrice(ctx context.Context, asset string) float64 {
-	asset = strings.ToUpper(asset)
-	for _, quote := range []string{"USDT", "USDC"} {
-		symbol := asset + quote
-		url := m.base.BaseURL + "/api/v3/ticker/price?symbol=" + symbol
-		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-		if err != nil {
-			continue
-		}
-		body, err := m.base.DoRequest(req)
-		if err != nil {
-			continue
-		}
-		var ticker struct {
-			Price string `json:"price"`
-		}
-		if json.Unmarshal(body, &ticker) == nil {
-			price, _ := strconv.ParseFloat(ticker.Price, 64)
-			if price > 0 {
-				return price
-			}
-		}
-	}
-	return 0
 }
 
 func (m *MEXC) futuresSignedGET(ctx context.Context, path, params string) ([]byte, error) {
@@ -467,6 +437,28 @@ func (m *MEXC) GetCashflows(ctx context.Context, since time.Time) ([]*Cashflow, 
 	// Deposits
 	var cashflows []*Cashflow
 
+	// CONN-13: the consumer sums Amount and ignores Currency, so a coin
+	// quantity booked as-is turned a 0.5 BTC deposit into $0.50 — a phantom
+	// cashflow that skews the TWR permanently. Price map fetched lazily, on
+	// the first non-stable coin seen.
+	var priceMap map[string]float64
+	usdValue := func(coin string, qty float64) float64 {
+		if IsStablecoinUSD(coin) {
+			return qty
+		}
+		if priceMap == nil {
+			pm, perr := FetchBinanceStylePriceMap(ctx, m.base.Client, m.base.BaseURL)
+			if perr != nil {
+				pm = map[string]float64{}
+			}
+			priceMap = pm
+		}
+		if p := priceMap[strings.ToUpper(coin)+"USDT"]; p > 0 {
+			return qty * p
+		}
+		return 0 // unpriceable dust — never fabricate a flow from it
+	}
+
 	depBody, err := m.signedGET(ctx, "/sapi/v1/capital/deposit/hisrec",
 		fmt.Sprintf("startTime=%d&limit=100", since.UnixMilli()))
 	if err == nil {
@@ -482,9 +474,13 @@ func (m *MEXC) GetCashflows(ctx context.Context, since time.Time) ([]*Cashflow, 
 					continue
 				}
 				amount, _ := strconv.ParseFloat(d.Amount, 64)
+				usd := usdValue(d.Coin, amount)
+				if usd == 0 {
+					continue
+				}
 				cashflows = append(cashflows, &Cashflow{
-					Amount:    amount,
-					Currency:  d.Coin,
+					Amount:    usd,
+					Currency:  "USDT",
 					Timestamp: time.UnixMilli(d.InsertTime),
 				})
 			}
@@ -507,10 +503,14 @@ func (m *MEXC) GetCashflows(ctx context.Context, since time.Time) ([]*Cashflow, 
 					continue
 				}
 				amount, _ := strconv.ParseFloat(w.Amount, 64)
+				usd := usdValue(w.Coin, amount)
+				if usd == 0 {
+					continue
+				}
 				ts, _ := time.Parse("2006-01-02 15:04:05", w.ApplyTime)
 				cashflows = append(cashflows, &Cashflow{
-					Amount:    -amount,
-					Currency:  w.Coin,
+					Amount:    -usd,
+					Currency:  "USDT",
 					Timestamp: ts,
 				})
 			}

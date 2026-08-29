@@ -393,6 +393,14 @@ func newCTraderWSServer(t *testing.T, onMessage func(conn *websocket.Conn, msg w
 			if err := json.Unmarshal(raw, &msg); err != nil {
 				t.Fatalf("unmarshal ws message: %v", err)
 			}
+			// The connector heartbeats on its own timer from a background
+			// goroutine, so one can land after the subtest returned. Handling
+			// it here keeps it out of every per-test switch, whose default
+			// branch would t.Fatalf from this goroutine — a panic, not a
+			// failure, once the test has completed.
+			if msg.PayloadType == ctraderPayloadHeartbeatEvent {
+				continue
+			}
 			onMessage(conn, msg)
 		}
 	}))

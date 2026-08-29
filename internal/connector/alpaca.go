@@ -50,30 +50,22 @@ func (a *Alpaca) DetectIsPaper(_ context.Context) (bool, error) {
 	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(a.apiKey)), "PK"), nil
 }
 
+// CONN-15e: routed through the shared retry policy so a 429 or 5xx blip is
+// retried and, if it persists, marked ErrTransient — the difference between a
+// sync that retries and a snapshot written without this account.
 func (a *Alpaca) doRequest(ctx context.Context, baseURL, path string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+path, nil)
+	body, err := retryHTTP(a.client, func() (*http.Request, error) {
+		req, rerr := http.NewRequestWithContext(ctx, "GET", baseURL+path, nil)
+		if rerr != nil {
+			return nil, rerr
+		}
+		req.Header.Set("APCA-API-KEY-ID", a.apiKey)
+		req.Header.Set("APCA-API-SECRET-KEY", a.apiSecret)
+		return req, nil
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("alpaca API error: %w", err)
 	}
-
-	req.Header.Set("APCA-API-KEY-ID", a.apiKey)
-	req.Header.Set("APCA-API-SECRET-KEY", a.apiSecret)
-
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	// CONN-AUDIT-001 + 002: bounded read + truncated body in errors.
-	body, err := ReadCappedBody(resp.Body, DefaultMaxResponseBytes)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("alpaca API error: %s", TruncatedBody(body))
-	}
-
 	return body, nil
 }
 

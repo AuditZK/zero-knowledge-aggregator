@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -303,7 +304,75 @@ func (l *Lighter) fetchExportTrades(ctx context.Context, accountIndex int, start
 	return l.downloadCSV(ctx, resp.DataURL)
 }
 
+// assertPublicHTTPSURL refuses a download target that points anywhere but the
+// public internet. data_url comes back inside the Lighter API response, so a
+// compromised or MITM'd upstream would otherwise steer this GET at the
+// deployment's own network — the cloud metadata server on 169.254.169.254,
+// mt-bridge, the database. The host is not pinned to a vendor domain because
+// the export CDN is theirs to change; what must never be reachable is
+// anything that is not publicly routable.
+func assertPublicHTTPSURL(ctx context.Context, raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("parse export url: %w", err)
+	}
+	if !strings.EqualFold(u.Scheme, "https") {
+		return fmt.Errorf("export url must be https, got scheme %q", u.Scheme)
+	}
+	if u.User != nil {
+		return fmt.Errorf("export url must not carry credentials")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("export url has no host")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return assertPublicIP(ip)
+	}
+	// A dotless name only resolves inside the deployment's own DNS.
+	if !strings.Contains(host, ".") {
+		return fmt.Errorf("export url host %q is not a public name", host)
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return fmt.Errorf("resolve export host: %w", err)
+	}
+	if len(addrs) == 0 {
+		return fmt.Errorf("resolve export host %q: no address", host)
+	}
+	for _, a := range addrs {
+		if err := assertPublicIP(a.IP); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func assertPublicIP(ip net.IP) error {
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+		return fmt.Errorf("export url resolves to non-public address %s", ip)
+	}
+	return nil
+}
+
+// assertExportURL accepts a data_url that stays on the API origin we already
+// talk to, and otherwise requires a public https target. The export CDN is
+// Lighter's to change, so its host is not pinned; what must never be
+// reachable is anything that is not publicly routable.
+func (l *Lighter) assertExportURL(ctx context.Context, raw string) error {
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		if base, berr := url.Parse(l.baseURL); berr == nil && strings.EqualFold(base.Host, u.Host) {
+			return nil
+		}
+	}
+	return assertPublicHTTPSURL(ctx, raw)
+}
+
 func (l *Lighter) downloadCSV(ctx context.Context, csvURL string) ([]lighterExportRow, error) {
+	if err := l.assertExportURL(ctx, csvURL); err != nil {
+		return nil, fmt.Errorf("lighter export: %w", err)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", csvURL, nil)
 	if err != nil {
 		return nil, err

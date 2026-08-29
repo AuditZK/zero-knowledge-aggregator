@@ -109,12 +109,13 @@ func (b *Binance) GetBalance(ctx context.Context) (*Balance, error) {
 	// alts, COIN-M collateral coins, margin BTC valuation). A transient failure
 	// must fail the sync: a margin-heavy account valued without prices would
 	// persist near-zero equity.
+	// CONN-08: ANY failure class, not just ErrTransient. 451 (geo-block) and
+	// 418 (IP ban) are absent from isRetryableStatus, so they arrived here
+	// unwrapped and fell through to an empty map — which values every alt,
+	// every COIN-M collateral coin and the whole margin BTC position at zero.
 	priceMap, perr := FetchBinanceStylePriceMap(ctx, b.client, binanceSpotAPI)
-	if errors.Is(perr, ErrTransient) {
-		return nil, fmt.Errorf("price map: %w", perr)
-	}
-	if priceMap == nil {
-		priceMap = map[string]float64{}
+	if perr != nil {
+		return nil, fmt.Errorf("%w: binance spot tickers: %v", ErrSpotPricingUnavailable, perr)
 	}
 
 	b.cachedBreakdown = nil

@@ -55,25 +55,63 @@ func (c *Coinbase) TestConnection(ctx context.Context) error {
 	return err
 }
 
-func (c *Coinbase) GetBalance(ctx context.Context) (*Balance, error) {
-	body, err := c.doRequest(ctx, "GET", "/v2/accounts?limit=100")
-	if err != nil {
-		return nil, fmt.Errorf("accounts: %w", err)
-	}
+type coinbaseAccount struct {
+	Balance struct {
+		Amount   string `json:"amount"`
+		Currency string `json:"currency"`
+	} `json:"balance"`
+	Currency struct {
+		Code string `json:"code"`
+	} `json:"currency"`
+}
 
-	var resp struct {
-		Data []struct {
-			Balance struct {
-				Amount   string `json:"amount"`
-				Currency string `json:"currency"`
-			} `json:"balance"`
-			Currency struct {
-				Code string `json:"code"`
-			} `json:"currency"`
-		} `json:"data"`
+// coinbaseMaxAccountPages bounds the next_uri walk. Reaching it is an error,
+// not a truncation: past 100 wallets the old single-page read under-reported
+// the equity in silence. Same contract as igMaxTransactionPages.
+const coinbaseMaxAccountPages = 25
+
+func (c *Coinbase) fetchAccounts(ctx context.Context) ([]coinbaseAccount, error) {
+	path := "/v2/accounts?limit=100"
+	var accounts []coinbaseAccount
+
+	for page := 0; ; page++ {
+		if page >= coinbaseMaxAccountPages {
+			return nil, fmt.Errorf("accounts exceeded %d pages", coinbaseMaxAccountPages)
+		}
+
+		body, err := c.doRequest(ctx, "GET", path)
+		if err != nil {
+			return nil, fmt.Errorf("accounts: %w", err)
+		}
+
+		var resp struct {
+			Data       []coinbaseAccount `json:"data"`
+			Pagination struct {
+				NextURI string `json:"next_uri"`
+			} `json:"pagination"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return nil, fmt.Errorf("parse accounts: %w", err)
+		}
+		accounts = append(accounts, resp.Data...)
+
+		next := strings.TrimSpace(resp.Pagination.NextURI)
+		if next == "" {
+			return accounts, nil
+		}
+		// next_uri is upstream-supplied and gets appended to the API base:
+		// only a same-origin absolute path may steer the next request.
+		if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
+			return nil, fmt.Errorf("accounts: next_uri is not a path on this API")
+		}
+		path = next
 	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("parse accounts: %w", err)
+}
+
+func (c *Coinbase) GetBalance(ctx context.Context) (*Balance, error) {
+	accounts, err := c.fetchAccounts(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	// CONN-12, worst case: Coinbase has no futures leg (GetPositions returns
@@ -82,7 +120,7 @@ func (c *Coinbase) GetBalance(ctx context.Context) (*Balance, error) {
 	// a broken connection rather than a wrong number.
 	var holdings []SpotHolding
 	hasNonStable := false
-	for _, a := range resp.Data {
+	for _, a := range accounts {
 		asset := a.Balance.Currency
 		if asset == "" {
 			asset = a.Currency.Code

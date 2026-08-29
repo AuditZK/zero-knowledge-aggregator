@@ -73,12 +73,25 @@ func (d *Deribit) GetBalance(ctx context.Context) (*Balance, error) {
 		totalUnrealPNL float64
 	)
 
+	// CONN-14: an account always answers on at least one currency, so four
+	// failures are a failed read and not an empty wallet. Counting the
+	// answers is what separates them — the bare `continue` below published a
+	// zero equity with a nil error on an auth failure or a 429 burst.
+	answered := 0
+	var firstErr error
+	noteErr := func(err error) {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+
 	for _, ccy := range currencies {
 		body, err := d.privateGET(ctx, deribitPathAccountSummary, url.Values{
 			"currency": {ccy},
 		})
 		if err != nil {
 			// Currency sub-account may not exist.
+			noteErr(err)
 			continue
 		}
 
@@ -90,10 +103,21 @@ func (d *Deribit) GetBalance(ctx context.Context) (*Balance, error) {
 			} `json:"result"`
 		}
 		if err := json.Unmarshal(body, &resp); err != nil {
+			noteErr(fmt.Errorf("parse %s account summary: %w", ccy, err))
+			continue
+		}
+		answered++
+
+		if resp.Result.Equity == 0 && resp.Result.Balance == 0 && resp.Result.AvailableFunds == 0 {
 			continue
 		}
 
+		// Same guard as GetCashflows and GetBalanceByMarket: a failed ticker
+		// returns 0, which would silently write the BTC/ETH sub-account off.
 		m := d.usdMultiplier(ctx, ccy)
+		if m <= 0 {
+			return nil, fmt.Errorf("%w: deribit %s ticker", ErrSpotPricingUnavailable, ccy)
+		}
 		eq := resp.Result.Equity * m
 		bl := resp.Result.Balance * m
 		av := resp.Result.AvailableFunds * m
@@ -102,6 +126,13 @@ func (d *Deribit) GetBalance(ctx context.Context) (*Balance, error) {
 		totalBalance += bl
 		totalAvail += av
 		totalUnrealPNL += (eq - bl)
+	}
+
+	if answered == 0 {
+		if firstErr != nil {
+			return nil, fmt.Errorf("%w: deribit account summary: %v", ErrTransient, firstErr)
+		}
+		return nil, fmt.Errorf("%w: deribit returned no account summary", ErrTransient)
 	}
 
 	return &Balance{

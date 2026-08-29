@@ -121,28 +121,19 @@ func (t *TradeStation) doRequest(ctx context.Context, path string) ([]byte, erro
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", tradeStationAPI+path, nil)
+	// CONN-15e: shared retry policy, so a transient 429/5xx is retried and
+	// then marked ErrTransient instead of failing the sync outright.
+	body, err := retryHTTP(t.client, func() (*http.Request, error) {
+		req, rerr := http.NewRequestWithContext(ctx, "GET", tradeStationAPI+path, nil)
+		if rerr != nil {
+			return nil, rerr
+		}
+		req.Header.Set("Authorization", "Bearer "+t.accessToken)
+		return req, nil
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tradestation API error: %w", err)
 	}
-
-	req.Header.Set("Authorization", "Bearer "+t.accessToken)
-
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	// CONN-AUDIT-001 + 002: bounded read + truncated body in errors.
-	body, err := ReadCappedBody(resp.Body, DefaultMaxResponseBytes)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("tradestation API error: %s", TruncatedBody(body))
-	}
-
 	return body, nil
 }
 
