@@ -35,8 +35,23 @@ const (
 	// 1.4 = adds metrics.riskFreeRate (annual %, 0 = rf-free legacy ratios) —
 	//       the assumption behind sharpeRatio/sortinoRatio must sit under the
 	//       same signature, otherwise a signed Sharpe is ambiguous.
-	PayloadVersion = "1.4"
+	// 1.5 = adds reportName. It sat among the identification fields while
+	//       being unsigned, so "Demo account — test" could be renamed "Audited
+	//       track record 2026" and still verify.
+	PayloadVersion = "1.5"
 )
+
+// payloadVersionsWithoutReportName are the pre-1.5 signed-payload shapes that
+// omit reportName. Older reports keep their original shape so VerifyReport
+// reproduces their hash.
+var payloadVersionsWithoutReportName = map[string]struct{}{
+	"":    {},
+	"1.0": {},
+	"1.1": {},
+	"1.2": {},
+	"1.3": {},
+	"1.4": {},
+}
 
 // payloadVersionsWithoutWinRate are the pre-1.2 signed-payload shapes whose
 // metrics block omits winRate/profitFactor. buildFinancialPayload must
@@ -463,6 +478,12 @@ func buildFinancialPayload(report *SignedReport) map[string]any {
 	if _, legacy := payloadVersionsWithoutRiskFreeRate[report.PayloadVersion]; !legacy {
 		metrics := payload["metrics"].(map[string]any)
 		metrics["riskFreeRate"] = report.RiskFreeRate
+	}
+
+	// SEC-14: the report label is what a reader sees first, so renaming a
+	// report must break its signature. Entered the signed payload at 1.5.
+	if _, legacy := payloadVersionsWithoutReportName[report.PayloadVersion]; !legacy {
+		payload["reportName"] = report.ReportName
 	}
 
 	// enclaveAttestation binds the signed report to a specific SEV-SNP

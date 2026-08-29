@@ -377,3 +377,57 @@ func marshalSortedJSONReference(v any) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
+
+// TestReportNameInPayload pins the PayloadVersion-gated behaviour of
+// reportName (SEC-14). Pre-1.5 reports omit it so VerifyReport still
+// reproduces their hash; 1.5+ reports always emit it, so renaming a report
+// invalidates its signature.
+func TestReportNameInPayload(t *testing.T) {
+	cases := []struct {
+		payloadVersion string
+		wantKey        bool
+	}{
+		{payloadVersion: "1.4", wantKey: false},
+		{payloadVersion: "1.5", wantKey: true},
+		{payloadVersion: "", wantKey: false},
+	}
+
+	for _, tc := range cases {
+		t.Run("v"+tc.payloadVersion, func(t *testing.T) {
+			report := &SignedReport{PayloadVersion: tc.payloadVersion, ReportName: "Demo account"}
+			payload := buildFinancialPayload(report)
+			name, hasKey := payload["reportName"]
+			if hasKey != tc.wantKey {
+				t.Fatalf("payloadVersion=%q: reportName present=%v, want=%v", tc.payloadVersion, hasKey, tc.wantKey)
+			}
+			if tc.wantKey && name != "Demo account" {
+				t.Errorf("reportName = %v, want %q", name, "Demo account")
+			}
+		})
+	}
+}
+
+// The whole point of SEC-14: a renamed report must stop verifying.
+func TestRenamedReportFailsVerification(t *testing.T) {
+	signer, err := NewReportSignerGenerate()
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+	report, err := signer.Sign(&ReportInput{
+		UserUID:     "uid-1",
+		ReportName:  "Demo account — test",
+		PeriodStart: time.Now().AddDate(0, -1, 0),
+		PeriodEnd:   time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if ok, err := VerifyReport(report); err != nil || !ok {
+		t.Fatalf("freshly signed report does not verify: ok=%v err=%v", ok, err)
+	}
+
+	report.ReportName = "Audited track record 2026"
+	if ok, _ := VerifyReport(report); ok {
+		t.Fatal("a renamed report still verified — reportName is outside the signature")
+	}
+}
