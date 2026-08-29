@@ -3,13 +3,46 @@ package connector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
 
-const okxAPI = "https://www.okx.com"
+// okxRegionalHosts lists the OKX API domains in probe order.
+//
+// OKX runs one order book per regulatory entity, and an API key only exists
+// on the entity that issued it: a key created on www.okx.com (global) answers
+// only there, a key from OKX Europe (accounts registered on my.okx.com, the
+// MiCA entity) only on eea.okx.com, a key from OKX US / AU (app.okx.com) only
+// on us.okx.com. Every other domain answers 401 code 50119 "API key doesn't
+// exist" for it.
+//
+// Nothing in the credential shape says which entity issued a key and the
+// connect form does not ask, so the connector probes: the first domain that
+// recognises the key is pinned for the lifetime of the connector. The cost is
+// one refused request per region skipped, once per connector instance, i.e.
+// once per sync for a non-global account. Observed 2026-08-29: a French
+// signup's OKX Europe key was refused three times on the global domain and
+// reported to them as bad credentials.
+var okxRegionalHosts = []string{
+	"https://www.okx.com", // global
+	"https://eea.okx.com", // OKX Europe: accounts registered on my.okx.com
+	"https://us.okx.com",  // OKX US / AU: accounts registered on app.okx.com
+}
+
+// okxUnknownKeyCodes are the OKX error codes meaning "this domain has never
+// seen this key": the only signal worth trying the next region on. Every
+// other rejection (bad signature 50113, wrong passphrase 50105, IP not
+// whitelisted 50110) proves the key exists on the domain that answered, so
+// probing further would only turn a precise error into "doesn't exist".
+var okxUnknownKeyCodes = map[string]bool{
+	"50119": true, // "API key doesn't exist"
+	"50111": true, // "Invalid OK-ACCESS-KEY"
+}
 
 // OKX implements Connector for OKX exchange
 type OKX struct {
@@ -17,15 +50,25 @@ type OKX struct {
 	apiSecret  string
 	passphrase string
 	client     *http.Client
+
+	mu    sync.Mutex
+	hosts []string // candidate API domains; collapses to one once a key is recognised
 }
 
 // NewOKX creates a new OKX connector
 func NewOKX(creds *Credentials) *OKX {
+	return newOKXWithHosts(creds, &http.Client{Timeout: 30 * time.Second}, okxRegionalHosts)
+}
+
+// newOKXWithHosts is the constructor the tests use to point the connector at
+// fake regional hosts.
+func newOKXWithHosts(creds *Credentials, client *http.Client, hosts []string) *OKX {
 	return &OKX{
 		apiKey:     creds.APIKey,
 		apiSecret:  creds.APISecret,
 		passphrase: creds.Passphrase,
-		client:     &http.Client{Timeout: 30 * time.Second},
+		client:     client,
+		hosts:      append([]string(nil), hosts...),
 	}
 }
 
@@ -37,12 +80,56 @@ func (o *OKX) sign(timestamp, method, path, body string) string {
 	return signHMACBase64(o.apiSecret, timestamp+method+path+body)
 }
 
+// candidateHosts returns the domains still in play, in probe order.
+func (o *OKX) candidateHosts() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.hosts...)
+}
+
+// pinHost keeps only the domain that recognised the key: every later call on
+// this connector goes straight there and no other region is probed again.
+func (o *OKX) pinHost(host string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.hosts = []string{host}
+}
+
 func (o *OKX) doRequest(ctx context.Context, method, path string) ([]byte, error) {
+	hosts := o.candidateHosts()
+	if len(hosts) == 0 {
+		return nil, errors.New("okx: no API host configured")
+	}
+
+	var err error
+	for i, host := range hosts {
+		var body []byte
+		body, err = o.doRequestAt(ctx, host, method, path)
+		if err == nil {
+			o.pinHost(host)
+			return body, nil
+		}
+		if !okxKeyUnknownHere(body, err) {
+			return nil, err
+		}
+		if i == len(hosts)-1 && i > 0 {
+			return nil, fmt.Errorf("okx: API key unknown on every OKX region (%s): %w",
+				strings.Join(okxHostNames(hosts), ", "), err)
+		}
+	}
+	return nil, err
+}
+
+// doRequestAt signs and sends one request against host. On failure the
+// response body comes back alongside the error so the caller can read the
+// OKX error code out of it: retryHTTP folds the body into the error text and
+// does not retry a 401, so nothing is lost by looking at it.
+func (o *OKX) doRequestAt(ctx context.Context, host, method, path string) ([]byte, error) {
 	body, err := retryHTTP(o.client, func() (*http.Request, error) {
 		timestamp := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 		signature := o.sign(timestamp, method, path, "")
 
-		req, err := http.NewRequestWithContext(ctx, method, okxAPI+path, nil)
+		req, err := http.NewRequestWithContext(ctx, method, host+path, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -55,7 +142,7 @@ func (o *OKX) doRequest(ctx context.Context, method, path string) ([]byte, error
 		return req, nil
 	})
 	if err != nil {
-		return nil, err
+		return body, err
 	}
 
 	var result struct {
@@ -64,10 +151,44 @@ func (o *OKX) doRequest(ctx context.Context, method, path string) ([]byte, error
 	}
 	json.Unmarshal(body, &result)
 	if result.Code != "0" {
-		return nil, fmt.Errorf("okx API error: %s", vendorErrorDetail(result.Msg))
+		return body, fmt.Errorf("okx API error: %s", vendorErrorDetail(result.Msg))
 	}
 
 	return body, nil
+}
+
+// okxKeyUnknownHere reports whether a failed request means the answering
+// domain has never issued the key, the one case where another region can
+// succeed. OKX answers HTTP 401 with a JSON envelope for it, so the body is
+// checked first; the error text is the fallback for the paths where only the
+// folded body survives.
+func okxKeyUnknownHere(body []byte, err error) bool {
+	if err == nil {
+		return false
+	}
+	var envelope struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(body, &envelope) == nil && envelope.Code != "" {
+		return okxUnknownKeyCodes[envelope.Code]
+	}
+	msg := err.Error()
+	for code := range okxUnknownKeyCodes {
+		if strings.Contains(msg, `"code":"`+code+`"`) {
+			return true
+		}
+	}
+	return false
+}
+
+// okxHostNames strips the scheme for error messages: "www.okx.com" reads as a
+// region, "https://www.okx.com" reads as a URL somebody should click.
+func okxHostNames(hosts []string) []string {
+	names := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		names = append(names, strings.TrimPrefix(strings.TrimPrefix(h, "https://"), "http://"))
+	}
+	return names
 }
 
 func (o *OKX) TestConnection(ctx context.Context) error {
