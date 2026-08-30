@@ -153,6 +153,7 @@ func (s *Server) Start(ctx context.Context) error {
 		mux.HandleFunc("/api/v1/sync", s.jwtRequired(s.handler.ProcessSyncJob))
 		mux.HandleFunc("/api/v1/metrics", s.jwtRequired(s.handler.GetMetrics))
 		mux.HandleFunc("/api/v1/snapshots", s.jwtRequired(s.handler.GetSnapshots))
+		mux.HandleFunc("/api/v1/history/rebuilt", s.jwtRequired(s.handler.DeleteRebuiltHistory))
 		mux.HandleFunc("/api/v1/report", s.jwtRequired(s.handler.GenerateReport))
 		mux.HandleFunc("/api/v1/verify", s.handler.VerifySignature)
 	}

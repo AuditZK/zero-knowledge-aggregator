@@ -367,6 +367,11 @@ func (s *ConnectionService) MarkRebuildFinalized(ctx context.Context, connID str
 	return s.repo.MarkRebuildFinalized(ctx, connID, at)
 }
 
+// ClearRebuildConsent passes through to ConnectionRepo.
+func (s *ConnectionService) ClearRebuildConsent(ctx context.Context, connID string) error {
+	return s.repo.ClearRebuildConsent(ctx, connID)
+}
+
 // GetExchangeMetadata returns exchange-level metadata for active connections.
 func (s *ConnectionService) GetExchangeMetadata(ctx context.Context, userUID string) ([]*ExchangeMetadata, error) {
 	details, err := s.repo.GetExchangeDetailsByUser(ctx, userUID)

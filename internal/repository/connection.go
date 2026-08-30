@@ -1078,6 +1078,26 @@ func (r *ConnectionRepo) MarkRebuildRequested(ctx context.Context, connID string
 	return nil
 }
 
+// ClearRebuildConsent withdraws the SEC-08 opt-in so the nightly recalibration
+// pass stops selecting this connection. Deleting rebuilt history without this
+// is undone within hours: the pass re-fetches the window and re-upserts it,
+// overwriting live rows on the way through.
+func (r *ConnectionRepo) ClearRebuildConsent(ctx context.Context, connID string) error {
+	if !r.HasRebuildRequestedAtCol(ctx) {
+		return nil
+	}
+	col := r.qcol("rebuild_requested_at")
+	query := `UPDATE exchange_connections SET ` + col + ` = NULL WHERE id = $1`
+	tag, err := r.pool.Exec(ctx, query, connID)
+	if err != nil {
+		return fmt.Errorf("clear rebuild consent: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // qcol returns the schema-aware, double-quoted column name suitable for
 // embedding in raw SQL. Uses colName() for snake/camel selection then wraps
 // with quotes — safe to splice because the input is a hardcoded constant.

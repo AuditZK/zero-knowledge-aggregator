@@ -862,6 +862,58 @@ func (h *Handler) GetMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetSnapshots - GET /api/v1/snapshots?user_uid=xxx&exchange=xxx&start=xxx&end=xxx
+// DeleteRebuiltHistory drops the caller's rebuilt history for one connection.
+// Snapshots captured by the daily sync are never in scope, whatever their date.
+func (h *Handler) DeleteRebuiltHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, msgMethodNotAllowed, http.StatusMethodNotAllowed)
+		return
+	}
+
+	userUID := resolveUserUID(r.Context(), r.URL.Query().Get("user_uid"))
+	exchange := r.URL.Query().Get("exchange")
+	label := r.URL.Query().Get("label")
+
+	if err := validation.ValidateUserUID(userUID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "error": err.Error()})
+		return
+	}
+	if err := validation.ValidateExchange(exchange); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "error": err.Error()})
+		return
+	}
+	if err := validation.ValidateLabel(label); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "error": err.Error()})
+		return
+	}
+
+	if h.syncSvc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"success": false,
+			"error":   "sync service not configured",
+		})
+		return
+	}
+
+	deleted, err := h.syncSvc.DeleteRebuiltHistory(r.Context(), userUID, exchange, label)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrHistoryNotDeletable):
+			writeJSON(w, http.StatusConflict, map[string]any{"success": false, "error": err.Error()})
+		case errors.Is(err, repository.ErrOriginUnavailable):
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "error": err.Error()})
+		case errors.Is(err, repository.ErrNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]any{"success": false, "error": "connection not found"})
+		default:
+			h.logger.Error("delete rebuilt history failed", zap.Error(err))
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "error": h.sanitizeErr(err)})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "deleted": deleted})
+}
+
 func (h *Handler) GetSnapshots(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, msgMethodNotAllowed, http.StatusMethodNotAllowed)

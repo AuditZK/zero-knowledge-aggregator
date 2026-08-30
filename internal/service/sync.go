@@ -1950,6 +1950,60 @@ func externalRebuilderSupports(exchange string) bool {
 // re-egressing credentials to the rebuilder on every nightly tick forever.
 const maxRebuildRetryDays = 7
 
+// ErrHistoryNotDeletable is returned for a connection whose history was
+// reconstructed inside the perimeter. Those rows are indistinguishable from
+// live ones on the production schema, so there is nothing safe to delete.
+var ErrHistoryNotDeletable = errors.New("history reconstruction is not deletable for this exchange")
+
+// historyReconstructedInEnclave reports whether an exchange's backfill runs
+// through a HistoricalSnapshotProvider rather than the external rebuilder.
+// Deliberately separate from reconstructsEverySync, which carries its own
+// narrow contract and must not become a general gate.
+func historyReconstructedInEnclave(exchange string) bool {
+	switch strings.ToLower(exchange) {
+	case "ibkr", "ctrader":
+		return true
+	default:
+		return false
+	}
+}
+
+// DeleteRebuiltHistory drops a connection's out-of-perimeter rebuilt snapshots
+// and returns how many were removed. Live snapshots are untouched: the origin
+// column separates them, so days synced since the rebuild survive even when
+// they fall inside the rebuilt window.
+//
+// Consent is withdrawn before the rows go, not after. The nightly
+// recalibration pass selects on rebuild_requested_at, so a failure between the
+// two steps leaves it disarmed and the history intact — the caller retries.
+// The reverse order leaves a window in which the pass re-fetches and re-upserts
+// everything that was just deleted.
+func (s *SyncService) DeleteRebuiltHistory(ctx context.Context, userUID, exchange, label string) (int64, error) {
+	if historyReconstructedInEnclave(exchange) {
+		return 0, ErrHistoryNotDeletable
+	}
+
+	conn, err := s.connSvc.GetActiveConnectionByLabel(ctx, userUID, exchange, label)
+	if err != nil {
+		return 0, fmt.Errorf("load connection: %w", err)
+	}
+
+	if err := s.connSvc.ClearRebuildConsent(ctx, conn.ID); err != nil {
+		return 0, fmt.Errorf("withdraw rebuild consent: %w", err)
+	}
+
+	deleted, err := s.snapshotRepo.DeleteExternalRebuilderHistory(ctx, userUID, exchange, label)
+	if err != nil {
+		return 0, err
+	}
+
+	s.logger.Info("rebuilt history deleted",
+		zap.String("user_uid", userUID),
+		zap.String("exchange", exchange),
+		zap.Int64("snapshots", deleted))
+	return deleted, nil
+}
+
 // RecalibrateRebuiltHistories re-runs the external rebuilder for connections
 // whose initial rebuild was anchored on the imprecise connect-time live
 // equity (= live perp+spot fetched at e.g. 14:32 UTC, when the user clicked

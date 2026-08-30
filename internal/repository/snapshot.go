@@ -357,6 +357,64 @@ func (r *SnapshotRepo) GetExternalRebuilderDays(ctx context.Context, userUID str
 	return out, rows.Err()
 }
 
+// ErrOriginUnavailable is returned when an operation needs to tell rebuilt
+// snapshots from live ones but the origin column (migration 015) is absent.
+var ErrOriginUnavailable = errors.New("snapshot origin column unavailable")
+
+// DeleteExternalRebuilderHistory drops the snapshots a connection received
+// from the out-of-perimeter rebuilder and returns how many rows went.
+//
+// The predicate is the origin column rather than a date cutoff, so a user who
+// rebuilt 100 days and has since been syncing keeps every live day, including
+// any that falls inside the rebuilt window. Without that column there is no
+// safe way to separate the two, and a date heuristic would take live
+// snapshots with it — hence the refusal rather than a best effort.
+func (r *SnapshotRepo) DeleteExternalRebuilderHistory(ctx context.Context, userUID, exchange, label string) (int64, error) {
+	if !r.hasFromExternalRebuilderColumn(ctx) {
+		return 0, ErrOriginUnavailable
+	}
+
+	where, args := rebuiltHistoryScope(r.isTSSchema, r.hasLabelColumn(ctx), userUID, exchange, label)
+	tag, err := r.pool.Exec(ctx, "DELETE FROM snapshot_data WHERE "+where, args...)
+	if err != nil {
+		return 0, fmt.Errorf("delete rebuilt snapshots: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// rebuiltHistoryScope builds the predicate isolating one connection's
+// out-of-perimeter rebuilt rows. The origin term is appended last and
+// unconditionally: it is the only thing standing between a deletion and the
+// user's live snapshots.
+func rebuiltHistoryScope(isTS, hasLabel bool, userUID, exchange, label string) (string, []any) {
+	userCol := "user_uid"
+	if isTS {
+		userCol = `"userUid"`
+	}
+	args := []any{userUID, exchange}
+	clause := userCol + " = $1 AND exchange = $2"
+	if hasLabel {
+		clause += " AND label = $3"
+		args = append(args, label)
+	}
+	return clause + " AND from_external_rebuilder = TRUE", args
+}
+
+// CountExternalRebuilderSnapshots reports how many rebuilt rows a connection
+// holds, so a caller can show what a deletion would take before it runs.
+func (r *SnapshotRepo) CountExternalRebuilderSnapshots(ctx context.Context, userUID, exchange, label string) (int64, error) {
+	if !r.hasFromExternalRebuilderColumn(ctx) {
+		return 0, ErrOriginUnavailable
+	}
+
+	where, args := rebuiltHistoryScope(r.isTSSchema, r.hasLabelColumn(ctx), userUID, exchange, label)
+	var n int64
+	if err := r.pool.QueryRow(ctx, "SELECT count(*) FROM snapshot_data WHERE "+where, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count rebuilt snapshots: %w", err)
+	}
+	return n, nil
+}
+
 func (r *SnapshotRepo) getByUserAndDateRange(ctx context.Context, userUID string, start, end time.Time, verifiableOnly bool) ([]*Snapshot, error) {
 	hasLabel := r.hasLabelColumn(ctx)
 	hasHist := r.hasIsHistoricalColumn(ctx)
