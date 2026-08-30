@@ -2360,13 +2360,8 @@ func (s *SyncService) persistHistoricalSnapshots(
 // supersedes, with its deposit already zeroed, for the caller to persist in the
 // same batch. Nil when there is nothing to correct.
 func (s *SyncService) applyInceptionDeposit(ctx context.Context, connMeta *repository.ExchangeConnection, snapshots []*repository.Snapshot) *repository.Snapshot {
-	earliest := snapshots[0]
-	for _, sn := range snapshots {
-		if sn.Timestamp.Before(earliest.Timestamp) {
-			earliest = sn
-		}
-	}
-	if earliest.TotalEquity <= 0 {
+	earliest := earliestFundedDay(snapshots)
+	if earliest == nil {
 		return nil
 	}
 	// One read of the connection's whole existing timeline serves both checks:
@@ -2394,6 +2389,24 @@ func (s *SyncService) applyInceptionDeposit(ctx context.Context, connMeta *repos
 		)
 	}
 	return superseded
+}
+
+// earliestFundedDay returns the batch's first day that carries equity, which
+// is the day the account actually starts. Taking the first day outright let a
+// zero-padded reconstruction abandon the whole inception rule — including the
+// clearing of the connect-time stamp sitting above it, which then survived as
+// a phantom deposit worth the entire balance. Nil when nothing is funded.
+func earliestFundedDay(snapshots []*repository.Snapshot) *repository.Snapshot {
+	var earliest *repository.Snapshot
+	for _, sn := range snapshots {
+		if sn.TotalEquity <= 0 {
+			continue
+		}
+		if earliest == nil || sn.Timestamp.Before(earliest.Timestamp) {
+			earliest = sn
+		}
+	}
+	return earliest
 }
 
 // resolveInception decides, for a reconstructed series landing on a
@@ -2468,6 +2481,31 @@ func retryWithBackoff(ctx context.Context, maxAttempts int, base time.Duration, 
 	return err
 }
 
+// withoutLeadingEmptyDays drops the run of empty days a reconstruction emits
+// ahead of the account's real history: the external rebuilder pads the whole
+// window it was asked for, so a 90-day request against a 9-day-old account
+// arrives with 81 zero-equity days in front. Persisted, they draw months of
+// flat zero on the dashboard and leave the batch's earliest day carrying no
+// equity, which is how applyInceptionDeposit came to skip clearing a
+// connect-time stamp. Interior empty days are kept — an account emptied
+// mid-history is real data.
+func withoutLeadingEmptyDays(hs []*connector.HistoricalSnapshot) []*connector.HistoricalSnapshot {
+	ordered := make([]*connector.HistoricalSnapshot, len(hs))
+	copy(ordered, hs)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Date.Before(ordered[j].Date) })
+	for i, h := range ordered {
+		if !isEmptyReconstructedDay(h) {
+			return ordered[i:]
+		}
+	}
+	return nil
+}
+
+func isEmptyReconstructedDay(h *connector.HistoricalSnapshot) bool {
+	return h.TotalEquity == 0 && h.RealizedBalance == 0 &&
+		h.Deposits == 0 && h.Withdrawals == 0 && h.TotalTrades == 0
+}
+
 // buildHistoricalSnapshots maps connector daily summaries to repo Snapshots
 // marked is_historical=true, skipping the today bucket (owned by the live
 // branch). Pure function — no IO — to keep the upsert loop testable.
@@ -2477,7 +2515,7 @@ func buildHistoricalSnapshots(
 	todayKey time.Time,
 	fromExternalRebuilder bool,
 ) (snapshots []*repository.Snapshot, skippedToday int) {
-	for _, h := range hs {
+	for _, h := range withoutLeadingEmptyDays(hs) {
 		dayKey := time.Date(h.Date.Year(), h.Date.Month(), h.Date.Day(), 0, 0, 0, 0, time.UTC)
 		if dayKey.Equal(todayKey) {
 			skippedToday++
