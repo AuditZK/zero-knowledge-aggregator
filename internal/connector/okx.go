@@ -300,13 +300,6 @@ func (o *OKX) GetPositions(ctx context.Context) ([]*Position, error) {
 			}
 		}
 
-		marketType := "swap"
-		if p.InstType == "FUTURES" {
-			marketType = "futures"
-		} else if p.InstType == "OPTION" {
-			marketType = "options"
-		}
-
 		positions = append(positions, &Position{
 			Symbol:        p.InstId,
 			Side:          side,
@@ -314,16 +307,61 @@ func (o *OKX) GetPositions(ctx context.Context) ([]*Position, error) {
 			EntryPrice:    entry,
 			MarkPrice:     mark,
 			UnrealizedPnL: unrealized,
-			MarketType:    marketType,
+			MarketType:    okxMarketType(p.InstType),
 		})
 	}
 
 	return positions, nil
 }
 
+// okxFillInstTypes are the product lines fills-history is queried on. OKX
+// makes instType mandatory and answers for exactly one per call, so asking
+// only for SWAP made every spot and margin fill invisible: an account trading
+// spot reported zero trades, zero volume and zero fees while its equity moved
+// daily. One call per line is the price of seeing them.
+var okxFillInstTypes = []string{"SPOT", "MARGIN", "SWAP", "FUTURES", "OPTION"}
+
+func okxMarketType(instType string) string {
+	switch instType {
+	case "SPOT":
+		return MarketSpot
+	case "MARGIN":
+		return MarketMargin
+	case "FUTURES":
+		return MarketFutures
+	case "OPTION":
+		return MarketOptions
+	default:
+		return MarketSwap
+	}
+}
+
 func (o *OKX) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade, error) {
-	path := fmt.Sprintf("/api/v5/trade/fills-history?instType=SWAP&begin=%d&end=%d&limit=100",
-		start.UnixMilli(), end.UnixMilli())
+	var trades []*Trade
+	var lastErr error
+	answered := false
+
+	for _, instType := range okxFillInstTypes {
+		batch, err := o.fillsFor(ctx, instType, start, end)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		answered = true
+		trades = append(trades, batch...)
+	}
+
+	// A product line the account never enabled answers with an error; only a
+	// run where every line failed is a real failure worth surfacing.
+	if !answered && lastErr != nil {
+		return nil, lastErr
+	}
+	return trades, nil
+}
+
+func (o *OKX) fillsFor(ctx context.Context, instType string, start, end time.Time) ([]*Trade, error) {
+	path := fmt.Sprintf("/api/v5/trade/fills-history?instType=%s&begin=%d&end=%d&limit=100",
+		instType, start.UnixMilli(), end.UnixMilli())
 
 	body, err := o.doRequest(ctx, "GET", path)
 	if err != nil {
@@ -355,13 +393,6 @@ func (o *OKX) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade, er
 		fee, _ := strconv.ParseFloat(t.Fee, 64)
 		ts, _ := strconv.ParseInt(t.Ts, 10, 64)
 
-		marketType := "swap"
-		if t.InstType == "SPOT" {
-			marketType = "spot"
-		} else if t.InstType == "FUTURES" {
-			marketType = "futures"
-		}
-
 		trades = append(trades, &Trade{
 			ID:       t.TradeId,
 			Symbol:   t.InstId,
@@ -375,7 +406,7 @@ func (o *OKX) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade, er
 			Fee:         -fee,
 			FeeCurrency: t.FeeCcy,
 			Timestamp:   time.UnixMilli(ts),
-			MarketType:  marketType,
+			MarketType:  okxMarketType(t.InstType),
 		})
 	}
 
