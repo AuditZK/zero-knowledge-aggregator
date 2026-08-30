@@ -153,3 +153,74 @@ func TestResolveInception_OlderHistoryDisablesBoth(t *testing.T) {
 		}
 	}
 }
+
+// The defect Sylvain's OKX account exposed on 2026-08-30. The rebuild opened
+// on zero-equity padding, so the earliest day of the batch carried no equity;
+// the rule bailed on it and never reached the clearing, leaving the whole
+// balance booked as a deposit on connection day. Whichever end the padding is
+// read from, the funded day is the one that counts.
+func TestEarliestFundedDay_SkipsTheZeroPadding(t *testing.T) {
+	funded := snap(day(2026, time.August, 21), 3310.97, 0)
+	batch := []*repository.Snapshot{
+		snap(day(2026, time.June, 3), 0, 0),
+		snap(day(2026, time.June, 4), 0, 0),
+		funded,
+		snap(day(2026, time.August, 22), 3551.59, 0),
+	}
+
+	got := earliestFundedDay(batch)
+
+	if got == nil {
+		t.Fatal("no funded day found — the inception rule abandons a zero-padded series")
+	}
+	if !got.Timestamp.Equal(funded.Timestamp) {
+		t.Fatalf("earliest funded day = %s, want %s", got.Timestamp.Format("2006-01-02"), funded.Timestamp.Format("2006-01-02"))
+	}
+}
+
+func TestEarliestFundedDay_NothingFundedIsNil(t *testing.T) {
+	batch := []*repository.Snapshot{
+		snap(day(2026, time.June, 3), 0, 0),
+		snap(day(2026, time.June, 4), 0, 0),
+	}
+	if got := earliestFundedDay(batch); got != nil {
+		t.Fatalf("got %+v, want nil on an entirely empty series", got)
+	}
+}
+
+func TestEarliestFundedDay_EmptyBatchIsNil(t *testing.T) {
+	if got := earliestFundedDay(nil); got != nil {
+		t.Fatalf("got %+v, want nil", got)
+	}
+}
+
+// End to end over the pure half of the rule: a zero-padded reconstruction
+// landing under a connect-time stamp must clear it. This is the $3,569.14
+// phantom deposit, reproduced.
+func TestZeroPaddedReconstruction_ClearsTheConnectStamp(t *testing.T) {
+	live := snap(day(2026, time.August, 30), 3569.14, 3569.14)
+	batch := []*repository.Snapshot{
+		snap(day(2026, time.June, 3), 0, 0),
+		snap(day(2026, time.August, 21), 3310.97, 0),
+		snap(day(2026, time.August, 29), 3529.17, 0),
+	}
+
+	earliest := earliestFundedDay(batch)
+	if earliest == nil {
+		t.Fatal("the padded series yielded no inception day")
+	}
+	stamp, superseded := resolveInception(earliest, []*repository.Snapshot{live})
+
+	if !stamp {
+		t.Error("the real inception day was left unstamped, the account reports its opening balance as pure gain")
+	}
+	if superseded == nil {
+		t.Fatal("the connect-time stamp survived — the account still reports a $3,569.14 deposit it never received")
+	}
+	if superseded.Deposits != 0 {
+		t.Fatalf("cleared deposits = %v, want 0", superseded.Deposits)
+	}
+	if !superseded.Timestamp.Equal(live.Timestamp) {
+		t.Fatalf("cleared the wrong day: %s", superseded.Timestamp.Format("2006-01-02"))
+	}
+}

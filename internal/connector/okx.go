@@ -210,6 +210,7 @@ func (o *OKX) GetBalance(ctx context.Context) (*Balance, error) {
 			Details []struct {
 				Ccy      string `json:"ccy"`
 				Eq       string `json:"eq"`
+				EqUsd    string `json:"eqUsd"`
 				AvailBal string `json:"availBal"`
 				UPL      string `json:"upl"`
 			} `json:"details"`
@@ -227,14 +228,13 @@ func (o *OKX) GetBalance(ctx context.Context) (*Balance, error) {
 	account := resp.Data[0]
 	equity, _ := strconv.ParseFloat(account.TotalEq, 64)
 
-	// Find USDT balance
 	var available, unrealized float64
 	for _, d := range account.Details {
-		if d.Ccy == "USDT" {
-			available, _ = strconv.ParseFloat(d.AvailBal, 64)
-			unrealized, _ = strconv.ParseFloat(d.UPL, 64)
-			break
-		}
+		rate := okxUSDRate(d.Eq, d.EqUsd)
+		availBal, _ := strconv.ParseFloat(d.AvailBal, 64)
+		upl, _ := strconv.ParseFloat(d.UPL, 64)
+		available += availBal * rate
+		unrealized += upl * rate
 	}
 
 	return &Balance{
@@ -243,6 +243,20 @@ func (o *OKX) GetBalance(ctx context.Context) (*Balance, error) {
 		UnrealizedPnL: unrealized,
 		Currency:      "USDT",
 	}, nil
+}
+
+// okxUSDRate prices one currency line in USD from the pair OKX already returns
+// on it. Reading free margin and unrealized P&L off the USDT line alone left
+// every account settled in anything else reporting a free margin of zero while
+// its total equity stayed right. Falling back to 1 keeps the USD-pegged lines
+// correct when OKX omits eqUsd.
+func okxUSDRate(eq, eqUSD string) float64 {
+	quantity, _ := strconv.ParseFloat(eq, 64)
+	usd, _ := strconv.ParseFloat(eqUSD, 64)
+	if quantity == 0 || usd == 0 {
+		return 1
+	}
+	return usd / quantity
 }
 
 func (o *OKX) GetPositions(ctx context.Context) ([]*Position, error) {
@@ -286,13 +300,6 @@ func (o *OKX) GetPositions(ctx context.Context) ([]*Position, error) {
 			}
 		}
 
-		marketType := "swap"
-		if p.InstType == "FUTURES" {
-			marketType = "futures"
-		} else if p.InstType == "OPTION" {
-			marketType = "options"
-		}
-
 		positions = append(positions, &Position{
 			Symbol:        p.InstId,
 			Side:          side,
@@ -300,16 +307,58 @@ func (o *OKX) GetPositions(ctx context.Context) ([]*Position, error) {
 			EntryPrice:    entry,
 			MarkPrice:     mark,
 			UnrealizedPnL: unrealized,
-			MarketType:    marketType,
+			MarketType:    okxMarketType(p.InstType),
 		})
 	}
 
 	return positions, nil
 }
 
+// okxFillInstTypes are the product lines fills-history is queried on. OKX
+// makes instType mandatory and answers for exactly one per call, so asking
+// only for SWAP made every spot and margin fill invisible: an account trading
+// spot reported zero trades, zero volume and zero fees while its equity moved
+// daily. One call per line is the price of seeing them.
+var okxFillInstTypes = []string{"SPOT", "MARGIN", "SWAP", "FUTURES", "OPTION"}
+
+// okxMarketType files every fill under swap, whatever product line it came
+// from. OKX runs a unified account and this connector cannot split equity per
+// product, so the sync layer files the whole balance under one bucket
+// (primaryMarketType okx=swap). A fill typed by its own product line would land
+// in a bucket holding no equity — per-market return then divides by zero, and
+// the equity sits in a bucket showing no activity. Truthful per-product typing
+// has to wait for a balance split, in this connector and in the rebuilder
+// together.
+func okxMarketType(string) string {
+	return MarketSwap
+}
+
 func (o *OKX) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade, error) {
-	path := fmt.Sprintf("/api/v5/trade/fills-history?instType=SWAP&begin=%d&end=%d&limit=100",
-		start.UnixMilli(), end.UnixMilli())
+	var trades []*Trade
+	var lastErr error
+	answered := false
+
+	for _, instType := range okxFillInstTypes {
+		batch, err := o.fillsFor(ctx, instType, start, end)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		answered = true
+		trades = append(trades, batch...)
+	}
+
+	// A product line the account never enabled answers with an error; only a
+	// run where every line failed is a real failure worth surfacing.
+	if !answered && lastErr != nil {
+		return nil, lastErr
+	}
+	return trades, nil
+}
+
+func (o *OKX) fillsFor(ctx context.Context, instType string, start, end time.Time) ([]*Trade, error) {
+	path := fmt.Sprintf("/api/v5/trade/fills-history?instType=%s&begin=%d&end=%d&limit=100",
+		instType, start.UnixMilli(), end.UnixMilli())
 
 	body, err := o.doRequest(ctx, "GET", path)
 	if err != nil {
@@ -341,13 +390,6 @@ func (o *OKX) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade, er
 		fee, _ := strconv.ParseFloat(t.Fee, 64)
 		ts, _ := strconv.ParseInt(t.Ts, 10, 64)
 
-		marketType := "swap"
-		if t.InstType == "SPOT" {
-			marketType = "spot"
-		} else if t.InstType == "FUTURES" {
-			marketType = "futures"
-		}
-
 		trades = append(trades, &Trade{
 			ID:       t.TradeId,
 			Symbol:   t.InstId,
@@ -361,7 +403,7 @@ func (o *OKX) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade, er
 			Fee:         -fee,
 			FeeCurrency: t.FeeCcy,
 			Timestamp:   time.UnixMilli(ts),
-			MarketType:  marketType,
+			MarketType:  okxMarketType(t.InstType),
 		})
 	}
 
