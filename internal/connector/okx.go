@@ -321,19 +321,16 @@ func (o *OKX) GetPositions(ctx context.Context) ([]*Position, error) {
 // daily. One call per line is the price of seeing them.
 var okxFillInstTypes = []string{"SPOT", "MARGIN", "SWAP", "FUTURES", "OPTION"}
 
-func okxMarketType(instType string) string {
-	switch instType {
-	case "SPOT":
-		return MarketSpot
-	case "MARGIN":
-		return MarketMargin
-	case "FUTURES":
-		return MarketFutures
-	case "OPTION":
-		return MarketOptions
-	default:
-		return MarketSwap
-	}
+// okxMarketType files every fill under swap, whatever product line it came
+// from. OKX runs a unified account and this connector cannot split equity per
+// product, so the sync layer files the whole balance under one bucket
+// (primaryMarketType okx=swap). A fill typed by its own product line would land
+// in a bucket holding no equity — per-market return then divides by zero, and
+// the equity sits in a bucket showing no activity. Truthful per-product typing
+// has to wait for a balance split, in this connector and in the rebuilder
+// together.
+func okxMarketType(string) string {
+	return MarketSwap
 }
 
 func (o *OKX) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade, error) {

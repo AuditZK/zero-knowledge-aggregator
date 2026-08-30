@@ -2391,6 +2391,23 @@ func (s *SyncService) applyInceptionDeposit(ctx context.Context, connMeta *repos
 	return superseded
 }
 
+// clampAvailableMargin holds the invariant that free margin cannot exceed the
+// equity it is drawn from. Venues report the two on different bases: Binance
+// derives availableBalance from the wallet while equity is the margin balance,
+// and MT5 reports free margin against the account balance — so an account
+// sitting on an unrealized loss came out with more margin free than it owned.
+// Measured 2026-08-31: 240 MT5 rows and 90 Binance rows, every one of them off
+// by exactly the unrealized loss. A venue that genuinely lends beyond equity
+// (an MT5 credit line) is flattened to equity here too; representing that would
+// take a field of its own rather than a free-margin figure the dashboard reads
+// against equity.
+func clampAvailableMargin(available, equity float64) float64 {
+	if available > equity {
+		return equity
+	}
+	return available
+}
+
 // earliestFundedDay returns the batch's first day that carries equity, which
 // is the day the account actually starts. Taking the first day outright let a
 // zero-padded reconstruction abandon the whole inception rule — including the
@@ -2556,7 +2573,7 @@ func buildHistoricalSnapshots(
 		// the actual fill stream.
 		breakdown.Global = &repository.MarketMetrics{
 			Equity:          h.TotalEquity,
-			AvailableMargin: totalAvailMargin,
+			AvailableMargin: clampAvailableMargin(totalAvailMargin, h.TotalEquity),
 			Volume:          h.TotalVolume,
 			Trades:          h.TotalTrades,
 			TradingFees:     h.TotalFees,
@@ -3083,7 +3100,7 @@ func (a *aggregatedBreakdown) toRepo(globalEquity, globalAvailableMargin float64
 	if globalEquity > 0 || totalTrades > 0 {
 		breakdown.Global = &repository.MarketMetrics{
 			Equity:          globalEquity,
-			AvailableMargin: globalAvailableMargin,
+			AvailableMargin: clampAvailableMargin(globalAvailableMargin, globalEquity),
 			Volume:          a.totalVolume(),
 			Trades:          totalTrades,
 			TradingFees:     a.totalFees(), // toRepoMetrics splits fees by kind; aggregate only keeps total

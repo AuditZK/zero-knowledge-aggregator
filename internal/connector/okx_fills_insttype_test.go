@@ -84,8 +84,9 @@ func TestOKXGetTrades_SeesSpotFills(t *testing.T) {
 	if len(trades) != 1 {
 		t.Fatalf("got %d trades, want 1 — a spot account still reports no activity", len(trades))
 	}
-	if trades[0].MarketType != MarketSpot {
-		t.Fatalf("market type = %q, want %q", trades[0].MarketType, MarketSpot)
+	if trades[0].MarketType != MarketSwap {
+		t.Fatalf("market type = %q, want %q — until equity can be split per product, "+
+			"a fill must join the bucket the equity is filed in", trades[0].MarketType, MarketSwap)
 	}
 	if trades[0].Fee != 11.62 {
 		t.Fatalf("fee = %v, want 11.62 (OKX signs a charge negative)", trades[0].Fee)
@@ -113,7 +114,8 @@ func TestOKXGetTrades_QueriesEveryProductLine(t *testing.T) {
 	}
 }
 
-// Mixed accounts must come back whole, each fill carrying its own market type.
+// Mixed accounts must come back whole. Every fill lands in the swap bucket,
+// where the equity is filed — see okxMarketType.
 func TestOKXGetTrades_MergesLinesAndTagsEach(t *testing.T) {
 	srv := newOKXFillsServer(t, map[string]string{
 		"SPOT":   okxFillBody("SPOT", "BTC-USDT", "buy", "60000", "0.05", "-3"),
@@ -130,15 +132,17 @@ func TestOKXGetTrades_MergesLinesAndTagsEach(t *testing.T) {
 		t.Fatalf("got %d trades, want 3", len(trades))
 	}
 
-	byMarket := map[string]string{}
+	symbols := map[string]bool{}
 	for _, tr := range trades {
-		byMarket[tr.MarketType] = tr.Symbol
+		symbols[tr.Symbol] = true
+		if tr.MarketType != MarketSwap {
+			t.Errorf("%s filed under %q — it would land in a bucket holding no equity",
+				tr.Symbol, tr.MarketType)
+		}
 	}
-	for market, symbol := range map[string]string{
-		MarketSpot: "BTC-USDT", MarketMargin: "ETH-USDT", MarketSwap: "BTC-USDT-SWAP",
-	} {
-		if byMarket[market] != symbol {
-			t.Errorf("market %q = %q, want %q", market, byMarket[market], symbol)
+	for _, want := range []string{"BTC-USDT", "ETH-USDT", "BTC-USDT-SWAP"} {
+		if !symbols[want] {
+			t.Errorf("fill %s never came back", want)
 		}
 	}
 }
