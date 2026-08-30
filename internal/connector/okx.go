@@ -210,6 +210,7 @@ func (o *OKX) GetBalance(ctx context.Context) (*Balance, error) {
 			Details []struct {
 				Ccy      string `json:"ccy"`
 				Eq       string `json:"eq"`
+				EqUsd    string `json:"eqUsd"`
 				AvailBal string `json:"availBal"`
 				UPL      string `json:"upl"`
 			} `json:"details"`
@@ -227,14 +228,13 @@ func (o *OKX) GetBalance(ctx context.Context) (*Balance, error) {
 	account := resp.Data[0]
 	equity, _ := strconv.ParseFloat(account.TotalEq, 64)
 
-	// Find USDT balance
 	var available, unrealized float64
 	for _, d := range account.Details {
-		if d.Ccy == "USDT" {
-			available, _ = strconv.ParseFloat(d.AvailBal, 64)
-			unrealized, _ = strconv.ParseFloat(d.UPL, 64)
-			break
-		}
+		rate := okxUSDRate(d.Eq, d.EqUsd)
+		availBal, _ := strconv.ParseFloat(d.AvailBal, 64)
+		upl, _ := strconv.ParseFloat(d.UPL, 64)
+		available += availBal * rate
+		unrealized += upl * rate
 	}
 
 	return &Balance{
@@ -243,6 +243,20 @@ func (o *OKX) GetBalance(ctx context.Context) (*Balance, error) {
 		UnrealizedPnL: unrealized,
 		Currency:      "USDT",
 	}, nil
+}
+
+// okxUSDRate prices one currency line in USD from the pair OKX already returns
+// on it. Reading free margin and unrealized P&L off the USDT line alone left
+// every account settled in anything else reporting a free margin of zero while
+// its total equity stayed right. Falling back to 1 keeps the USD-pegged lines
+// correct when OKX omits eqUsd.
+func okxUSDRate(eq, eqUSD string) float64 {
+	quantity, _ := strconv.ParseFloat(eq, 64)
+	usd, _ := strconv.ParseFloat(eqUSD, 64)
+	if quantity == 0 || usd == 0 {
+		return 1
+	}
+	return usd / quantity
 }
 
 func (o *OKX) GetPositions(ctx context.Context) ([]*Position, error) {
