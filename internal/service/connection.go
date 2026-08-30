@@ -372,6 +372,11 @@ func (s *ConnectionService) ClearRebuildConsent(ctx context.Context, connID stri
 	return s.repo.ClearRebuildConsent(ctx, connID)
 }
 
+// GetHistoryTarget passes through to ConnectionRepo.
+func (s *ConnectionService) GetHistoryTarget(ctx context.Context, userUID, exchange, label string) (*repository.RebuiltHistoryTarget, error) {
+	return s.repo.GetHistoryTarget(ctx, userUID, normalizeExchange(exchange), strings.TrimSpace(label))
+}
+
 // GetExchangeMetadata returns exchange-level metadata for active connections.
 func (s *ConnectionService) GetExchangeMetadata(ctx context.Context, userUID string) ([]*ExchangeMetadata, error) {
 	details, err := s.repo.GetExchangeDetailsByUser(ctx, userUID)

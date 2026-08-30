@@ -756,6 +756,45 @@ func connectionKey(exchange, label string) string {
 	return ex + "/" + lb
 }
 
+// RebuiltHistoryTarget carries the only two fields a history deletion needs.
+// Credentials are deliberately absent: the operation touches snapshots, and
+// loading an encrypted key to delete rows would widen its blast radius for
+// nothing.
+type RebuiltHistoryTarget struct {
+	ID        string
+	CreatedAt time.Time
+}
+
+// GetHistoryTarget resolves a connection for a history deletion, disconnected
+// ones included — wanting the data of an account you have already unplugged is
+// the main reason to ask. When a label has been connected more than once the
+// earliest row wins, since its creation date yields the narrowest cutoff.
+func (r *ConnectionRepo) GetHistoryTarget(ctx context.Context, userUID, exchange, label string) (*RebuiltHistoryTarget, error) {
+	r.getCapabilityFlags(ctx)
+
+	userCol, createdCol := "user_uid", "created_at"
+	if r.isTSSchema {
+		userCol, createdCol = `"userUid"`, `"createdAt"`
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, %s
+		FROM exchange_connections
+		WHERE %s = $1 AND exchange = $2 AND TRIM(label) = TRIM($3)
+		ORDER BY %s ASC
+		LIMIT 1`, createdCol, userCol, createdCol)
+
+	var target RebuiltHistoryTarget
+	err := r.pool.QueryRow(ctx, query, userUID, exchange, label).Scan(&target.ID, &target.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load history target: %w", err)
+	}
+	return &target, nil
+}
+
 // GetByUserExchangeLabel retrieves a connection by user, exchange, and label
 func (r *ConnectionRepo) GetByUserExchangeLabel(ctx context.Context, userUID, exchange, label string) (*ExchangeConnection, error) {
 	r.getCapabilityFlags(ctx)
