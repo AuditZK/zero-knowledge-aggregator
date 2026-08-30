@@ -1992,7 +1992,12 @@ func (s *SyncService) DeleteRebuiltHistory(ctx context.Context, userUID, exchang
 		return 0, fmt.Errorf("withdraw rebuild consent: %w", err)
 	}
 
-	deleted, err := s.snapshotRepo.DeleteExternalRebuilderHistory(ctx, userUID, exchange, label)
+	// The live branch owns every day from the connection's own day onward, and
+	// reconstruction never writes today's bucket, so this cutoff drops nothing
+	// the rebuilder produced while protecting days a later pass re-stamped.
+	liveFrom := conn.CreatedAt.UTC().Truncate(24 * time.Hour)
+
+	deleted, err := s.snapshotRepo.DeleteExternalRebuilderHistory(ctx, userUID, exchange, label, liveFrom)
 	if err != nil {
 		return 0, err
 	}
