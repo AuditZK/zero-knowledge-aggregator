@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"errors"
+	"sort"
 	"time"
 )
 
@@ -125,6 +126,76 @@ type CapabilityWarner interface {
 	// "futures_permission_missing") discovered by the LAST GetBalance call;
 	// empty when the key covers everything the connector tried to read.
 	CapabilityWarnings() []string
+}
+
+// Wallet read outcomes. A wallet the connector reached is Read whatever the
+// balance turned out to be — a wallet holding nothing is measured, not missing.
+// Separating the two is the whole point: the breakdown alone cannot, because an
+// empty market carries no bucket and reads exactly like one we never saw.
+const (
+	WalletRead       = "read"
+	WalletUnreadable = "unreadable"
+	WalletNotOpened  = "not_opened"
+)
+
+// WalletCoverage is one wallet's outcome for one balance fetch. Reason is
+// diagnostic only — nothing downstream branches on it.
+type WalletCoverage struct {
+	Wallet string `json:"wallet"`
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// CoverageReporter is implemented by connectors that can say which parts of an
+// account the last balance fetch actually reached.
+//
+// The venue-specific knowledge stops here: a connector names its own wallets
+// and grades each one, and every layer above works on the resulting set of
+// names alone. That is what makes the rule replicable — nothing upstream of a
+// connector knows that Binance has a UM wallet or that OKX is unified.
+//
+// Coverage is what separates "this account holds nothing there" from "we could
+// not look". Without it a wallet that leaves the measured perimeter — a scope
+// the key never had, a statement window that ran out, a switch between the live
+// connector and the rebuilder — reads as a change in equity, and the return
+// calculation books it as performance.
+type CoverageReporter interface {
+	// Coverage returns one entry per wallet the connector is responsible for,
+	// graded by the LAST GetBalance call. The wallet list is fixed per
+	// connector; only the statuses vary between calls.
+	Coverage() []WalletCoverage
+}
+
+// CoveredWallets returns the wallets actually read, sorted, which is the set
+// the comparison rules operate on. Nil coverage yields nil: a connector that
+// does not report yet is "unknown", never "complete".
+func CoveredWallets(coverage []WalletCoverage) []string {
+	if len(coverage) == 0 {
+		return nil
+	}
+	read := make([]string, 0, len(coverage))
+	for _, c := range coverage {
+		if c.Status == WalletRead {
+			read = append(read, c.Wallet)
+		}
+	}
+	sort.Strings(read)
+	return read
+}
+
+// UnreadableWallets returns the wallets the connector could not reach, sorted.
+func UnreadableWallets(coverage []WalletCoverage) []string {
+	missed := make([]string, 0, len(coverage))
+	for _, c := range coverage {
+		if c.Status == WalletUnreadable {
+			missed = append(missed, c.Wallet)
+		}
+	}
+	if len(missed) == 0 {
+		return nil
+	}
+	sort.Strings(missed)
+	return missed
 }
 
 // FundingFee represents a single funding fee payment on a perpetual/swap position.

@@ -35,6 +35,38 @@ type Binance struct {
 	// while sapi reads fine means the key lacks the Futures scope and the
 	// UM wallet is invisible.
 	capabilityWarnings []string
+	// coverage grades every wallet the last GetBalance tried to reach
+	// (CoverageReporter). Scope note: it answers "did we reach what we
+	// tried", not "did we try everything the account holds" — Earn is not
+	// fetched at all and therefore not listed.
+	coverage []WalletCoverage
+}
+
+// Binance wallet names. Their own vocabulary, not market types: cross and
+// isolated margin are two wallets that both land in the margin market.
+const (
+	binanceWalletSpot     = "spot"
+	binanceWalletUM       = "um_futures"
+	binanceWalletCoinM    = "coinm_futures"
+	binanceWalletCross    = "cross_margin"
+	binanceWalletIsolated = "isolated_margin"
+)
+
+// Coverage implements CoverageReporter.
+func (b *Binance) Coverage() []WalletCoverage {
+	return b.coverage
+}
+
+// noteWallet grades one wallet from the error its fetch returned. A nil error
+// is a read whatever the balance held; anything else is a wallet we could not
+// look into, which is not the same as one holding nothing.
+func (b *Binance) noteWallet(wallet string, err error) {
+	c := WalletCoverage{Wallet: wallet, Status: WalletRead}
+	if err != nil {
+		c.Status = WalletUnreadable
+		c.Reason = vendorErrorDetail(err.Error())
+	}
+	b.coverage = append(b.coverage, c)
 }
 
 // NewBinance creates a new Binance connector
@@ -135,12 +167,16 @@ func (b *Binance) GetBalance(ctx context.Context) (*Balance, error) {
 	// fapi through the shared egress) must fail the whole sync instead:
 	// silently dropping a wallet persisted snapshots $16k-$20k short, and a
 	// failed sync is a retry while a wrong snapshot is a lie on the curve.
+	b.coverage = nil
+	b.noteWallet(binanceWalletSpot, nil) // reached: getSpotBalance failing is fatal above
+
 	var futures *Balance
 	b.capabilityWarnings = nil
 	if fut, ferr := b.getFuturesBalance(ctx); ferr == nil && fut != nil {
 		total.Equity += fut.Equity
 		total.UnrealizedPnL += fut.UnrealizedPnL
 		futures = fut
+		b.noteWallet(binanceWalletUM, nil)
 	} else if errors.Is(ferr, ErrTransient) {
 		return nil, fmt.Errorf("futures balance: %w", ferr)
 	} else if ferr != nil && (strings.Contains(ferr.Error(), "-2015") || strings.Contains(ferr.Error(), "Invalid API-key")) {
@@ -151,25 +187,49 @@ func (b *Binance) GetBalance(ctx context.Context) (*Balance, error) {
 		// tick "Enable Futures" on the key (2026-08-05: an invisible UM
 		// wallet moved ±15k and overstated the live equity by its debt).
 		b.capabilityWarnings = append(b.capabilityWarnings, "futures_permission_missing")
+		b.noteWallet(binanceWalletUM, ferr)
+	} else {
+		b.noteWallet(binanceWalletUM, ferr)
 	}
 
 	if eq, cerr := b.getCoinMFuturesEquity(ctx, priceMap); cerr == nil {
 		total.Equity += eq
 		nonUM += eq
+		b.noteWallet(binanceWalletCoinM, nil)
 	} else if errors.Is(cerr, ErrTransient) {
 		return nil, fmt.Errorf("coin-m balance: %w", cerr)
+	} else {
+		// Was dropped in silence: a permission-style refusal here removed the
+		// wallet from the equity with no warning and no trace, and a
+		// margin-heavy account can hold most of its capital in one of these.
+		b.capabilityWarnings = append(b.capabilityWarnings, "coinm_unreadable")
+		b.noteWallet(binanceWalletCoinM, cerr)
 	}
 	if eq, merr := b.getCrossMarginEquity(ctx, priceMap); merr == nil {
 		total.Equity += eq
 		nonUM += eq
+		b.noteWallet(binanceWalletCross, nil)
 	} else if errors.Is(merr, ErrTransient) {
 		return nil, fmt.Errorf("cross margin balance: %w", merr)
+	} else {
+		// Was dropped in silence: a permission-style refusal here removed the
+		// wallet from the equity with no warning and no trace, and a
+		// margin-heavy account can hold most of its capital in one of these.
+		b.capabilityWarnings = append(b.capabilityWarnings, "cross_margin_unreadable")
+		b.noteWallet(binanceWalletCross, merr)
 	}
 	if eq, ierr := b.getIsolatedMarginEquity(ctx, priceMap); ierr == nil {
 		total.Equity += eq
 		nonUM += eq
+		b.noteWallet(binanceWalletIsolated, nil)
 	} else if errors.Is(ierr, ErrTransient) {
 		return nil, fmt.Errorf("isolated margin balance: %w", ierr)
+	} else {
+		// Was dropped in silence: a permission-style refusal here removed the
+		// wallet from the equity with no warning and no trace, and a
+		// margin-heavy account can hold most of its capital in one of these.
+		b.capabilityWarnings = append(b.capabilityWarnings, "isolated_margin_unreadable")
+		b.noteWallet(binanceWalletIsolated, ierr)
 	}
 
 	// Per-market split, matching the history rebuilder's two-bucket convention

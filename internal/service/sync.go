@@ -2312,6 +2312,29 @@ func (s *SyncService) persistHistoricalSnapshots(
 		return nil
 	}
 
+	if existing, rerr := s.snapshotRepo.GetByUserAndDateRange(ctx, connMeta.UserUID, time.Unix(0, 0).UTC(), time.Now().UTC().Add(24*time.Hour)); rerr == nil {
+		mine := make([]*repository.Snapshot, 0, len(existing))
+		for _, e := range existing {
+			if e.Exchange == connMeta.Exchange && e.Label == connMeta.Label {
+				mine = append(mine, e)
+			}
+		}
+		if day, measured, bad := contradictedDay(snapshots, mine); bad {
+			s.logger.Error("history reconstruction rejected — contradicts a measured day",
+				zap.String("user_uid", connMeta.UserUID),
+				zap.String("exchange", connMeta.Exchange),
+				zap.String("label", connMeta.Label),
+				zap.String("source", source),
+				zap.String("day", day.Timestamp.Format("2006-01-02")),
+				zap.Float64("rebuilt_equity", day.TotalEquity),
+				zap.Float64("measured_equity", measured),
+				zap.Int("days_discarded", len(snapshots)),
+				zap.String("hint", "the reconstruction did not reproduce a day the live sync measured; nothing was written"),
+			)
+			return fmt.Errorf("reconstruction contradicts the measured equity on %s", day.Timestamp.Format("2006-01-02"))
+		}
+	}
+
 	// ENG-002: write the whole reconstructed series in ONE transaction. The
 	// previous per-row Upsert loop left a silent hole in the timeline when a
 	// single day failed, and a holed series quietly skews the report's TWR.
@@ -2389,6 +2412,46 @@ func (s *SyncService) applyInceptionDeposit(ctx context.Context, connMeta *repos
 		)
 	}
 	return superseded
+}
+
+// reproductionEpsilon is arithmetic slack, not a judgement about how wrong a
+// reconstruction may be. Rebuilt and measured values travel through different
+// float paths for the same day; a cent of drift is the format, a dollar is a
+// different account.
+const reproductionEpsilon = 0.01
+
+// contradictedDay reports the first day a reconstruction disagrees with a day
+// we measured directly, and by how much.
+//
+// The gate this feeds replaces asking "is the gap small enough", which needs a
+// threshold somebody has to pick and defend. Reproduction is decidable: where a
+// rebuilt day and a live day describe the same date, they describe the same
+// account on that date, so they must agree. When they do not, the
+// reconstruction measured something else — a wallet the live path cannot see, a
+// window that ran out, a walk anchored wrong — and every OTHER day it produced
+// is built the same way. Rejecting the batch whole is the only honest read.
+//
+// Measured 2026-08-31: a binance rebuild wrote $116,040.69 for a day the live
+// sync had measured at $94,584.28. The rebuilder's own witness gate passed it,
+// tolerating up to 50%.
+func contradictedDay(rebuilt, existing []*repository.Snapshot) (*repository.Snapshot, float64, bool) {
+	measured := make(map[time.Time]float64, len(existing))
+	for _, e := range existing {
+		if e.IsHistorical {
+			continue // reconstructed too — nothing independent to check against
+		}
+		measured[e.Timestamp.UTC().Truncate(24*time.Hour)] = e.TotalEquity
+	}
+	for _, r := range rebuilt {
+		eq, ok := measured[r.Timestamp.UTC().Truncate(24*time.Hour)]
+		if !ok {
+			continue
+		}
+		if math.Abs(r.TotalEquity-eq) > reproductionEpsilon {
+			return r, eq, true
+		}
+	}
+	return nil, 0, false
 }
 
 // clampAvailableMargin holds the invariant that free margin cannot exceed the
