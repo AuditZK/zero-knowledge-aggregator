@@ -53,6 +53,8 @@ type OKX struct {
 
 	mu    sync.Mutex
 	hosts []string // candidate API domains; collapses to one once a key is recognised
+
+	cashflowWarnings []string // markers from the last GetCashflows, guarded by mu
 }
 
 // NewOKX creates a new OKX connector
