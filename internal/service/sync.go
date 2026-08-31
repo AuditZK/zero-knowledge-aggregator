@@ -2285,6 +2285,29 @@ func (s *SyncService) persistHistoricalSnapshots(
 		)
 	}
 
+	if existing, rerr := s.snapshotRepo.GetByUserAndDateRange(ctx, connMeta.UserUID, time.Unix(0, 0).UTC(), time.Now().UTC().Add(24*time.Hour)); rerr == nil {
+		mine := make([]*repository.Snapshot, 0, len(existing))
+		for _, e := range existing {
+			if e.Exchange == connMeta.Exchange && e.Label == connMeta.Label {
+				mine = append(mine, e)
+			}
+		}
+		if day, measured, bad := contradictedDay(snapshots, mine); bad {
+			s.logger.Error("history reconstruction rejected — contradicts a measured day",
+				zap.String("user_uid", connMeta.UserUID),
+				zap.String("exchange", connMeta.Exchange),
+				zap.String("label", connMeta.Label),
+				zap.String("source", source),
+				zap.String("day", day.Timestamp.Format("2006-01-02")),
+				zap.Float64("rebuilt_equity", day.TotalEquity),
+				zap.Float64("measured_equity", measured),
+				zap.Int("days_discarded", len(snapshots)),
+				zap.String("hint", "the reconstruction did not reproduce a day the live sync measured; nothing was written"),
+			)
+			return fmt.Errorf("reconstruction contradicts the measured equity on %s", day.Timestamp.Format("2006-01-02"))
+		}
+	}
+
 	// Dry run: everything above already happened (including, for non-ZK
 	// exchanges, the rebuilder round-trip) — we just stop short of the write
 	// and log what WOULD have been persisted so it can be compared against the
@@ -2310,29 +2333,6 @@ func (s *SyncService) persistHistoricalSnapshots(
 			zap.Int("days", len(snapshots)),
 		)
 		return nil
-	}
-
-	if existing, rerr := s.snapshotRepo.GetByUserAndDateRange(ctx, connMeta.UserUID, time.Unix(0, 0).UTC(), time.Now().UTC().Add(24*time.Hour)); rerr == nil {
-		mine := make([]*repository.Snapshot, 0, len(existing))
-		for _, e := range existing {
-			if e.Exchange == connMeta.Exchange && e.Label == connMeta.Label {
-				mine = append(mine, e)
-			}
-		}
-		if day, measured, bad := contradictedDay(snapshots, mine); bad {
-			s.logger.Error("history reconstruction rejected — contradicts a measured day",
-				zap.String("user_uid", connMeta.UserUID),
-				zap.String("exchange", connMeta.Exchange),
-				zap.String("label", connMeta.Label),
-				zap.String("source", source),
-				zap.String("day", day.Timestamp.Format("2006-01-02")),
-				zap.Float64("rebuilt_equity", day.TotalEquity),
-				zap.Float64("measured_equity", measured),
-				zap.Int("days_discarded", len(snapshots)),
-				zap.String("hint", "the reconstruction did not reproduce a day the live sync measured; nothing was written"),
-			)
-			return fmt.Errorf("reconstruction contradicts the measured equity on %s", day.Timestamp.Format("2006-01-02"))
-		}
 	}
 
 	// ENG-002: write the whole reconstructed series in ONE transaction. The
