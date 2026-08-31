@@ -378,7 +378,7 @@ func (s *Server) handleAdminDumpCashflows(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	cashflows, err := s.handler.syncSvc.DumpCashflows(r.Context(), userUID, exchange, label, since)
+	cashflows, warnings, err := s.handler.syncSvc.DumpCashflows(r.Context(), userUID, exchange, label, since)
 	if err != nil {
 		s.logger.Error("dump cashflows failed", zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": s.handler.sanitizeErr(err)})
@@ -389,6 +389,7 @@ func (s *Server) handleAdminDumpCashflows(w http.ResponseWriter, r *http.Request
 		"success":   true,
 		"count":     len(cashflows),
 		"cashflows": cashflows,
+		"warnings":  warnings,
 	})
 }
 

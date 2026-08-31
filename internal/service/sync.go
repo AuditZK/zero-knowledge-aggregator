@@ -2956,27 +2956,38 @@ func (s *SyncService) DumpCashflows(
 	ctx context.Context,
 	userUID, exchange, label string,
 	since time.Time,
-) ([]*connector.Cashflow, error) {
+) ([]*connector.Cashflow, []string, error) {
 	if s.connSvc == nil {
-		return nil, fmt.Errorf("connection service not configured")
+		return nil, nil, fmt.Errorf("connection service not configured")
 	}
 
 	creds, err := s.connSvc.GetDecryptedCredentialsByLabel(ctx, userUID, exchange, label)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt credentials: %w", err)
+		return nil, nil, fmt.Errorf("decrypt credentials: %w", err)
 	}
 
 	conn, err := s.getOrCreateConnector(strings.ToLower(exchange), userUID, label, creds)
 	if err != nil {
-		return nil, fmt.Errorf("build connector: %w", err)
+		return nil, nil, fmt.Errorf("build connector: %w", err)
 	}
 
 	cfFetcher, ok := conn.(connector.CashflowFetcher)
 	if !ok {
-		return nil, fmt.Errorf("connector %s does not support cashflow fetching", exchange)
+		return nil, nil, fmt.Errorf("connector %s does not support cashflow fetching", exchange)
 	}
 
-	return cfFetcher.GetCashflows(ctx, since)
+	flows, err := cfFetcher.GetCashflows(ctx, since)
+	if err != nil {
+		return nil, nil, err
+	}
+	// A degraded fetch (shortened window, unpriceable currency) is success
+	// with a caveat; the dump states the caveat instead of hiding it behind
+	// either a clean result or a sanitized error.
+	var warnings []string
+	if cw, ok := conn.(connector.CapabilityWarner); ok {
+		warnings = cw.CapabilityWarnings()
+	}
+	return flows, warnings, nil
 }
 
 // DumpRawCashflows returns the broker's unfiltered balance-operation ledger for

@@ -223,6 +223,42 @@ func TestOKXGetCashflows_ArchiveOnlyWhenWindowNeedsIt(t *testing.T) {
 	}
 }
 
+// OKX rejects some bad requests with HTTP 200 and the error in the body. Read
+// as an empty ledger, that silence books every missed transfer as fabricated
+// performance — the in-body code must fail the endpoint like a transport error.
+func TestOKXGetCashflows_InBodyErrorIsAnErrorNotAnEmptyLedger(t *testing.T) {
+	dead := newOKXBillsServer(t, map[string]string{
+		okxBillsPath: `{"code":"51000","msg":"parameter error","data":[]}`,
+	}, nil)
+	if _, err := dead.connector().GetCashflows(context.Background(), time.Now().Add(-24*time.Hour)); err == nil {
+		t.Fatal("an in-body error on the live endpoint read as an empty ledger")
+	}
+
+	degraded := newOKXBillsServer(t, map[string]string{
+		okxBillsPath: `{"code":"0","data":[` +
+			billRow("b1", "1787788800000", "USDT", "500", "1", "11") +
+			`]}`,
+		okxArchivePath: `{"code":"51000","msg":"parameter error","data":[]}`,
+	}, nil)
+	conn := degraded.connector()
+	flows, err := conn.GetCashflows(context.Background(), time.Now().Add(-20*24*time.Hour))
+	if err != nil {
+		t.Fatalf("an in-body archive error must degrade, got: %v", err)
+	}
+	if len(flows) != 1 {
+		t.Fatalf("got %d flows, want the live window's 1", len(flows))
+	}
+	found := false
+	for _, w := range conn.CapabilityWarnings() {
+		if strings.Contains(w, "archive_unavailable") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("warnings = %v, want the shortened window stated", conn.CapabilityWarnings())
+	}
+}
+
 // The live endpoint failing is fatal; the archive failing shortens the window
 // and says so.
 func TestOKXGetCashflows_FailurePolicy(t *testing.T) {

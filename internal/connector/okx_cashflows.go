@@ -185,6 +185,8 @@ func (o *OKX) fetchBillsFrom(ctx context.Context, endpoint string, since, now ti
 		}
 
 		var resp struct {
+			Code string `json:"code"`
+			Msg  string `json:"msg"`
 			Data []struct {
 				BillID  string `json:"billId"`
 				Ts      string `json:"ts"`
@@ -196,6 +198,13 @@ func (o *OKX) fetchBillsFrom(ctx context.Context, endpoint string, since, now ti
 		}
 		if err := json.Unmarshal(body, &resp); err != nil {
 			return nil, fmt.Errorf("decode okx bills: %w", err)
+		}
+		// OKX rejects some bad requests with HTTP 200 and the error in the
+		// body. Read as "empty ledger", that silence turns every missed
+		// transfer into fabricated performance — the exact defect this file
+		// exists to close.
+		if resp.Code != "" && resp.Code != "0" {
+			return nil, fmt.Errorf("okx bills %s: code %s: %s", endpoint, resp.Code, resp.Msg)
 		}
 
 		lastID := ""
@@ -237,12 +246,16 @@ func (o *OKX) spotUSDPrices(ctx context.Context, ccys []string) (map[string]floa
 	}
 
 	var resp struct {
+		Code string `json:"code"`
 		Data []struct {
 			InstID string `json:"instId"`
 			Last   string `json:"last"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, false
+	}
+	if resp.Code != "" && resp.Code != "0" {
 		return nil, false
 	}
 
