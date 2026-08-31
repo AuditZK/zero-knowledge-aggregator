@@ -264,9 +264,10 @@ func TestOKXGetCashflows_ArchiveOnlyWhenWindowNeedsIt(t *testing.T) {
 	}
 }
 
-// OKX rejects some bad requests with HTTP 200 and the error in the body. Read
-// as an empty ledger, that silence books every missed transfer as fabricated
-// performance — the in-body code must fail the endpoint like a transport error.
+// OKX rejects some bad requests with HTTP 200 and the error code in the body.
+// doRequestAt already turns that envelope into an error; this pins it for the
+// ledger, where reading it as "no bills" would book every missed transfer as
+// performance.
 func TestOKXGetCashflows_InBodyErrorIsAnErrorNotAnEmptyLedger(t *testing.T) {
 	dead := newOKXBillsServer(t, map[string]string{
 		okxBillsPath: `{"code":"51000","msg":"parameter error","data":[]}`,
