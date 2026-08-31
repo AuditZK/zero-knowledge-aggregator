@@ -113,6 +113,47 @@ func TestOKXGetCashflows_NonStableValuedThroughTickers(t *testing.T) {
 	}
 }
 
+// Found on the first live run: an OKX Europe account moves EUR, and OKX quotes
+// fiat on the quote side (USDT-EUR), so the direct lookup priced nothing.
+func TestOKXPriceInUSD_FiatThroughTheInversePair(t *testing.T) {
+	prices := okxPriceInUSD([]string{"EUR"}, []okxTicker{
+		{InstID: "BTC-USDT", Last: 50000},
+		{InstID: "USDT-EUR", Last: 0.8},
+	})
+	if got := prices["EUR"]; got != 1.25 {
+		t.Fatalf("EUR priced %v, want 1.25 from 1/USDT-EUR", got)
+	}
+}
+
+// A currency with no stable pair at all is still priced through BTC before
+// being given up on.
+func TestOKXPriceInUSD_TriangleThroughBTC(t *testing.T) {
+	prices := okxPriceInUSD([]string{"GBP", "RWUSD"}, []okxTicker{
+		{InstID: "BTC-USDT", Last: 50000},
+		{InstID: "BTC-GBP", Last: 40000},
+	})
+	if got := prices["GBP"]; got != 1.25 {
+		t.Fatalf("GBP priced %v, want 1.25 from BTC-USDT/BTC-GBP", got)
+	}
+	if _, priced := prices["RWUSD"]; priced {
+		t.Fatal("a currency with no route to USD must stay unpriced, never invented")
+	}
+}
+
+// The direct pair beats the inverse and the triangle; USDT beats USDC.
+func TestOKXPriceInUSD_Precedence(t *testing.T) {
+	prices := okxPriceInUSD([]string{"ETH"}, []okxTicker{
+		{InstID: "BTC-USDT", Last: 50000},
+		{InstID: "BTC-ETH", Last: 20},
+		{InstID: "ETH-USDC", Last: 2490},
+		{InstID: "ETH-USDT", Last: 2500},
+		{InstID: "USDT-ETH", Last: 0.0004},
+	})
+	if got := prices["ETH"]; got != 2500 {
+		t.Fatalf("ETH priced %v, want 2500 from the direct USDT pair", got)
+	}
+}
+
 func TestOKXGetCashflows_StablesOnlySkipTickers(t *testing.T) {
 	s := newOKXBillsServer(t, map[string]string{
 		okxBillsPath: `{"code":"0","data":[` +

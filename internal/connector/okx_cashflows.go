@@ -233,9 +233,9 @@ func (o *OKX) fetchBillsFrom(ctx context.Context, endpoint string, since, now ti
 	return bills, nil
 }
 
-// spotUSDPrices returns last prices for ccys from one public all-tickers
-// call, USDT quote preferred, USDC accepted. ok=false means the call itself
-// failed and non-stable valuation is unavailable this window.
+// spotUSDPrices returns USD prices for ccys from one public all-tickers call.
+// ok=false means the call itself failed and non-stable valuation is
+// unavailable this window.
 func (o *OKX) spotUSDPrices(ctx context.Context, ccys []string) (map[string]float64, bool) {
 	if len(ccys) == 0 {
 		return nil, true
@@ -259,29 +259,75 @@ func (o *OKX) spotUSDPrices(ctx context.Context, ccys []string) (map[string]floa
 		return nil, false
 	}
 
+	tickers := make([]okxTicker, 0, len(resp.Data))
+	for _, t := range resp.Data {
+		last, _ := strconv.ParseFloat(t.Last, 64)
+		tickers = append(tickers, okxTicker{InstID: t.InstID, Last: last})
+	}
+	return okxPriceInUSD(ccys, tickers), true
+}
+
+type okxTicker struct {
+	InstID string
+	Last   float64
+}
+
+// okxPriceInUSD prices each currency from the ticker board, in order of
+// preference: its own USDT/USDC pair; the inverse pair (OKX quotes fiat on the
+// quote side — a EUR balance is priced off USDT-EUR, there is no EUR-USDT);
+// and last the BTC triangle, for a currency that only trades against BTC.
+// USDT is preferred over USDC at every level.
+func okxPriceInUSD(ccys []string, tickers []okxTicker) map[string]float64 {
 	want := map[string]bool{}
 	for _, c := range ccys {
 		want[c] = true
 	}
-	prices := map[string]float64{}
-	for _, t := range resp.Data {
-		base, quote, ok := strings.Cut(t.InstID, "-")
-		if !ok || !want[base] {
-			continue
+
+	direct := map[string]float64{}
+	inverse := map[string]float64{}
+	btcQuoted := map[string]float64{}
+	var btcUSD float64
+
+	prefer := func(m map[string]float64, ccy, stable string, px float64) {
+		if _, have := m[ccy]; have && stable == "USDC" {
+			return
 		}
-		if quote != "USDT" && quote != "USDC" {
-			continue
-		}
-		last, _ := strconv.ParseFloat(t.Last, 64)
-		if last <= 0 {
-			continue
-		}
-		if _, have := prices[base]; have && quote == "USDC" {
-			continue
-		}
-		prices[base] = last
+		m[ccy] = px
 	}
-	return prices, true
+
+	for _, t := range tickers {
+		base, quote, ok := strings.Cut(t.InstID, "-")
+		if !ok || t.Last <= 0 {
+			continue
+		}
+		switch {
+		case want[base] && (quote == "USDT" || quote == "USDC"):
+			prefer(direct, base, quote, t.Last)
+		case want[quote] && (base == "USDT" || base == "USDC"):
+			prefer(inverse, quote, base, 1/t.Last)
+		}
+		if base == "BTC" {
+			switch {
+			case quote == "USDT":
+				btcUSD = t.Last
+			case want[quote]:
+				btcQuoted[quote] = t.Last
+			}
+		}
+	}
+
+	prices := map[string]float64{}
+	for c := range want {
+		switch {
+		case direct[c] > 0:
+			prices[c] = direct[c]
+		case inverse[c] > 0:
+			prices[c] = inverse[c]
+		case btcUSD > 0 && btcQuoted[c] > 0:
+			prices[c] = btcUSD / btcQuoted[c]
+		}
+	}
+	return prices
 }
 
 // CapabilityWarnings implements CapabilityWarner with markers from the LAST
