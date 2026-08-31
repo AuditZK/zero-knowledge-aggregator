@@ -79,21 +79,26 @@ func TestContradictedDay_IgnoresPreviouslyReconstructedDays(t *testing.T) {
 	}
 }
 
-// The epsilon is float slack, not tolerance for being wrong: a cent passes, a
-// dollar does not.
-func TestContradictedDay_EpsilonIsArithmeticNotJudgement(t *testing.T) {
-	existing := []*repository.Snapshot{measured(day(2026, time.August, 30), 94584.28)}
-
-	if _, _, bad := contradictedDay([]*repository.Snapshot{
-		reconstructed(day(2026, time.August, 30), 94584.285),
-	}, existing); bad {
-		t.Fatal("half a cent of float drift rejected a faithful reconstruction")
+// The tolerance separates instruments disagreeing about a price from
+// instruments disagreeing about the account. Both bounds come from the gate's
+// first live run.
+func TestContradictedDay_ToleranceSeparatesNoiseFromDivergence(t *testing.T) {
+	// 20 cents on $5,301 — hyperliquid, the live path and the rebuilder pricing
+	// the same holdings from different sources. Same account.
+	if _, _, bad := contradictedDay(
+		[]*repository.Snapshot{reconstructed(day(2026, time.June, 1), 5300.971997)},
+		[]*repository.Snapshot{measured(day(2026, time.June, 1), 5301.174097)},
+	); bad {
+		t.Fatal("valuation noise between two price sources rejected a faithful reconstruction")
 	}
 
-	if _, _, bad := contradictedDay([]*repository.Snapshot{
-		reconstructed(day(2026, time.August, 30), 94585.28),
-	}, existing); !bad {
-		t.Fatal("a dollar of divergence passed — the gate is a tolerance again")
+	// $1,818 on $125,414 — 1.4%, published under the 50% tolerance the
+	// rebuilder's own gate carried.
+	if _, _, bad := contradictedDay(
+		[]*repository.Snapshot{reconstructed(day(2026, time.June, 2), 123595.21)},
+		[]*repository.Snapshot{measured(day(2026, time.June, 2), 125413.64)},
+	); !bad {
+		t.Fatal("a 1.4% divergence passed — the gate is a business tolerance again")
 	}
 }
 
@@ -106,5 +111,28 @@ func TestContradictedDay_ComparesByDayNotInstant(t *testing.T) {
 
 	if _, _, bad := contradictedDay(rebuilt, existing); !bad {
 		t.Fatal("a mid-day measured row escaped the comparison")
+	}
+}
+
+// A live row at zero is far more often a degenerate sync than a funded account
+// measured empty — the rest of the service already refuses to anchor on one.
+// Witnessing against it discarded 89 days of a sound reconstruction on this
+// gate's first live run.
+func TestContradictedDay_ZeroEquityDayIsNotAWitness(t *testing.T) {
+	existing := []*repository.Snapshot{measured(day(2026, time.June, 3), 0)}
+	rebuilt := []*repository.Snapshot{reconstructed(day(2026, time.June, 3), 896.57)}
+
+	if _, _, bad := contradictedDay(rebuilt, existing); bad {
+		t.Fatal("a live row at zero was treated as a measurement worth trusting")
+	}
+}
+
+// But a funded day still witnesses, even when the reconstruction claims zero.
+func TestContradictedDay_FundedDayWitnessesAgainstAZeroRebuild(t *testing.T) {
+	existing := []*repository.Snapshot{measured(day(2026, time.June, 3), 3310.97)}
+	rebuilt := []*repository.Snapshot{reconstructed(day(2026, time.June, 3), 0)}
+
+	if _, _, bad := contradictedDay(rebuilt, existing); !bad {
+		t.Fatal("a reconstruction wiping a funded day to zero was accepted")
 	}
 }

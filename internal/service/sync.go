@@ -2414,11 +2414,20 @@ func (s *SyncService) applyInceptionDeposit(ctx context.Context, connMeta *repos
 	return superseded
 }
 
-// reproductionEpsilon is arithmetic slack, not a judgement about how wrong a
-// reconstruction may be. Rebuilt and measured values travel through different
-// float paths for the same day; a cent of drift is the format, a dollar is a
-// different account.
-const reproductionEpsilon = 0.01
+// reproductionTolerance separates two instruments measuring one account from
+// two instruments measuring different accounts. It is not a judgement about how
+// wrong a reconstruction may be — a cent-exact match is unreachable, because
+// the live path and the rebuilder price the same holdings from different
+// sources at different instants.
+//
+// Read off the first live run of this gate rather than picked: the observed
+// divergences fell in two clumps with two decades of empty space between them,
+// 0.004% on a $5,301 hyperliquid account against 1.4% on a $125,414 binance one
+// and 14% on a dust account. Anything inside the first clump is the instruments
+// disagreeing about a price; anything past it is them disagreeing about the
+// account. The 50% the rebuilder's own gate carried sat far above both, which
+// is why it published a $22,244 error.
+const reproductionTolerance = 0.001
 
 // contradictedDay reports the first day a reconstruction disagrees with a day
 // we measured directly, and by how much.
@@ -2440,6 +2449,14 @@ func contradictedDay(rebuilt, existing []*repository.Snapshot) (*repository.Snap
 		if e.IsHistorical {
 			continue // reconstructed too — nothing independent to check against
 		}
+		if e.TotalEquity <= 0 {
+			// A live row at zero is far more often a degenerate sync than a
+			// funded account measured empty, and the rest of the service
+			// already refuses to anchor on one (recalibrateOne). Witnessing
+			// against it rejected a whole reconstruction over a day nobody
+			// trusts — observed on the first live run of this gate.
+			continue
+		}
 		measured[e.Timestamp.UTC().Truncate(24*time.Hour)] = e.TotalEquity
 	}
 	for _, r := range rebuilt {
@@ -2447,7 +2464,7 @@ func contradictedDay(rebuilt, existing []*repository.Snapshot) (*repository.Snap
 		if !ok {
 			continue
 		}
-		if math.Abs(r.TotalEquity-eq) > reproductionEpsilon {
+		if math.Abs(r.TotalEquity-eq)/math.Abs(eq) > reproductionTolerance {
 			return r, eq, true
 		}
 	}
