@@ -14,6 +14,7 @@ import (
 
 	"github.com/trackrecord/enclave/internal/attestation"
 	"github.com/trackrecord/enclave/internal/auth"
+	"github.com/trackrecord/enclave/internal/connector"
 	"github.com/trackrecord/enclave/internal/encryption"
 	"github.com/trackrecord/enclave/internal/repository"
 	"github.com/trackrecord/enclave/internal/service"
@@ -32,6 +33,30 @@ func resolveUserUID(ctx context.Context, bodyUID string) string {
 		return uid
 	}
 	return bodyUID
+}
+
+// connectCreateFailure reduces a ConnectionService.Create error to the status
+// and the fixed message the REST connect endpoints answer with. Both
+// /credentials/connect (E2E) and /connection go through it so the two cannot
+// drift apart, and no branch echoes err: the venue text stays in the logs.
+//
+// The IP branch is the one that was missing. Create returns
+// connector.ErrIPRestricted when the venue accepted the key and refused our
+// egress address, and that text contains no "invalid credentials", so it fell
+// through to the generic 500 — which the frontend renders as "we're having a
+// problem on our end". The key holder was told to sit out an outage that did
+// not exist, when the fix was one line in their broker's IP whitelist. The
+// message is the sentinel's own wording, which is what the frontend's IP rule
+// (broker-error-messages.ts) matches on.
+func connectCreateFailure(err error) (int, string) {
+	switch {
+	case connector.IsIPRestriction(err):
+		return http.StatusBadRequest, connector.ErrIPRestricted.Error()
+	case strings.Contains(err.Error(), "invalid credentials"):
+		return http.StatusBadRequest, "invalid credentials"
+	default:
+		return http.StatusInternalServerError, "failed to create connection"
+	}
 }
 
 // genericInternalError is returned to clients in production paths where
@@ -478,17 +503,21 @@ func (h *Handler) ConnectCredentials(w http.ResponseWriter, r *http.Request) {
 		// invalid" behind "failed to create connection", which sent a user
 		// into a retry loop on 2026-08-04 (regenerating keys, hitting rate
 		// limits) instead of fixing the key once.
-		if strings.Contains(err.Error(), "invalid credentials") {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"success": false,
-				"error":   "invalid credentials",
-			})
-			return
+		status, message := connectCreateFailure(err)
+		if status == http.StatusInternalServerError {
+			h.logger.Error("create connection from E2E failed", zap.Error(err))
+		} else {
+			// Caller-fixable, so not an incident — but still logged: a 400
+			// answered in silence leaves nothing to diagnose from when the
+			// holder reports that the key "should work".
+			h.logger.Warn("create connection from E2E refused",
+				zap.String("reason", message),
+				zap.Error(err),
+			)
 		}
-		h.logger.Error("create connection from E2E failed", zap.Error(err))
-		writeJSON(w, http.StatusInternalServerError, map[string]any{
+		writeJSON(w, status, map[string]any{
 			"success": false,
-			"error":   "failed to create connection",
+			"error":   message,
 		})
 		return
 	}
@@ -640,21 +669,24 @@ func (h *Handler) CreateUserConnection(w http.ResponseWriter, r *http.Request) {
 		}
 		// Same caller-error mapping as the E2E path above: an invalid API key
 		// is a 400 with the real reason, not a generic 500.
-		if strings.Contains(err.Error(), "invalid credentials") {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"success": false,
-				"error":   "invalid credentials",
-			})
-			return
+		status, message := connectCreateFailure(err)
+		if status == http.StatusInternalServerError {
+			h.logger.Error("create connection failed",
+				zap.String("user_uid", userUID),
+				zap.String("exchange", req.Exchange),
+				zap.Error(err),
+			)
+		} else {
+			h.logger.Warn("create connection refused",
+				zap.String("user_uid", userUID),
+				zap.String("exchange", req.Exchange),
+				zap.String("reason", message),
+				zap.Error(err),
+			)
 		}
-		h.logger.Error("create connection failed",
-			zap.String("user_uid", userUID),
-			zap.String("exchange", req.Exchange),
-			zap.Error(err),
-		)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{
+		writeJSON(w, status, map[string]any{
 			"success": false,
-			"error":   "failed to create connection",
+			"error":   message,
 		})
 		return
 	}
