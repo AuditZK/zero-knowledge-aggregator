@@ -34,12 +34,23 @@ type PerformanceMetrics struct {
 	AvgLoss      float64 `json:"avg_loss"`
 
 	// Period info
-	TotalReturn      float64   `json:"total_return"`
-	AnnualizedReturn float64   `json:"annualized_return"`
-	PeriodStart      time.Time `json:"period_start"`
-	PeriodEnd        time.Time `json:"period_end"`
-	DataPoints       int       `json:"data_points"`
+	TotalReturn      float64 `json:"total_return"`
+	AnnualizedReturn float64 `json:"annualized_return"`
+	// Annualized reports whether AnnualizedReturn and CalmarRatio were
+	// computed at all: both stay zero under one year of history, where
+	// annualising would be a forecast (GIPS 2020, 2.A.32), and a reader must
+	// be able to tell that from a flat year.
+	Annualized  bool      `json:"annualized"`
+	PeriodDays  int       `json:"period_days"`
+	PeriodStart time.Time `json:"period_start"`
+	PeriodEnd   time.Time `json:"period_end"`
+	DataPoints  int       `json:"data_points"`
 }
+
+// Every daily figure here is a calendar-day observation (snapshots are taken
+// 7/7), so a year is 365 of them — the same basis as the analytics service,
+// or the signed report and the dashboard would disagree on every ratio.
+const daysPerYear = 365.0
 
 // MetricsService calculates performance metrics from snapshots
 type MetricsService struct {
@@ -122,15 +133,15 @@ func (s *MetricsService) calculateFromSnapshots(snapshots []*repository.Snapshot
 		return nil, errors.New("no valid returns calculated")
 	}
 
-	// Core statistics
+	// Returns here are decimals, so the annual percent rate is converted and
+	// spread over calendar days; rf=0 reproduces the rf-free ratios.
+	rfDaily := riskFreeRatePct / 100 / daysPerYear
+
 	avgReturn := mean(returns)
 	stdDev := stddev(returns)
-	downsideDev := s.downsideDeviation(returns, 0)
-
-	// Annualized metrics (252 trading days)
-	annualizedReturn := avgReturn * 252
-	annualizedVol := stdDev * math.Sqrt(252)
-	annualizedDownside := downsideDev * math.Sqrt(252)
+	downsideDev := s.downsideDeviation(returns, rfDaily)
+	annualizedVol := stdDev * math.Sqrt(daysPerYear)
+	annualizedDownside := downsideDev * math.Sqrt(daysPerYear)
 
 	// Drawdown analysis on normalized NAV series.
 	maxDD, maxDDDuration, currentDD := s.analyzeDrawdownNAV(navSeries)
@@ -140,23 +151,24 @@ func (s *MetricsService) calculateFromSnapshots(snapshots []*repository.Snapshot
 
 	totalReturn := dailyReturns[len(dailyReturns)-1].cumulativeReturn
 	periodStart, periodEnd, dataPoints := summarizePeriod(snapshots)
+	periodDays := elapsedDays(periodStart, periodEnd)
+	annualizedReturn, annualized := annualizeReturn(totalReturn, periodDays)
 
-	// Risk-adjusted ratios. Returns here are decimals, so convert the
-	// annual percent rate; rf=0 reproduces the legacy behavior.
-	rf := riskFreeRatePct / 100
-
+	// Sharpe and Sortino come from the daily sample scaled by √365, so they
+	// exist for any record with a dispersion; Calmar needs a yearly return
+	// and is left at zero with it.
 	sharpe := 0.0
-	if annualizedVol > 0 {
-		sharpe = (annualizedReturn - rf) / annualizedVol
+	if stdDev > 0 {
+		sharpe = (avgReturn - rfDaily) / stdDev * math.Sqrt(daysPerYear)
 	}
 
 	sortino := 0.0
-	if annualizedDownside > 0 {
-		sortino = (annualizedReturn - rf) / annualizedDownside
+	if downsideDev > 0 {
+		sortino = (avgReturn - rfDaily) / downsideDev * math.Sqrt(daysPerYear)
 	}
 
 	calmar := 0.0
-	if maxDD > 0 {
+	if annualized && maxDD > 0 {
 		calmar = annualizedReturn / maxDD
 	}
 
@@ -175,6 +187,8 @@ func (s *MetricsService) calculateFromSnapshots(snapshots []*repository.Snapshot
 		AvgLoss:             avgLoss,
 		TotalReturn:         totalReturn,
 		AnnualizedReturn:    annualizedReturn,
+		Annualized:          annualized,
+		PeriodDays:          periodDays,
 		PeriodStart:         periodStart,
 		PeriodEnd:           periodEnd,
 		DataPoints:          dataPoints,
@@ -204,23 +218,49 @@ func filterSnapshotsByExcludedExchanges(snapshots []*repository.Snapshot, exclud
 	return filterSnapshots(snapshots, "", excludedConnectionKeys)
 }
 
+// downsideDeviation is the root mean square of the shortfalls below target
+// over EVERY observation (Sortino & van der Meer, 1991). Averaging over the
+// losing days alone — the previous denominator — made a steady daily loss
+// read as no more downside risk than an occasional one.
 func (s *MetricsService) downsideDeviation(returns []float64, target float64) float64 {
+	if len(returns) == 0 {
+		return 0
+	}
 	var sumSquares float64
-	var count int
-
 	for _, r := range returns {
 		if r < target {
 			diff := r - target
 			sumSquares += diff * diff
-			count++
 		}
 	}
+	return math.Sqrt(sumSquares / float64(len(returns)))
+}
 
-	if count == 0 {
-		return 0
+func elapsedDays(start, end time.Time) int {
+	days := int(math.Round(end.Sub(start).Hours() / 24))
+	if days < 1 {
+		return 1
 	}
+	return days
+}
 
-	return math.Sqrt(sumSquares / float64(count))
+// annualizeReturn compounds a period return over elapsed calendar days.
+// Under one year it declines: the result would be an extrapolation, not a
+// measurement, and a +5 % week reading +1 164 %/yr is exactly the number a
+// signed report must never carry.
+func annualizeReturn(total float64, days int) (float64, bool) {
+	if float64(days) < daysPerYear {
+		return 0, false
+	}
+	growth := 1 + total
+	if growth <= 0 {
+		return 0, false
+	}
+	annual := math.Pow(growth, daysPerYear/float64(days)) - 1
+	if math.IsNaN(annual) || math.IsInf(annual, 0) {
+		return 0, false
+	}
+	return annual, true
 }
 
 func (s *MetricsService) analyzeDrawdownNAV(navSeries []float64) (maxDD float64, maxDDDuration int, currentDD float64) {

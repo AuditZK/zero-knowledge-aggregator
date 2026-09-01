@@ -225,6 +225,8 @@ func (s *ReportService) GenerateReport(ctx context.Context, req *GenerateReportR
 		PeriodEnd:        metrics.PeriodEnd,
 		TotalReturn:      metrics.TotalReturn,
 		AnnualizedReturn: metrics.AnnualizedReturn,
+		Annualized:       metrics.Annualized,
+		PeriodDays:       metrics.PeriodDays,
 		SharpeRatio:      metrics.SharpeRatio,
 		SortinoRatio:     metrics.SortinoRatio,
 		CalmarRatio:      metrics.CalmarRatio,

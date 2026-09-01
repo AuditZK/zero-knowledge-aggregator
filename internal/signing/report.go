@@ -38,8 +38,25 @@ const (
 	// 1.5 = adds reportName. It sat among the identification fields while
 	//       being unsigned, so "Demo account — test" could be renamed "Audited
 	//       track record 2026" and still verify.
-	PayloadVersion = "1.5"
+	// 1.6 = adds metrics.annualized and metrics.periodDays. Returns are no
+	//       longer annualised under one year of history, so a verifier must
+	//       see whether annualizedReturn/calmarRatio were computed at all,
+	//       and over how many calendar days, under the same signature.
+	PayloadVersion = "1.6"
 )
+
+// payloadVersionsWithoutAnnualizationBasis are the pre-1.6 signed-payload
+// shapes whose metrics block carries no annualized/periodDays fields. Older
+// reports keep their original shape so VerifyReport reproduces their hash.
+var payloadVersionsWithoutAnnualizationBasis = map[string]struct{}{
+	"":    {},
+	"1.0": {},
+	"1.1": {},
+	"1.2": {},
+	"1.3": {},
+	"1.4": {},
+	"1.5": {},
+}
 
 // payloadVersionsWithoutReportName are the pre-1.5 signed-payload shapes that
 // omit reportName. Older reports keep their original shape so VerifyReport
@@ -296,6 +313,8 @@ type ReportInput struct {
 	// Metrics
 	TotalReturn      float64
 	AnnualizedReturn float64
+	Annualized       bool // false under one year: AnnualizedReturn and CalmarRatio are zero by rule
+	PeriodDays       int
 	SharpeRatio      float64
 	SortinoRatio     float64
 	CalmarRatio      float64
@@ -334,6 +353,8 @@ type SignedReport struct {
 	// Metrics
 	TotalReturn      float64 `json:"total_return"`
 	AnnualizedReturn float64 `json:"annualized_return"`
+	Annualized       bool    `json:"annualized"`  // signed at PayloadVersion >= 1.6
+	PeriodDays       int     `json:"period_days"` // signed at PayloadVersion >= 1.6
 	SharpeRatio      float64 `json:"sharpe_ratio"`
 	SortinoRatio     float64 `json:"sortino_ratio"`
 	CalmarRatio      float64 `json:"calmar_ratio"`
@@ -389,6 +410,8 @@ func (s *ReportSigner) Sign(input *ReportInput) (*SignedReport, error) {
 		PeriodEnd:          formatISO8601(input.PeriodEnd),
 		TotalReturn:        input.TotalReturn,
 		AnnualizedReturn:   input.AnnualizedReturn,
+		Annualized:         input.Annualized,
+		PeriodDays:         input.PeriodDays,
 		SharpeRatio:        input.SharpeRatio,
 		SortinoRatio:       input.SortinoRatio,
 		CalmarRatio:        input.CalmarRatio,
@@ -478,6 +501,15 @@ func buildFinancialPayload(report *SignedReport) map[string]any {
 	if _, legacy := payloadVersionsWithoutRiskFreeRate[report.PayloadVersion]; !legacy {
 		metrics := payload["metrics"].(map[string]any)
 		metrics["riskFreeRate"] = report.RiskFreeRate
+	}
+
+	// Whether annualizedReturn and calmarRatio were computed at all, and over
+	// how many calendar days: under a year they are zero by rule, and a
+	// verifier must tell that from a flat year. Entered the payload at 1.6.
+	if _, legacy := payloadVersionsWithoutAnnualizationBasis[report.PayloadVersion]; !legacy {
+		metrics := payload["metrics"].(map[string]any)
+		metrics["annualized"] = report.Annualized
+		metrics["periodDays"] = report.PeriodDays
 	}
 
 	// SEC-14: the report label is what a reader sees first, so renaming a
