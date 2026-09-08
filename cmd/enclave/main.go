@@ -302,8 +302,11 @@ func main() {
 		connSvc.SetLogger(logger)
 		syncSvc = service.NewSyncService(connSvc, snapshotRepo, connectorCache, logger)
 		if cfg.HistorySyncNotifyURL != "" {
-			syncSvc.SetHistoryNotifyURL(cfg.HistorySyncNotifyURL)
-			logger.Info("history-rebuilt notify wired", zap.String("url", cfg.HistorySyncNotifyURL))
+			syncSvc.SetHistoryNotify(cfg.HistorySyncNotifyURL, cfg.HistorySyncNotifyToken)
+			logger.Info("history-rebuilt notify wired",
+				zap.String("url", cfg.HistorySyncNotifyURL),
+				zap.Bool("authenticated", cfg.HistorySyncNotifyToken != ""),
+			)
 		}
 		if syncStatusRepo != nil {
 			syncSvc.SetSyncStatusRepo(syncStatusRepo)

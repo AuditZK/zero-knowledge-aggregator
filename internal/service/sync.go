@@ -267,6 +267,12 @@ type SyncService struct {
 	// credentials, ignores the response — lets analytics run a per-user sync
 	// without waiting for its daily cron. Empty = no ping.
 	historyNotifyURL string
+	// historyNotifyToken, when set, is sent as X-Internal-Token on that ping.
+	// The endpoint it targets is a per-user sync trigger nginx exposes; a
+	// shared secret is what stops anyone who can reach it from firing it.
+	// Empty = no header, which is the pre-existing behaviour and keeps the
+	// ping working against a receiver that does not check one yet (C6).
+	historyNotifyToken string
 
 	// deferredRetries dedups in-memory 6h rate-limit retries keyed by connection
 	// ID, so a connection that 1018s on every daily pass (IBKR CTO+PEA sharing one
@@ -327,11 +333,14 @@ func (s *SyncService) SetRebuilderClient(c *rebuilderclient.Client) {
 	s.rebuilder = c
 }
 
-// SetHistoryNotifyURL configures the best-effort "history rebuilt" ping URL.
-// Empty disables it (the enclave then stays fully blind — downstream services
-// pick up new history on their own schedule).
-func (s *SyncService) SetHistoryNotifyURL(rawURL string) {
+// SetHistoryNotify configures the best-effort "history rebuilt" ping: the base
+// URL, and the shared secret sent as X-Internal-Token. An empty URL disables
+// the ping (the enclave then stays fully blind — downstream services pick up
+// new history on their own schedule). An empty token sends no header, so the
+// ping keeps working against a receiver that does not check one yet.
+func (s *SyncService) SetHistoryNotify(rawURL, token string) {
 	s.historyNotifyURL = strings.TrimSpace(rawURL)
+	s.historyNotifyToken = strings.TrimSpace(token)
 }
 
 // notifyHistoryRebuilt sends a best-effort POST to <historyNotifyURL>/<userUID>
@@ -352,6 +361,9 @@ func (s *SyncService) notifyHistoryRebuilt(ctx context.Context, userUID string) 
 	if err != nil {
 		s.logger.Warn("history-rebuilt notify: build request failed", zap.Error(err))
 		return
+	}
+	if s.historyNotifyToken != "" {
+		req.Header.Set("X-Internal-Token", s.historyNotifyToken)
 	}
 
 	resp, err := http.DefaultClient.Do(req)

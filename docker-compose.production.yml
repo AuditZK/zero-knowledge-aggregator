@@ -70,6 +70,16 @@ services:
     # Optional:
     #   LOG_LEVEL (default: info), BENCHMARK_SERVICE_URL (omit to disable),
     #   ERRTRACK_CAPACITY, ERRTRACK_NEW_GROUP_RATE
+    #   CTRADER_CLIENT_ID / CTRADER_CLIENT_SECRET — the Spotware application
+    #     credentials. Not fatal when missing (an enclave serving other brokers
+    #     must still boot) but the boot logs an Error and every cTrader connect
+    #     is refused with "not configured on the enclave" instead of the
+    #     "invalid credentials" it used to blame the user for (G-M7).
+    #   HISTORY_SYNC_NOTIFY_URL / HISTORY_SYNC_NOTIFY_TOKEN — the post-rebuild
+    #     ping to analytics (<url>/<userUid>). The token is sent as
+    #     X-Internal-Token; set the SAME value on the receiving service. Leave
+    #     both unset to disable the ping, or set only the URL to keep the
+    #     current unauthenticated behaviour while the receiver catches up (C6).
     env_file:
       - .env.production
     environment:
