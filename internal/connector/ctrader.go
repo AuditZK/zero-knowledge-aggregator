@@ -257,8 +257,13 @@ type cTraderDeal struct {
 		Swap        int64 `json:"swap"`
 		// Balance is the authoritative account balance AFTER this closing deal
 		// (scaled by MoneyDigits). Used to reconstruct the historical equity curve.
-		Balance     int64 `json:"balance"`
-		MoneyDigits int   `json:"moneyDigits"`
+		// A POINTER so an absent field and a genuine zero stay
+		// distinguishable: the old `Balance == 0` filter dropped every
+		// deal that closed the account at exactly 0.00, and the
+		// carry-forward builder then drew a flat line at the last
+		// positive balance — a blown account rendered as a plateau (E-B).
+		Balance     *int64 `json:"balance"`
+		MoneyDigits int    `json:"moneyDigits"`
 	} `json:"closePositionDetail"`
 }
 
@@ -307,6 +312,14 @@ type CTrader struct {
 	// loop declares it dead. Refreshed by every inbound frame and by the
 	// WebSocket pong the heartbeat's ping elicits.
 	readDeadline time.Duration
+	// rateLimitBackoff is the first wait after a BLOCKED_PAYLOAD_TYPE, then
+	// doubled per attempt. Overridable so tests don't sleep for seconds.
+	rateLimitBackoff time.Duration
+	// maxDealPages and histRequestDelay bound and pace the historical
+	// pagination. Fields rather than bare constants so a test can walk to
+	// the cap without sitting through 200 throttled round trips.
+	maxDealPages     int
+	histRequestDelay time.Duration
 
 	pendingMu sync.Mutex
 	pending   map[string]chan wsResponse
@@ -567,6 +580,15 @@ func (c *CTrader) ensureState() {
 	}
 	if c.readDeadline <= 0 {
 		c.readDeadline = ctraderReadDeadline
+	}
+	if c.rateLimitBackoff <= 0 {
+		c.rateLimitBackoff = ctraderRateLimitBaseBackoff
+	}
+	if c.maxDealPages <= 0 {
+		c.maxDealPages = ctraderMaxDealPages
+	}
+	if c.histRequestDelay <= 0 {
+		c.histRequestDelay = ctraderHistRequestDelay
 	}
 }
 
@@ -1753,17 +1775,80 @@ const (
 	// per-payload-type rate limit — rapid DealList / CashFlowHistory requests
 	// trigger "BLOCKED_PAYLOAD_TYPE: You are being rate limited".
 	ctraderHistRequestDelay = 600 * time.Millisecond
+
+	// V-E1: the throttle above is a guess, not a guarantee. When cTrader does
+	// block a payload type it says so, and ProtoOAErrorRes.retryAfter says
+	// until when. Before this, one BLOCKED_PAYLOAD_TYPE mid-walk aborted the
+	// whole reconstruction, which then restarted from scratch on the next
+	// sync with the exact same request profile — the most likely way a real
+	// rebuild dies.
+	ctraderRateLimitAttempts    = 5
+	ctraderRateLimitBaseBackoff = 2 * time.Second
+	ctraderRateLimitMaxBackoff  = 30 * time.Second
+	// ctraderRateLimitMaxWait caps how long a single broker-supplied
+	// retryAfter may park the walk — a bogus far-future timestamp must not
+	// hang the sync for hours.
+	ctraderRateLimitMaxWait = 60 * time.Second
 )
 
-// ctraderThrottle sleeps between paginated historical requests to stay under
+// throttle sleeps between paginated historical requests to stay under
 // cTrader's rate limit, returning early if the context is cancelled.
-func ctraderThrottle(ctx context.Context) error {
+func (c *CTrader) throttle(ctx context.Context) error {
+	c.ensureState()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(ctraderHistRequestDelay):
+	case <-time.After(c.histRequestDelay):
 		return nil
 	}
+}
+
+// sendPaged issues one page of a paginated historical request and, when
+// cTrader answers BLOCKED_PAYLOAD_TYPE (or a maintenance window), waits and
+// retries the SAME page instead of failing the walk (V-E1). It waits until
+// the broker's retryAfter when it gave one, otherwise on an exponential
+// backoff, and gives up after ctraderRateLimitAttempts so a permanently
+// blocked account still surfaces an error.
+func (c *CTrader) sendPaged(ctx context.Context, payloadType int, payload map[string]any, expected int) (json.RawMessage, error) {
+	c.ensureState()
+	backoff := c.rateLimitBackoff
+	var lastErr error
+
+	for attempt := 0; attempt < ctraderRateLimitAttempts; attempt++ {
+		raw, err := c.sendWithTokenRefresh(ctx, func() (json.RawMessage, error) {
+			return c.sendMessage(ctx, payloadType, payload, expected)
+		})
+		if err == nil {
+			return raw, nil
+		}
+		var rateLimited *ctraderRateLimitErr
+		if !errors.As(err, &rateLimited) {
+			return nil, err
+		}
+		lastErr = err
+
+		wait := backoff
+		if !rateLimited.retryAfter.IsZero() {
+			if until := time.Until(rateLimited.retryAfter); until > 0 {
+				wait = until
+			}
+		}
+		if wait > ctraderRateLimitMaxWait {
+			wait = ctraderRateLimitMaxWait
+		}
+		if wait <= 0 {
+			wait = backoff
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+		if backoff *= 2; backoff > ctraderRateLimitMaxBackoff {
+			backoff = ctraderRateLimitMaxBackoff
+		}
+	}
+	return nil, fmt.Errorf("cTrader rate limited on payloadType %d after %d attempts: %w", payloadType, ctraderRateLimitAttempts, lastErr)
 }
 
 // GetHistoricalSnapshots reconstructs the account's daily equity timeline
@@ -1829,21 +1914,20 @@ func (c *CTrader) getAllDeals(ctx context.Context, accountID int64, start, end t
 	to := end.UnixMilli()
 	var all []cTraderDeal
 	seen := make(map[int64]struct{})
-	for page := 0; page < ctraderMaxDealPages; page++ {
+	complete := false
+	c.ensureState()
+	for page := 0; page < c.maxDealPages; page++ {
 		if page > 0 {
-			if err := ctraderThrottle(ctx); err != nil {
+			if err := c.throttle(ctx); err != nil {
 				return nil, err
 			}
 		}
-		fromTS := from
-		raw, err := c.sendWithTokenRefresh(ctx, func() (json.RawMessage, error) {
-			return c.sendMessage(ctx, ctraderPayloadDealListReq, map[string]any{
-				"ctidTraderAccountId": accountID,
-				"fromTimestamp":       fromTS,
-				"toTimestamp":         to,
-				"maxRows":             1000,
-			}, ctraderPayloadDealListRes)
-		})
+		raw, err := c.sendPaged(ctx, ctraderPayloadDealListReq, map[string]any{
+			"ctidTraderAccountId": accountID,
+			"fromTimestamp":       from,
+			"toTimestamp":         to,
+			"maxRows":             1000,
+		}, ctraderPayloadDealListRes)
 		if err != nil {
 			return nil, err
 		}
@@ -1857,6 +1941,7 @@ func (c *CTrader) getAllDeals(ctx context.Context, accountID int64, start, end t
 		var added int
 		all, added = appendUnseenDeals(all, seen, resp.Deal)
 		if !resp.HasMore || len(resp.Deal) == 0 {
+			complete = true
 			break
 		}
 		last := resp.Deal[len(resp.Deal)-1].ExecutionTimestamp
@@ -1866,9 +1951,21 @@ func (c *CTrader) getAllDeals(ctx context.Context, accountID int64, start, end t
 		// advanced nor yielded anything new, stop — a full page packed into a
 		// single millisecond, where we can't progress without skipping.
 		if last <= from && added == 0 {
+			complete = true
 			break
 		}
 		from = last
+	}
+
+	// E-H1: running out of pages is not the end of the ledger. cTrader pages
+	// FORWARD in time, so the deals beyond the cap are the most RECENT ones —
+	// the carry-forward builder then draws a flat line from the truncation
+	// point to today and calls it a track record. Same stance as ig.go: refuse
+	// a history we know is incomplete rather than hand back a plausible one.
+	if !complete {
+		return nil, fmt.Errorf("ctrader deal history exceeds %d pages of 1000 for %s..%s: refusing a truncated history",
+			c.maxDealPages,
+			start.UTC().Format(time.DateOnly), end.UTC().Format(time.DateOnly))
 	}
 	return all, nil
 }
@@ -1898,21 +1995,18 @@ func (c *CTrader) getAllCashflows(ctx context.Context, accountID int64, start, e
 	}
 	var all []ctraderDepositWithdraw
 	for chunkStart := start; chunkStart.Before(end); chunkStart = chunkStart.Add(ctraderCashflowWindow) {
-		if err := ctraderThrottle(ctx); err != nil {
+		if err := c.throttle(ctx); err != nil {
 			return nil, err
 		}
 		chunkEnd := chunkStart.Add(ctraderCashflowWindow)
 		if chunkEnd.After(end) {
 			chunkEnd = end
 		}
-		fromTS, toTS := chunkStart.UnixMilli(), chunkEnd.UnixMilli()
-		raw, err := c.sendWithTokenRefresh(ctx, func() (json.RawMessage, error) {
-			return c.sendMessage(ctx, ctraderPayloadCashFlowHistoryReq, map[string]any{
-				"ctidTraderAccountId": accountID,
-				"fromTimestamp":       fromTS,
-				"toTimestamp":         toTS,
-			}, ctraderPayloadCashFlowHistoryRes)
-		})
+		raw, err := c.sendPaged(ctx, ctraderPayloadCashFlowHistoryReq, map[string]any{
+			"ctidTraderAccountId": accountID,
+			"fromTimestamp":       chunkStart.UnixMilli(),
+			"toTimestamp":         chunkEnd.UnixMilli(),
+		}, ctraderPayloadCashFlowHistoryRes)
 		if err != nil {
 			return nil, err
 		}
@@ -1953,7 +2047,7 @@ func truncUTCDay(t time.Time) time.Time {
 func ctraderBalancePoints(deals []cTraderDeal, cashflows []ctraderDepositWithdraw) []ctraderBalPoint {
 	var points []ctraderBalPoint
 	for _, d := range deals {
-		if d.ClosePositionDetail == nil || d.ClosePositionDetail.Balance == 0 {
+		if d.ClosePositionDetail == nil || d.ClosePositionDetail.Balance == nil {
 			continue
 		}
 		md := d.ClosePositionDetail.MoneyDigits
@@ -1962,7 +2056,7 @@ func ctraderBalancePoints(deals []cTraderDeal, cashflows []ctraderDepositWithdra
 		}
 		points = append(points, ctraderBalPoint{
 			t:   time.UnixMilli(d.ExecutionTimestamp).UTC(),
-			bal: float64(d.ClosePositionDetail.Balance) / ctraderMoneyDivisor(md),
+			bal: float64(*d.ClosePositionDetail.Balance) / ctraderMoneyDivisor(md),
 		})
 	}
 	for _, cf := range cashflows {
@@ -2070,7 +2164,7 @@ func ctraderResetAwareAmount(cf ctraderDepositWithdraw, running float64) (float6
 func ctraderDealBalancePoints(deals []cTraderDeal) []ctraderBalPoint {
 	var points []ctraderBalPoint
 	for _, d := range deals {
-		if d.ClosePositionDetail == nil || d.ClosePositionDetail.Balance == 0 {
+		if d.ClosePositionDetail == nil || d.ClosePositionDetail.Balance == nil {
 			continue
 		}
 		md := d.ClosePositionDetail.MoneyDigits
@@ -2079,7 +2173,7 @@ func ctraderDealBalancePoints(deals []cTraderDeal) []ctraderBalPoint {
 		}
 		points = append(points, ctraderBalPoint{
 			t:   time.UnixMilli(d.ExecutionTimestamp).UTC(),
-			bal: float64(d.ClosePositionDetail.Balance) / ctraderMoneyDivisor(md),
+			bal: float64(*d.ClosePositionDetail.Balance) / ctraderMoneyDivisor(md),
 		})
 	}
 	sort.Slice(points, func(i, j int) bool { return points[i].t.Before(points[j].t) })
