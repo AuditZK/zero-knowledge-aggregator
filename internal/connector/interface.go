@@ -244,6 +244,20 @@ type TokenRefreshable interface {
 	SetTokenPersister(persister TokenPersister)
 }
 
+// OAuthCredentialSource exposes the tokens a connector is ACTUALLY holding,
+// which are not necessarily the ones it was built with: validating a
+// connection can itself trigger a refresh, and cTrader rotates the refresh
+// token on every one.
+//
+// E-H4: the connect path stored req.APIKey/req.APISecret, so when
+// TestConnection or DetectIsPaper refreshed, the row was written with the
+// pair whose refresh token the broker had just invalidated — the connection
+// was born dead and failed on its first nightly sync with ACCESS_DENIED.
+type OAuthCredentialSource interface {
+	// CurrentCredentials returns the live access and refresh tokens.
+	CurrentCredentials() (accessToken, refreshToken string)
+}
+
 // HistoricalSnapshotProvider optionally provides historical daily snapshots.
 // Used by IBKR Flex for 365-day backfill on first sync.
 type HistoricalSnapshotProvider interface {

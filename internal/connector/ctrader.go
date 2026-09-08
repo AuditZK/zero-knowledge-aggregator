@@ -415,6 +415,15 @@ func (c *CTrader) SetTokenPersister(persister TokenPersister) {
 	c.tokenPersister = persister
 }
 
+// CurrentCredentials implements OAuthCredentialSource: the tokens this
+// instance is actually holding, which differ from the ones it was built with
+// as soon as a refresh has happened (E-H4).
+func (c *CTrader) CurrentCredentials() (string, string) {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	return c.accessToken, c.refreshToken
+}
+
 // DetectIsPaper reports whether the connection's account is a cTrader demo
 // account, from the authoritative per-account IsLive flag in the account list.
 // c.isLive is only a WS-routing seed derived from the passphrase, and OAuth

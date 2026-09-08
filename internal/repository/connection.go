@@ -1138,6 +1138,34 @@ func (r *ConnectionRepo) MarkRebuildRequested(ctx context.Context, connID string
 	return nil
 }
 
+// UpdateCredentialsHash rewrites the duplicate-detection hash of a connection.
+// Needed by the OAuth re-authorization path (C3): the new tokens change the
+// hash, and leaving the old one behind means the next connect of the SAME
+// account under a different label no longer looks like a duplicate. No-ops
+// when the column is absent (older schemas).
+func (r *ConnectionRepo) UpdateCredentialsHash(ctx context.Context, connID, credentialsHash string) error {
+	if strings.TrimSpace(connID) == "" {
+		return nil
+	}
+	hasCredentialsHash, _, _, _, _ := r.getCapabilityFlags(ctx)
+	if !hasCredentialsHash {
+		return nil
+	}
+	query := `UPDATE exchange_connections SET ` + r.qcol("credentials_hash") + ` = $1, ` + r.qcol("updated_at") + ` = $2 WHERE id = $3`
+	tag, err := r.pool.Exec(ctx, query, credentialsHash, time.Now().UTC(), connID)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42703" {
+			return nil
+		}
+		return fmt.Errorf("update credentials hash: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ClearRebuildConsent withdraws the SEC-08 opt-in so the nightly recalibration
 // pass stops selecting this connection. Deleting rebuilt history without this
 // is undone within hours: the pass re-fetches the window and re-upserts it,

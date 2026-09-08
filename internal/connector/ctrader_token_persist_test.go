@@ -118,3 +118,33 @@ func TestCTraderRefresh_ArmsProactiveRefresh(t *testing.T) {
 		t.Fatal("a token expiring in 60 s must be due for a proactive refresh")
 	}
 }
+
+// E-H4: after a refresh, CurrentCredentials must report the ROTATED pair.
+// The connect path stores what this returns; storing the request's pair wrote
+// a refresh token the broker had already consumed.
+func TestCTraderCurrentCredentials_ReportsTheRotatedPair(t *testing.T) {
+	server := ctraderRefreshServer(t, `{"access_token":"rotated-access","refresh_token":"rotated-refresh","expires_in":3600}`)
+
+	c := &CTrader{
+		clientID:     "id",
+		clientSecret: "secret",
+		accessToken:  "connect-time-access",
+		refreshToken: "connect-time-refresh",
+		authURL:      server.URL,
+		httpClient:   &http.Client{Timeout: 5 * time.Second},
+	}
+
+	access, refresh := c.CurrentCredentials()
+	if access != "connect-time-access" || refresh != "connect-time-refresh" {
+		t.Fatalf("before refresh: got %q/%q", access, refresh)
+	}
+
+	if err := c.refreshAccessToken(context.Background()); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	access, refresh = c.CurrentCredentials()
+	if access != "rotated-access" || refresh != "rotated-refresh" {
+		t.Fatalf("after refresh: got %q/%q, want the rotated pair", access, refresh)
+	}
+}
