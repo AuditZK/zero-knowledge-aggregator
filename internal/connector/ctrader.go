@@ -342,6 +342,9 @@ type CTrader struct {
 	// currencyMu guards the resolved account currency (E-C2).
 	currencyMu sync.RWMutex
 	currency   string
+	// currencyResolveFailed stops us re-requesting the asset list on every
+	// balance fetch when the broker will not answer it.
+	currencyResolveFailed bool
 
 	// warnMu guards capabilityWarnings, the markers the LAST GetBalance
 	// discovered (connector.CapabilityWarner).
@@ -832,17 +835,24 @@ func (c *CTrader) positionUnrealizedPnL(ctx context.Context, accountID int64, po
 // label rather than inventing one.
 func (c *CTrader) resolveAccountCurrency(ctx context.Context, accountID, depositAssetID int64) string {
 	c.currencyMu.RLock()
-	cached := c.currency
+	cached, failed := c.currency, c.currencyResolveFailed
 	c.currencyMu.RUnlock()
 	if cached != "" {
 		return cached
 	}
-	if depositAssetID <= 0 {
+	if failed || depositAssetID <= 0 {
+		return ""
+	}
+
+	giveUp := func() string {
+		c.currencyMu.Lock()
+		c.currencyResolveFailed = true
+		c.currencyMu.Unlock()
 		return ""
 	}
 
 	if err := c.authenticateAccount(ctx, accountID); err != nil {
-		return ""
+		return giveUp()
 	}
 	raw, err := c.sendMessage(
 		ctx,
@@ -851,13 +861,13 @@ func (c *CTrader) resolveAccountCurrency(ctx context.Context, accountID, deposit
 		ctraderPayloadAssetListRes,
 	)
 	if err != nil {
-		return ""
+		return giveUp()
 	}
 	var resp struct {
 		Asset []cTraderAsset `json:"asset"`
 	}
 	if err := decodeRawPayload(raw, &resp); err != nil {
-		return ""
+		return giveUp()
 	}
 	for _, a := range resp.Asset {
 		if a.AssetID != depositAssetID {
@@ -865,14 +875,14 @@ func (c *CTrader) resolveAccountCurrency(ctx context.Context, accountID, deposit
 		}
 		name := strings.ToUpper(strings.TrimSpace(firstNonEmpty(a.Name, a.DisplayName)))
 		if name == "" {
-			return ""
+			return giveUp()
 		}
 		c.currencyMu.Lock()
 		c.currency = name
 		c.currencyMu.Unlock()
 		return name
 	}
-	return ""
+	return giveUp()
 }
 
 // accountCurrency returns the resolved account currency, or "USD" when the
