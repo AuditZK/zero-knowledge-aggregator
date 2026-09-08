@@ -857,7 +857,11 @@ func refreshSignerAttestation(
 	// hardware attestation, refuse to sign reports as "unattested-dev". On
 	// re-attestation, log Error but preserve the previous binding to avoid
 	// outage on transient downgrades.
-	enforceProductionAttestation(cfg, attestReport, logger, initial)
+	// A refused report must not reach the signer. Returning here is what
+	// makes the "keeping previous binding" message above true.
+	if !enforceProductionAttestation(cfg, attestReport, logger, initial) {
+		return
+	}
 
 	if attestReport.Attestation == nil {
 		return
@@ -956,12 +960,20 @@ func checkBenchmarkConfig(url, token string, isDev bool) error {
 //
 // initial=true (startup) → Fatal so the container restarts under the
 // orchestrator's eye.
-// initial=false (periodic refresh) → Error but preserve the previous
-// binding; outages on transient downgrades would be worse than alerting
-// and continuing on the last-known-good attestation.
-func enforceProductionAttestation(cfg *config.Config, report *attestation.AttestationReport, logger *zap.Logger, initial bool) {
+// initial=false (periodic refresh) → Error and return FALSE, so the caller
+// keeps the previous binding; outages on transient downgrades would be worse
+// than alerting and continuing on the last-known-good attestation.
+//
+// It returns whether the caller may bind this report to the signer. It used
+// to return nothing, and the caller called signer.SetAttestation
+// unconditionally right after — so the log line saying "keeping previous
+// binding" was false: the downgraded report overwrote the good one with
+// attested=false, and every report signed afterwards carried it. The claim
+// only became true when the process restarted, which is exactly when the
+// startup Fatal would have caught it.
+func enforceProductionAttestation(cfg *config.Config, report *attestation.AttestationReport, logger *zap.Logger, initial bool) bool {
 	if cfg.Env != "production" {
-		return
+		return true
 	}
 
 	var reason string
@@ -983,18 +995,19 @@ func enforceProductionAttestation(cfg *config.Config, report *attestation.Attest
 	case !report.Attestation.ReportDataBoundToRequest:
 		reason = "snpguest --random fallback used: REPORT_DATA not bound to enclave keys"
 	default:
-		return
+		return true
 	}
 
 	if initial {
 		logger.Fatal("production refuses to start without verified SEV-SNP attestation",
 			zap.String("reason", reason),
 		)
-		return
+		return false
 	}
 	logger.Error("re-attestation downgrade detected in production (keeping previous binding)",
 		zap.String("reason", reason),
 	)
+	return false
 }
 
 // enforceMeasurementAllowlist verifies that the SEV-SNP launch measurement
