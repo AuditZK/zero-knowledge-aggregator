@@ -598,6 +598,14 @@ func (c *CTrader) currentAccessToken() string {
 	return c.accessToken
 }
 
+// currentRefreshToken reads the refresh token under the token lock. The
+// refresh path writes it, so every reader must take the lock (E-M2).
+func (c *CTrader) currentRefreshToken() string {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	return strings.TrimSpace(c.refreshToken)
+}
+
 func (c *CTrader) ensureAccountID(ctx context.Context) (int64, error) {
 	c.accountMu.Lock()
 	if c.accountID != 0 {
@@ -1105,6 +1113,16 @@ func (c *CTrader) authenticateAccount(ctx context.Context, accountID int64) erro
 }
 
 func (c *CTrader) sendWithTokenRefresh(ctx context.Context, call func() (json.RawMessage, error)) (json.RawMessage, error) {
+	// E-B: refresh a token we KNOW is about to expire instead of waiting for
+	// the request it breaks. Only armed once a previous refresh told us the
+	// lifetime — the connect-time token arrives without one.
+	if c.needsProactiveRefresh() {
+		if err := c.refreshAccessToken(ctx); err != nil {
+			return nil, err
+		}
+		c.disconnect(errors.New("cTrader reconnect after proactive token refresh"))
+	}
+
 	raw, err := call()
 	if err == nil {
 		return raw, nil
@@ -1122,7 +1140,9 @@ func (c *CTrader) sendWithTokenRefresh(ctx context.Context, call func() (json.Ra
 		return call()
 	}
 
-	if !isAccessTokenInvalid(err) || strings.TrimSpace(c.refreshToken) == "" {
+	// E-M2: read the refresh token through the accessor. Reading the field
+	// bare raced with refreshAccessToken's write on any shared instance.
+	if !isAccessTokenInvalid(err) || c.currentRefreshToken() == "" {
 		return nil, err
 	}
 
@@ -1206,10 +1226,23 @@ func (c *CTrader) refreshAccessToken(ctx context.Context) error {
 		return fmt.Errorf("token refresh response missing access_token")
 	}
 
-	c.accessToken = strings.TrimSpace(tokenResp.AccessToken)
-	if strings.TrimSpace(tokenResp.RefreshToken) != "" {
-		c.refreshToken = strings.TrimSpace(tokenResp.RefreshToken)
+	newAccess := strings.TrimSpace(tokenResp.AccessToken)
+	newRefresh := c.refreshToken
+	if rotated := strings.TrimSpace(tokenResp.RefreshToken); rotated != "" {
+		newRefresh = rotated
 	}
+
+	// The broker has already rotated: the refresh token we arrived with is
+	// dead from this instant, whatever happens next. So the new pair goes to
+	// RAM unconditionally — restoring the old one would guarantee failure —
+	// and the DB write is what decides whether the connection survives a
+	// restart.
+	c.accessToken = newAccess
+	c.refreshToken = newRefresh
+	if tokenResp.ExpiresIn > 0 {
+		c.accessTokenExpiry = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+	}
+	c.tokenInvalidated.Store(false)
 
 	// Persist refreshed tokens to DB SYNCHRONOUSLY, with the error checked.
 	// cTrader rotates single-use refresh tokens (each refresh invalidates the
@@ -1218,15 +1251,42 @@ func (c *CTrader) refreshAccessToken(ctx context.Context) error {
 	// rotated token whenever the persist failed or the process moved on/restarted
 	// before it landed, leaving only the now-consumed token in the DB — every
 	// subsequent refresh then failed with ACCESS_DENIED, bricking the connection.
+	//
+	// E-H3: one attempt was not enough. A pool hiccup, a failover, an UPDATE
+	// that matched no row — any of them silently traded a working connection
+	// for a dead one. Retry a few times before declaring the loss, and make
+	// the failure loud: the returned error is what the sync layer logs under
+	// "sync: OAuth refresh failed" and stores as needs-reauth.
 	if c.tokenPersister != nil {
-		persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := c.tokenPersister(persistCtx, c.accessToken, c.refreshToken); err != nil {
-			return fmt.Errorf("persist rotated cTrader tokens: %w", err)
+		var persistErr error
+		for attempt := 0; attempt < ctraderPersistAttempts; attempt++ {
+			if attempt > 0 {
+				time.Sleep(time.Duration(attempt) * ctraderPersistBackoff)
+			}
+			persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			persistErr = c.tokenPersister(persistCtx, newAccess, newRefresh)
+			cancel()
+			if persistErr == nil {
+				return nil
+			}
 		}
+		return fmt.Errorf("persist rotated cTrader tokens after %d attempts (the stored refresh token is now dead; the connection must be re-authorized): %w",
+			ctraderPersistAttempts, persistErr)
 	}
 
 	return nil
+}
+
+// needsProactiveRefresh reports whether the access token is close enough to
+// its known expiry that refreshing now beats being rejected mid-sync. Zero
+// expiry (the connect-time token, whose lifetime we never learn) means no.
+func (c *CTrader) needsProactiveRefresh() bool {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	if c.accessTokenExpiry.IsZero() || c.refreshToken == "" {
+		return false
+	}
+	return time.Until(c.accessTokenExpiry) < ctraderProactiveRefreshWindow
 }
 
 func (c *CTrader) ensureConnected(ctx context.Context) error {
@@ -1789,6 +1849,14 @@ const (
 	// retryAfter may park the walk — a bogus far-future timestamp must not
 	// hang the sync for hours.
 	ctraderRateLimitMaxWait = 60 * time.Second
+
+	// ctraderPersistAttempts bounds the retries around the rotated-token
+	// write. Losing that write costs the connection (E-H3).
+	ctraderPersistAttempts = 3
+	ctraderPersistBackoff  = 250 * time.Millisecond
+	// ctraderProactiveRefreshWindow refreshes an access token about to
+	// expire rather than waiting for the request that it breaks.
+	ctraderProactiveRefreshWindow = 5 * time.Minute
 )
 
 // throttle sleeps between paginated historical requests to stay under
