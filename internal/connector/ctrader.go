@@ -44,8 +44,29 @@ const (
 	ctraderPayloadSymbolByIDReq  = 2116
 	ctraderPayloadSymbolByIDRes  = 2117
 
+	// ProtoOAGetPositionUnrealizedPnLReq/Res — the ONLY place cTrader exposes
+	// unrealized PnL. ProtoOAPosition (from the reconcile, 2124/2125) carries
+	// no PnL field at all: the connector used to read a non-existent
+	// "unrealizedNetProfit" off it, so uPnL decoded as 0 and live equity was
+	// always the settled balance (audit E-C1, 2026-09-09).
+	ctraderPayloadUnrealizedPnLReq = 2187
+	ctraderPayloadUnrealizedPnLRes = 2188
+
+	// ProtoOAAssetListReq/Res — resolves the account's depositAssetId to a
+	// currency name (EUR, GBP, …). Without it every account was labelled USD.
+	ctraderPayloadAssetListReq = 2112
+	ctraderPayloadAssetListRes = 2113
+
 	ctraderPayloadHeartbeatEvent = 51
 	ctraderPayloadErrorRes       = 2142
+	// ProtoErrorRes — the COMMON-layer error (open api common messages), sent
+	// instead of ProtoOAErrorRes for protocol-level failures. It carries the
+	// same errorCode/description shape; treating it as an unknown payload type
+	// turned a described error into "unexpected cTrader payload type 50".
+	ctraderPayloadCommonErrorRes = 50
+	// ProtoOAAccountsTokenInvalidatedEvent — pushed WITHOUT a clientMsgId when
+	// the user revokes the application or the token dies server-side.
+	ctraderPayloadTokenInvalidatedEvent = 2147
 )
 
 // wsResponse is the result delivered to a request waiter when the cTrader
@@ -83,6 +104,10 @@ type cTraderTrader struct {
 	CtidTraderAccountID int64 `json:"ctidTraderAccountId"`
 	Balance             int64 `json:"balance"`
 	MoneyDigits         int   `json:"moneyDigits"`
+	// DepositAssetID identifies the account's deposit currency. Resolved to a
+	// name through ProtoOAAssetListReq (2112); everything used to be stamped
+	// "USD" regardless (audit E-C2).
+	DepositAssetID int64 `json:"depositAssetId"`
 }
 
 // tradeSide accepts either the string name ("BUY"/"SELL") or the
@@ -150,9 +175,33 @@ type cTraderPosition struct {
 	} `json:"tradeData"`
 	// cTrader's ProtoOAPosition.price is a double (the actual entry price, e.g.
 	// 1.15229), NOT a scaled integer — decode it as float64 and use it directly.
-	Price               float64 `json:"price"`
-	UnrealizedNetProfit int64   `json:"unrealizedNetProfit"`
-	UsedMargin          int64   `json:"usedMargin"`
+	Price float64 `json:"price"`
+	// NOTE: ProtoOAPosition has NO unrealized-PnL field. The connector used to
+	// decode "unrealizedNetProfit" here; it never exists on the wire, so every
+	// position reported 0 and equity collapsed to the settled balance. uPnL
+	// comes from ProtoOAGetPositionUnrealizedPnLReq (2187) instead.
+	UsedMargin int64 `json:"usedMargin"`
+	// MoneyDigits scales THIS position's money fields (usedMargin). It is not
+	// the trader-level moneyDigits: using the account's scale on a position
+	// whose own scale differs mis-scales used margin by a power of ten (V-E3).
+	MoneyDigits int `json:"moneyDigits"`
+}
+
+// cTraderPositionPnL is one entry of ProtoOAGetPositionUnrealizedPnLRes.
+// Amounts are scaled by the RESPONSE's moneyDigits, which is independent of
+// the trader's own moneyDigits.
+type cTraderPositionPnL struct {
+	PositionID         int64 `json:"positionId"`
+	GrossUnrealizedPnL int64 `json:"grossUnrealizedPnL"`
+	NetUnrealizedPnL   int64 `json:"netUnrealizedPnL"`
+}
+
+// cTraderAsset is one entry of ProtoOAAssetListRes, used to turn the trader's
+// depositAssetId into the account currency.
+type cTraderAsset struct {
+	AssetID     int64  `json:"assetId"`
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName"`
 }
 
 type cTraderDeal struct {
@@ -221,11 +270,41 @@ type CTrader struct {
 
 	accountMu sync.Mutex
 	accountID int64
+	// authenticatedAccountID is the account the CURRENT socket has already
+	// run ProtoOAAccountAuthReq for. Re-sending it before every request was a
+	// free contributor to the per-payload-type rate limit (E-M7). Reset by
+	// disconnect/markDisconnected, which is what invalidates the session.
+	authenticatedAccountID int64
 
 	symbolMu    sync.RWMutex
 	symbolCache map[int64]string
+	// symbolMisses memoizes symbol ids the broker could not resolve, so an
+	// unknown id costs one request per TTL instead of one per deal (E-M8).
+	symbolMisses map[int64]time.Time
+
+	// currencyMu guards the resolved account currency (E-C2).
+	currencyMu sync.RWMutex
+	currency   string
+
+	// warnMu guards capabilityWarnings, the markers the LAST GetBalance
+	// discovered (connector.CapabilityWarner).
+	warnMu             sync.Mutex
+	capabilityWarnings []string
+
+	// tokenInvalidated is set by the unsolicited
+	// ProtoOAAccountsTokenInvalidatedEvent (2147). Once set, the next call
+	// fails with an OAuth-shaped error instead of waiting for the following
+	// request to be rejected (E-B).
+	tokenInvalidated atomic.Bool
+
+	// accessTokenExpiry is when the current access token stops working, from
+	// the refresh response's expires_in. Zero = unknown (the connect-time
+	// token carries no expiry here).
+	accessTokenExpiry time.Time
 
 	tokenPersister TokenPersister
+
+	closed atomic.Bool
 }
 
 // NewCTrader creates a new cTrader connector.
@@ -251,11 +330,12 @@ func NewCTrader(creds *Credentials) *CTrader {
 		wsDialer: &websocket.Dialer{
 			HandshakeTimeout: 10 * time.Second,
 		},
-		wsLiveURL:   ctraderWSLiveURL,
-		wsDemoURL:   ctraderWSDemoURL,
-		authURL:     ctraderAuthURL,
-		pending:     make(map[string]chan wsResponse),
-		symbolCache: make(map[int64]string),
+		wsLiveURL:    ctraderWSLiveURL,
+		wsDemoURL:    ctraderWSDemoURL,
+		authURL:      ctraderAuthURL,
+		pending:      make(map[string]chan wsResponse),
+		symbolCache:  make(map[int64]string),
+		symbolMisses: make(map[int64]time.Time),
 	}
 }
 
@@ -334,6 +414,11 @@ func (c *CTrader) GetPositions(ctx context.Context) ([]*Position, error) {
 		return nil, err
 	}
 
+	// uPnL is a separate request (2187); the reconcile payload carries none.
+	// A failure here is not fatal for the position LIST — the sizes and entry
+	// prices are still correct — so it degrades to 0 with the warning recorded.
+	pnlByPosition, _, _ := c.positionUnrealizedPnL(ctx, accountID, rawPositions)
+
 	positions := make([]*Position, 0, len(rawPositions))
 	for _, p := range rawPositions {
 		symbol := c.getSymbolName(ctx, p.TradeData.SymbolID, accountID)
@@ -348,7 +433,7 @@ func (c *CTrader) GetPositions(ctx context.Context) ([]*Position, error) {
 			Size:          float64(p.TradeData.Volume) / 100.0,
 			EntryPrice:    p.Price,
 			MarkPrice:     0,
-			UnrealizedPnL: float64(p.UnrealizedNetProfit) / 100.0,
+			UnrealizedPnL: pnlByPosition[p.PositionID],
 			MarketType:    detectCTraderMarketType(symbol),
 		})
 	}
@@ -379,9 +464,16 @@ func (c *CTrader) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade
 			side = "sell"
 		}
 
+		// E-M6: money fields honour moneyDigits. Volumes (FilledVolume) do
+		// NOT — cTrader scales them by a fixed 1/100 — so only realizedPnL
+		// and the fee move to the money divisor.
 		realizedPnL := 0.0
 		if d.ClosePositionDetail != nil {
-			realizedPnL = float64(d.ClosePositionDetail.GrossProfit-d.ClosePositionDetail.Commission-d.ClosePositionDetail.Swap) / 100.0
+			md := d.ClosePositionDetail.MoneyDigits
+			if md == 0 {
+				md = d.MoneyDigits
+			}
+			realizedPnL = float64(d.ClosePositionDetail.GrossProfit-d.ClosePositionDetail.Commission-d.ClosePositionDetail.Swap) / ctraderMoneyDivisor(md)
 		}
 
 		trades = append(trades, &Trade{
@@ -390,8 +482,8 @@ func (c *CTrader) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade
 			Side:        side,
 			Price:       d.ExecutionPrice,
 			Quantity:    float64(d.FilledVolume) / 100.0,
-			Fee:         float64(d.Commission) / 100.0,
-			FeeCurrency: "USD",
+			Fee:         float64(d.Commission) / ctraderMoneyDivisor(d.MoneyDigits),
+			FeeCurrency: c.accountCurrency(),
 			RealizedPnL: realizedPnL,
 			Timestamp:   time.UnixMilli(d.ExecutionTimestamp).UTC(),
 			MarketType:  detectCTraderMarketType(symbol),
@@ -422,6 +514,9 @@ func (c *CTrader) ensureState() {
 	}
 	if c.symbolCache == nil {
 		c.symbolCache = make(map[int64]string)
+	}
+	if c.symbolMisses == nil {
+		c.symbolMisses = make(map[int64]time.Time)
 	}
 }
 
@@ -517,6 +612,8 @@ func (c *CTrader) getAccounts(ctx context.Context) ([]cTraderAccount, error) {
 }
 
 func (c *CTrader) getAccountBalance(ctx context.Context, accountID int64) (*cTraderBalanceInfo, error) {
+	c.resetCapabilityWarnings()
+
 	trader, err := c.getTraderInfo(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -533,22 +630,49 @@ func (c *CTrader) getAccountBalance(ctx context.Context, accountID int64) (*cTra
 		return nil, err
 	}
 
-	unrealizedPnL := 0.0
+	// E-C1: unrealized PnL is a request of its own (2187). Reading it off
+	// ProtoOAPosition returned 0 forever, so equity WAS the settled balance:
+	// a step curve for anyone holding overnight, and understated drawdowns.
+	_, unrealizedPnL, pnlErr := c.positionUnrealizedPnL(ctx, accountID, positions)
+	if pnlErr != nil {
+		// Deliberately not fatal: refusing the whole snapshot would leave a
+		// hole in the equity curve, which analytics reads as a gap. The
+		// warning rides to sync_statuses.errorMessage under the "warning:"
+		// prefix so a broker that cannot answer 2187 is visible instead of
+		// silently publishing balance-only equity.
+		c.addCapabilityWarning("unrealized_pnl_unavailable")
+	}
+
 	marginUsed := 0.0
 	for _, p := range positions {
-		unrealizedPnL += float64(p.UnrealizedNetProfit) / divisor
-
+		// V-E3: usedMargin is scaled by the POSITION's moneyDigits, not the
+		// trader's. Using the account scale mis-scaled margin by 10^Δ.
+		posDivisor := divisor
+		if p.MoneyDigits > 0 {
+			posDivisor = math.Pow10(p.MoneyDigits)
+		}
 		used := p.UsedMargin
 		if used <= 0 {
 			used = p.TradeData.UsedMargin
 		}
 		if used > 0 {
-			marginUsed += float64(used) / divisor
+			marginUsed += float64(used) / posDivisor
 		}
 	}
 
 	balance := float64(trader.Balance) / divisor
 	equity := balance + unrealizedPnL
+
+	currency := c.resolveAccountCurrency(ctx, accountID, trader.DepositAssetID)
+	if currency != "" && currency != "USD" {
+		// E-C2: no FX conversion is performed anywhere downstream, so a
+		// non-USD account is reported in its own units. Say so instead of
+		// stamping "USD" on EUR figures.
+		c.addCapabilityWarning("account_currency_" + strings.ToLower(currency))
+	}
+	if currency == "" {
+		currency = "USD"
+	}
 
 	return &cTraderBalanceInfo{
 		Balance:         balance,
@@ -556,8 +680,139 @@ func (c *CTrader) getAccountBalance(ctx context.Context, accountID int64) (*cTra
 		UnrealizedPnL:   unrealizedPnL,
 		MarginUsed:      marginUsed,
 		MarginAvailable: equity - marginUsed,
-		Currency:        "USD",
+		Currency:        currency,
 	}, nil
+}
+
+// positionUnrealizedPnL asks cTrader for the live unrealized PnL of the open
+// positions (ProtoOAGetPositionUnrealizedPnLReq, 2187) and returns it per
+// positionId plus the total, both already scaled by the RESPONSE's own
+// moneyDigits. No open positions = no request and a zero total.
+func (c *CTrader) positionUnrealizedPnL(ctx context.Context, accountID int64, positions []cTraderPosition) (map[int64]float64, float64, error) {
+	if len(positions) == 0 {
+		return map[int64]float64{}, 0, nil
+	}
+	if err := c.authenticateAccount(ctx, accountID); err != nil {
+		return map[int64]float64{}, 0, err
+	}
+
+	raw, err := c.sendMessage(
+		ctx,
+		ctraderPayloadUnrealizedPnLReq,
+		map[string]any{"ctidTraderAccountId": accountID},
+		ctraderPayloadUnrealizedPnLRes,
+	)
+	if err != nil {
+		return map[int64]float64{}, 0, err
+	}
+
+	var resp struct {
+		PositionUnrealizedPnL []cTraderPositionPnL `json:"positionUnrealizedPnL"`
+		MoneyDigits           int                  `json:"moneyDigits"`
+	}
+	if err := decodeRawPayload(raw, &resp); err != nil {
+		return map[int64]float64{}, 0, err
+	}
+
+	divisor := ctraderMoneyDivisor(resp.MoneyDigits)
+	byPosition := make(map[int64]float64, len(resp.PositionUnrealizedPnL))
+	total := 0.0
+	for _, p := range resp.PositionUnrealizedPnL {
+		v := float64(p.NetUnrealizedPnL) / divisor
+		byPosition[p.PositionID] = v
+		total += v
+	}
+	return byPosition, total, nil
+}
+
+// resolveAccountCurrency turns the trader's depositAssetId into a currency
+// name via ProtoOAAssetListReq (2112), cached for the connector's lifetime.
+// Returns "" when it cannot be resolved — callers then keep the legacy "USD"
+// label rather than inventing one.
+func (c *CTrader) resolveAccountCurrency(ctx context.Context, accountID, depositAssetID int64) string {
+	c.currencyMu.RLock()
+	cached := c.currency
+	c.currencyMu.RUnlock()
+	if cached != "" {
+		return cached
+	}
+	if depositAssetID <= 0 {
+		return ""
+	}
+
+	if err := c.authenticateAccount(ctx, accountID); err != nil {
+		return ""
+	}
+	raw, err := c.sendMessage(
+		ctx,
+		ctraderPayloadAssetListReq,
+		map[string]any{"ctidTraderAccountId": accountID},
+		ctraderPayloadAssetListRes,
+	)
+	if err != nil {
+		return ""
+	}
+	var resp struct {
+		Asset []cTraderAsset `json:"asset"`
+	}
+	if err := decodeRawPayload(raw, &resp); err != nil {
+		return ""
+	}
+	for _, a := range resp.Asset {
+		if a.AssetID != depositAssetID {
+			continue
+		}
+		name := strings.ToUpper(strings.TrimSpace(firstNonEmpty(a.Name, a.DisplayName)))
+		if name == "" {
+			return ""
+		}
+		c.currencyMu.Lock()
+		c.currency = name
+		c.currencyMu.Unlock()
+		return name
+	}
+	return ""
+}
+
+// accountCurrency returns the resolved account currency, or "USD" when the
+// asset list has not been read yet. Money-labelling only; no conversion.
+func (c *CTrader) accountCurrency() string {
+	c.currencyMu.RLock()
+	defer c.currencyMu.RUnlock()
+	if c.currency == "" {
+		return "USD"
+	}
+	return c.currency
+}
+
+// CapabilityWarnings implements connector.CapabilityWarner: markers the last
+// GetBalance discovered (uPnL unreadable, non-USD account).
+func (c *CTrader) CapabilityWarnings() []string {
+	c.warnMu.Lock()
+	defer c.warnMu.Unlock()
+	if len(c.capabilityWarnings) == 0 {
+		return nil
+	}
+	out := make([]string, len(c.capabilityWarnings))
+	copy(out, c.capabilityWarnings)
+	return out
+}
+
+func (c *CTrader) addCapabilityWarning(marker string) {
+	c.warnMu.Lock()
+	defer c.warnMu.Unlock()
+	for _, w := range c.capabilityWarnings {
+		if w == marker {
+			return
+		}
+	}
+	c.capabilityWarnings = append(c.capabilityWarnings, marker)
+}
+
+func (c *CTrader) resetCapabilityWarnings() {
+	c.warnMu.Lock()
+	c.capabilityWarnings = nil
+	c.warnMu.Unlock()
 }
 
 func (c *CTrader) getTraderInfo(ctx context.Context, accountID int64) (*cTraderTrader, error) {
@@ -1201,7 +1456,14 @@ func (c *CTrader) GetCashflows(ctx context.Context, since time.Time) ([]*Cashflo
 	if err != nil {
 		return nil, err
 	}
-	return ctraderCashflowsFromEntries(entries), nil
+	flows := ctraderCashflowsFromEntries(entries)
+	// The ledger carries no currency of its own: it is the account's deposit
+	// currency, resolved from depositAssetId (E-C2). No conversion.
+	currency := c.accountCurrency()
+	for _, f := range flows {
+		f.Currency = currency
+	}
+	return flows, nil
 }
 
 // getRawCashflows fetches every balance-operation entry in [since, now],
