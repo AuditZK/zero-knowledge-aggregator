@@ -40,10 +40,13 @@ type ConnectionService struct {
 	repo       *repository.ConnectionRepo
 	encryption *encryption.Service
 	factory    *connector.Factory
-	// postCreateHook fires after a successful Create. Used to trigger one-shot
-	// background work tied to the new connection (e.g. historical snapshot
-	// backfill for connectors that support it). Nil = no-op.
-	postCreateHook func(ctx context.Context, userUID, exchange, label string)
+	// postCreateSyncHook fires after EVERY successful Create. It takes the
+	// connection's first live snapshot and writes its sync_statuses row.
+	// Nil = no-op.
+	postCreateSyncHook func(ctx context.Context, userUID, exchange, label string)
+	// postCreateRebuildHook fires only when the caller opted into a history
+	// rebuild (SEC-ZK-001 / SEC-08). Nil = no-op.
+	postCreateRebuildHook func(ctx context.Context, userUID, exchange, label string)
 	// logger is optional; when nil, transient-validation warnings are silent.
 	logger *zap.Logger
 }
@@ -63,12 +66,32 @@ func (s *ConnectionService) SetFactory(f *connector.Factory) {
 	s.factory = f
 }
 
-// SetPostCreateHook registers a callback invoked asynchronously after a
-// connection is successfully created. The hook receives a fresh background
-// context (the request context is cancelled by the time the goroutine runs).
-// Wired in main.go to SyncService.ReconstructHistoryOnConnect.
-func (s *ConnectionService) SetPostCreateHook(fn func(ctx context.Context, userUID, exchange, label string)) {
-	s.postCreateHook = fn
+// SetPostCreateSyncHook registers the callback that takes a new connection's
+// FIRST live snapshot. It runs after every successful Create, whatever the
+// caller asked about history.
+//
+// G-H7 / C7: this used to sit behind req.RebuildHistory together with the
+// history rebuild, on the assumption — written in main.go — that "frontend
+// only sends false for mt5". The cTrader OAuth callback sends nothing at all,
+// so it defaulted to false and the whole hook was skipped: a new cTrader
+// connection had no snapshot, no sync_statuses row and no status anywhere in
+// the admin until the 00:00 UTC pass. That is exactly the cold-start incident
+// of 2026-08-04 this hook was added to fix, re-entered through a different
+// door. Taking a snapshot is not credential egress, so nothing gates it.
+//
+// The hook receives a fresh background context (the request context is
+// cancelled by the time the goroutine runs).
+func (s *ConnectionService) SetPostCreateSyncHook(fn func(ctx context.Context, userUID, exchange, label string)) {
+	s.postCreateSyncHook = fn
+}
+
+// SetPostCreateRebuildHook registers the historical-reconstruction callback.
+// It runs ONLY when the caller set RebuildHistory: for non-IBKR exchanges the
+// rebuild ships decrypted credentials to a service outside the enclave
+// perimeter (SEC-ZK-001), and the opt-in is persisted before it fires so the
+// nightly recalibration can scope its egress the same way (SEC-08).
+func (s *ConnectionService) SetPostCreateRebuildHook(fn func(ctx context.Context, userUID, exchange, label string)) {
+	s.postCreateRebuildHook = fn
 }
 
 // SetLogger attaches a zap logger for non-fatal diagnostic events (e.g. saving
@@ -259,14 +282,12 @@ func (s *ConnectionService) Create(ctx context.Context, req *CreateConnectionReq
 	// Reuse testConn — it already has cached state from TestConnection (e.g. IBKR paper detection).
 	s.captureExchangeMetadata(ctx, conn.ID, testConn)
 
-	// Fire-and-forget post-create hook (historical snapshot backfill).
-	// Detached context — the request context dies when the HTTP response is
-	// sent and historical reconstruction can run for tens of seconds.
-	// SEC-ZK-001: only fire when the caller explicitly opts in. For non-IBKR
-	// the hook ships plaintext credentials to an external service; the
-	// default-false stance ensures terminals/CLIs that don't pass the field
-	// don't trigger that side effect silently.
-	if s.postCreateHook != nil && req.RebuildHistory {
+	// The history rebuild stays behind the explicit opt-in.
+	// SEC-ZK-001: for non-IBKR the hook ships plaintext credentials to an
+	// external service; the default-false stance ensures terminals/CLIs that
+	// don't pass the field don't trigger that side effect silently.
+	rebuild := s.postCreateRebuildHook != nil && req.RebuildHistory
+	if rebuild {
 		// SEC-08: persist the opt-in BEFORE firing the hook so the nightly
 		// recalibration pass can scope decrypted-credential egress to
 		// connections that explicitly consented. Without this durable record
@@ -281,10 +302,39 @@ func (s *ConnectionService) Create(ctx context.Context, req *CreateConnectionReq
 				zap.Error(err),
 			)
 		}
-		go s.postCreateHook(context.Background(), conn.UserUID, conn.Exchange, conn.Label)
 	}
 
+	s.dispatchPostCreateHooks(conn.UserUID, conn.Exchange, conn.Label, rebuild)
+
 	return nil
+}
+
+// dispatchPostCreateHooks runs the post-create work on a detached context —
+// the request context dies when the response is sent, and both hooks can run
+// for tens of seconds.
+//
+// The first live snapshot runs for EVERY new connection (G-H7): it is a read
+// of the account we were just given credentials for, it crosses no perimeter,
+// and without it the connection has no today-row and no sync_statuses entry
+// until the 00:00 pass. Only the history rebuild is gated on `rebuild`.
+//
+// Both hooks share ONE goroutine so their order is preserved: the snapshot the
+// sync writes is the equity anchor the rebuild dispatch reads
+// (EndEquityOverride, 2026-08-04).
+func (s *ConnectionService) dispatchPostCreateHooks(userUID, exchange, label string, rebuild bool) {
+	runRebuild := rebuild && s.postCreateRebuildHook != nil
+	if s.postCreateSyncHook == nil && !runRebuild {
+		return
+	}
+	go func() {
+		hookCtx := context.Background()
+		if s.postCreateSyncHook != nil {
+			s.postCreateSyncHook(hookCtx, userUID, exchange, label)
+		}
+		if runRebuild {
+			s.postCreateRebuildHook(hookCtx, userUID, exchange, label)
+		}
+	}()
 }
 
 func (s *ConnectionService) captureExchangeMetadata(ctx context.Context, connectionID string, exchangeConn connector.Connector) {

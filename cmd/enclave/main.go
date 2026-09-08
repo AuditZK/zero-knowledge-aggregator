@@ -344,28 +344,23 @@ func main() {
 			syncSvc.SetRebuilderClient(rebuilderClient)
 			logger.Info("rebuilder client wired", zap.String("url", cfg.RebuilderServiceURL))
 		}
-		// Trigger historical snapshot backfill on connection creation. For IBKR
-		// the rebuild runs in-enclave (ZK-native); for other exchanges the
-		// hook delegates to the external rebuilder when configured.
-		//
-		// Then take the FIRST live snapshot right away instead of leaving the
+		// Take the FIRST live snapshot right away instead of leaving the
 		// account without a today-row and without a sync_statuses entry until
 		// the next 00:00 pass — a user who signed up at 08:33 stayed frozen on
 		// yesterday's rebuilt history all day, with empty status columns in
 		// the admin (cold-start incident, 2026-08-04). The sync pipeline also
 		// writes the sync_statuses row the dashboards display. Failures only
 		// warn: the daily scheduler picks the connection up at midnight
-		// regardless. Connections created with rebuild_history=false skip the
-		// whole hook and keep waiting for the daily pass (frontend only sends
-		// false for mt5).
-		connSvc.SetPostCreateHook(func(ctx context.Context, userUID, exchange, label string) {
-			// Live sync FIRST: the row it writes is the equity anchor the
-			// rebuild dispatch reads (EndEquityOverride) — without it the
-			// walk-family rebuilders calibrate on their own wallet valuation
-			// and the anchor gate has no witness (2026-08-04: a mispriced
-			// walk published a 93k account at 3k because connect-time
-			// rebuilds carried no anchor). Sync failure degrades to the old
-			// anchorless behavior, never blocks the backfill.
+		// regardless.
+		//
+		// G-H7: this used to live inside the rebuild opt-in, under a comment
+		// claiming "frontend only sends false for mt5". The cTrader OAuth
+		// callback sends no rebuild_history field at all, so the gateway
+		// defaulted it to false and a new cTrader connection got neither a
+		// snapshot nor a status row before midnight — the same cold-start
+		// failure, re-entered by a door nobody had looked at. A snapshot
+		// crosses no perimeter, so it is not gated on anything.
+		connSvc.SetPostCreateSyncHook(func(ctx context.Context, userUID, exchange, label string) {
 			if r := syncSvc.SyncConnectionScheduledByLabel(ctx, userUID, exchange, label); r != nil && r.Error != "" {
 				logger.Warn("first live sync after connect failed; daily pass will retry",
 					zap.String("user_uid", userUID),
@@ -374,6 +369,21 @@ func main() {
 					zap.String("error", r.Error),
 				)
 			}
+		})
+
+		// Historical backfill on connection creation, behind the explicit
+		// opt-in (SEC-ZK-001/SEC-08). For IBKR the rebuild runs in-enclave
+		// (ZK-native); for other exchanges the hook delegates to the external
+		// rebuilder when configured, which is why it needs consent.
+		//
+		// It runs AFTER the sync hook returns — both share one goroutine — so
+		// the ordering the anchor depends on is unchanged: the row the sync
+		// writes is the equity anchor the rebuild dispatch reads
+		// (EndEquityOverride). Without it the walk-family rebuilders calibrate
+		// on their own wallet valuation and the anchor gate has no witness
+		// (2026-08-04: a mispriced walk published a 93k account at 3k because
+		// connect-time rebuilds carried no anchor).
+		connSvc.SetPostCreateRebuildHook(func(ctx context.Context, userUID, exchange, label string) {
 			syncSvc.ReconstructHistoryOnConnect(ctx, userUID, exchange, label)
 		})
 		metricsSvc = service.NewMetricsService(snapshotRepo)
