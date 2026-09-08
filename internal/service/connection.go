@@ -134,7 +134,9 @@ func (s *ConnectionService) Create(ctx context.Context, req *CreateConnectionReq
 		Passphrase: req.Passphrase,
 	})
 	if err != nil {
-		return fmt.Errorf("invalid credentials: %w", err)
+		// G-H4: a factory refusal is an unsupported/unconfigured exchange —
+		// nothing the caller can fix by re-entering a secret.
+		return fmt.Errorf("create connector: %w", err)
 	}
 	if err := testConn.TestConnection(ctx); err != nil {
 		// Transient upstream failures (busy report generator, rate limit, service
@@ -155,6 +157,33 @@ func (s *ConnectionService) Create(ctx context.Context, req *CreateConnectionReq
 			// holder off to regenerate a key that was never the problem, and
 			// the replacement fails identically.
 			return fmt.Errorf("%w: %w", connector.ErrIPRestricted, err)
+		} else if kind := connector.ClassifyConnectFailure(err); kind != connector.ConnectFailureCredentials {
+			// G-H4: same reasoning, generalised. "invalid credentials: " is
+			// the FIRST entry of the errsanitize table, so prefixing it onto
+			// a Spotware outage, a missing CTRADER_CLIENT_ID, a login with no
+			// trading account or a 429 turned all four into a 400 telling the
+			// user to check credentials they cannot correct — for cTrader they
+			// have just completed a successful OAuth login and hold no secret
+			// at all. Return the cause unprefixed and let errsanitize pick the
+			// category it now has for each of them.
+			if kind == connector.ConnectFailureUpstream && isOAuthExchange(normalizedExchange) {
+				// The broker never gave a verdict, and for an OAuth
+				// connection the user cannot simply retry: re-running the
+				// flow means going back through the broker's consent screen.
+				// The tokens they just obtained are valid, so keep the
+				// connection and let the daily scheduler validate it — the
+				// same trade already made for ErrTransient above.
+				if s.logger != nil {
+					s.logger.Warn("broker unreachable at connect; saving the OAuth connection for the daily retry",
+						zap.String("user_uid", req.UserUID),
+						zap.String("exchange", normalizedExchange),
+						zap.String("label", normalizedLabel),
+						zap.Error(err),
+					)
+				}
+			} else {
+				return err
+			}
 		} else {
 			return fmt.Errorf("invalid credentials: %w", err)
 		}
@@ -440,6 +469,14 @@ func normalizeSyncIntervalMinutes(value int) int {
 		return 1440
 	}
 	return value
+}
+
+// isOAuthExchange reports whether a connection's credentials are OAuth tokens
+// the user obtained through a broker consent screen rather than a key they
+// typed. Re-running that flow is expensive enough that an upstream outage at
+// connect should not throw the tokens away.
+func isOAuthExchange(exchange string) bool {
+	return exchange == "ctrader"
 }
 
 func normalizeExchange(exchange string) string {

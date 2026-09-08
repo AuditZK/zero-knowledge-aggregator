@@ -133,6 +133,25 @@ type Config struct {
 	// Parsed from HISTORY_SYNC_NOTIFY_URL.
 	HistorySyncNotifyURL string
 
+	// CTraderClientID / CTraderClientSecret are the Spotware application
+	// credentials every cTrader WebSocket session authenticates with
+	// (ProtoOAApplicationAuthReq) and that the OAuth refresh flow signs with.
+	// They are read from the environment by the connector itself; mirrored
+	// here so the boot can SAY they are missing. G-M7: there was no validator
+	// at all, so an enclave deployed without them answered every cTrader
+	// connect with "invalid credentials" — blaming the user for an operator's
+	// missing variable. Parsed from CTRADER_CLIENT_ID / CTRADER_CLIENT_SECRET.
+	CTraderClientID     string
+	CTraderClientSecret string
+
+	// HistorySyncNotifyToken, when set, is sent as X-Internal-Token on the
+	// post-rebuild ping to HistorySyncNotifyURL. The endpoint it targets is a
+	// per-user sync trigger that nginx exposes; without a shared secret it is
+	// callable by anyone who can reach it. Empty = no header, which is the
+	// pre-existing behaviour and keeps the ping working against a receiver
+	// that does not check one yet. Parsed from HISTORY_SYNC_NOTIFY_TOKEN.
+	HistorySyncNotifyToken string
+
 	// HandoffPeerURL, when non-empty, points at the URL of the previous
 	// running enclave's handoff endpoint (B2). Set ONLY during the
 	// upgrade window when v_N+1 is meant to fetch the master key from
@@ -252,6 +271,10 @@ func Load() *Config {
 		RebuilderServiceURL:    strings.TrimSpace(getEnv("REBUILDER_SERVICE_URL", "")),
 		RebuilderInternalToken: strings.TrimSpace(getEnv("REBUILDER_INTERNAL_TOKEN", "")),
 		HistorySyncNotifyURL:   strings.TrimSpace(getEnv("HISTORY_SYNC_NOTIFY_URL", "")),
+		HistorySyncNotifyToken: strings.TrimSpace(getEnv("HISTORY_SYNC_NOTIFY_TOKEN", "")),
+
+		CTraderClientID:     strings.TrimSpace(getEnv("CTRADER_CLIENT_ID", "")),
+		CTraderClientSecret: strings.TrimSpace(getEnv("CTRADER_CLIENT_SECRET", "")),
 
 		MTBridgeURL:        strings.TrimRight(strings.TrimSpace(getEnv("MT_BRIDGE_URL", "")), "/"),
 		MTBridgeHMACSecret: strings.TrimSpace(getEnv("MT_BRIDGE_HMAC_SECRET", "")),

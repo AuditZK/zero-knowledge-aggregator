@@ -391,6 +391,23 @@ func main() {
 		)
 	}
 
+	// G-M7: cTrader cannot work without the Spotware application credentials
+	// — every WebSocket session authenticates with them and the OAuth refresh
+	// signs with them. There is deliberately no Fatal here: an enclave that
+	// serves twenty other brokers must not refuse to boot over one that may
+	// not be in use. But it must SAY so, because the alternative is what
+	// production did: answer every cTrader connect with "invalid credentials"
+	// and send the user off to fix a secret they do not hold. The connect path
+	// now returns a "not configured on the enclave" category for the same
+	// reason (G-H4).
+	if cfg.CTraderClientID == "" || cfg.CTraderClientSecret == "" {
+		logger.Error("cTrader is not configured; every cTrader connect and sync will be refused",
+			zap.Bool("client_id_set", cfg.CTraderClientID != ""),
+			zap.Bool("client_secret_set", cfg.CTraderClientSecret != ""),
+			zap.String("hint", "set CTRADER_CLIENT_ID and CTRADER_CLIENT_SECRET in the enclave environment, or ignore this if cTrader is not offered"),
+		)
+	}
+
 	// 11c. Wire HTTP proxy for geo-restricted exchanges (e.g. Binance from EU).
 	// Set EXCHANGE_HTTP_PROXY=socks5://user:pass@host:port (or http://)
 	// and PROXY_EXCHANGES=binance (comma-separated, default: binance).
