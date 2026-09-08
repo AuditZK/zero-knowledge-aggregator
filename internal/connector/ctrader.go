@@ -67,6 +67,20 @@ const (
 	// ProtoOAAccountsTokenInvalidatedEvent — pushed WITHOUT a clientMsgId when
 	// the user revokes the application or the token dies server-side.
 	ctraderPayloadTokenInvalidatedEvent = 2147
+
+	// ctraderRequestTimeout bounds one request/response round trip.
+	ctraderRequestTimeout = 30 * time.Second
+	// ctraderHeartbeatInterval is cTrader's required client heartbeat period.
+	ctraderHeartbeatInterval = 10 * time.Second
+	// ctraderReadDeadline is how long the socket may produce nothing at all
+	// before the read loop tears it down. Every inbound frame and every
+	// WebSocket pong (the heartbeat pings each tick) pushes it back, so on a
+	// live socket it is never reached; on a half-open one — the TCP peer gone
+	// without a FIN — it is the ONLY thing that notices, and it must, because
+	// a "connected" socket that answers nothing poisoned the cached instance
+	// for the full hour TTL and burned the 5-minute sync budget 30 s at a
+	// time (audit E-H2).
+	ctraderReadDeadline = 90 * time.Second
 )
 
 // wsResponse is the result delivered to a request waiter when the cTrader
@@ -92,7 +106,29 @@ type wsOutboundMessage struct {
 type cTraderErrorPayload struct {
 	ErrorCode   string `json:"errorCode"`
 	Description string `json:"description"`
+	// RetryAfter (ProtoOAErrorRes.retryAfter) is the epoch millisecond after
+	// which the blocked payload type may be sent again. Never decoded before,
+	// so a BLOCKED_PAYLOAD_TYPE mid-walk aborted the whole reconstruction
+	// (V-E1).
+	RetryAfter uint64 `json:"retryAfter"`
+	// MaintenanceEndTimestamp is set when the broker is in maintenance.
+	MaintenanceEndTimestamp uint64 `json:"maintenanceEndTimestamp"`
 }
+
+// ctraderRateLimitErr carries the retry hint of a BLOCKED_PAYLOAD_TYPE /
+// maintenance error so the paginated walks can wait exactly as long as the
+// broker asked instead of giving up (V-E1).
+type ctraderRateLimitErr struct {
+	msg        string
+	retryAfter time.Time
+}
+
+func (e *ctraderRateLimitErr) Error() string { return e.msg }
+
+// ctraderTokenInvalidatedError is the message raised once cTrader has pushed
+// ProtoOAAccountsTokenInvalidatedEvent. It is worded so classifySyncError and
+// errsanitize both route it to the OAuth/re-authorization category.
+const ctraderTokenInvalidatedError = "cTrader error ACCESS_DENIED: the broker invalidated this access token (ProtoOAAccountsTokenInvalidatedEvent); the account must be re-authorized"
 
 type cTraderAccount struct {
 	CtidTraderAccountID int64  `json:"ctidTraderAccountId"`
@@ -263,6 +299,14 @@ type CTrader struct {
 	appAuthenticated bool
 	heartbeatStop    chan struct{}
 	writeMu          sync.Mutex
+
+	// requestTimeout bounds one request/response round trip. Overridable so
+	// tests can exercise the timeout path without waiting 30 s.
+	requestTimeout time.Duration
+	// readDeadline is how long the socket may stay silent before the read
+	// loop declares it dead. Refreshed by every inbound frame and by the
+	// WebSocket pong the heartbeat's ping elicits.
+	readDeadline time.Duration
 
 	pendingMu sync.Mutex
 	pending   map[string]chan wsResponse
@@ -517,6 +561,12 @@ func (c *CTrader) ensureState() {
 	}
 	if c.symbolMisses == nil {
 		c.symbolMisses = make(map[int64]time.Time)
+	}
+	if c.requestTimeout <= 0 {
+		c.requestTimeout = ctraderRequestTimeout
+	}
+	if c.readDeadline <= 0 {
+		c.readDeadline = ctraderReadDeadline
 	}
 }
 
@@ -1000,6 +1050,17 @@ func (c *CTrader) authenticateAccount(ctx context.Context, accountID int64) erro
 		return err
 	}
 
+	// E-M7: the account session lives on the socket, so re-sending
+	// ProtoOAAccountAuthReq before every single request bought nothing and
+	// fed the per-payload-type rate limit. Any teardown (disconnect,
+	// markDisconnected, endpoint switch) clears the memo.
+	c.connMu.Lock()
+	alreadyAuthed := c.authenticatedAccountID == accountID
+	c.connMu.Unlock()
+	if alreadyAuthed {
+		return nil
+	}
+
 	_, err := c.sendWithTokenRefresh(ctx, func() (json.RawMessage, error) {
 		return c.sendMessage(
 			ctx,
@@ -1011,7 +1072,14 @@ func (c *CTrader) authenticateAccount(ctx context.Context, accountID int64) erro
 			ctraderPayloadAccountAuthRes,
 		)
 	})
-	return err
+	if err != nil {
+		return err
+	}
+
+	c.connMu.Lock()
+	c.authenticatedAccountID = accountID
+	c.connMu.Unlock()
+	return nil
 }
 
 func (c *CTrader) sendWithTokenRefresh(ctx context.Context, call func() (json.RawMessage, error)) (json.RawMessage, error) {
@@ -1158,6 +1226,14 @@ func (c *CTrader) ensureConnected(ctx context.Context) error {
 		return err
 	}
 
+	// A silent socket must eventually fail a read; the pong the heartbeat's
+	// ping elicits is what keeps a healthy one alive (E-H2).
+	deadline := c.readDeadline
+	_ = ws.SetReadDeadline(time.Now().Add(deadline))
+	ws.SetPongHandler(func(string) error {
+		return ws.SetReadDeadline(time.Now().Add(deadline))
+	})
+
 	c.connMu.Lock()
 	if c.ws != nil {
 		c.connMu.Unlock()
@@ -1166,6 +1242,7 @@ func (c *CTrader) ensureConnected(ctx context.Context) error {
 	}
 	c.ws = ws
 	c.appAuthenticated = false
+	c.authenticatedAccountID = 0
 	stop := make(chan struct{})
 	c.heartbeatStop = stop
 	c.connMu.Unlock()
@@ -1176,7 +1253,7 @@ func (c *CTrader) ensureConnected(ctx context.Context) error {
 }
 
 func (c *CTrader) heartbeatLoop(ws *websocket.Conn, stop <-chan struct{}) {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(ctraderHeartbeatInterval)
 	defer ticker.Stop()
 
 	for {
@@ -1191,6 +1268,17 @@ func (c *CTrader) heartbeatLoop(ws *websocket.Conn, stop <-chan struct{}) {
 				c.markDisconnected(ws, err)
 				return
 			}
+			// The application heartbeat proves nothing about the socket: a
+			// half-open TCP connection swallows writes into the send buffer
+			// for minutes. The WebSocket ping does — its pong is what pushes
+			// the read deadline back (E-H2).
+			c.writeMu.Lock()
+			pingErr := ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
+			c.writeMu.Unlock()
+			if pingErr != nil && !errors.Is(pingErr, websocket.ErrCloseSent) {
+				c.markDisconnected(ws, pingErr)
+				return
+			}
 		}
 	}
 }
@@ -1202,12 +1290,24 @@ func (c *CTrader) readLoop(ws *websocket.Conn) {
 			c.markDisconnected(ws, err)
 			return
 		}
+		// Any inbound frame is proof of life.
+		_ = ws.SetReadDeadline(time.Now().Add(c.readDeadline))
 
 		var msg wsInboundMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
 			continue
 		}
 		if msg.PayloadType == ctraderPayloadHeartbeatEvent {
+			continue
+		}
+		// E-B: the token-invalidated event is PUSHED without a clientMsgId
+		// (user revoked the app, or the broker killed the token). Dropping it
+		// as "no waiter" meant the next request failed with whatever cTrader
+		// answered next; flagging it here makes the very next call surface an
+		// OAuth-shaped error the sync layer can classify as reauth_required.
+		if msg.PayloadType == ctraderPayloadTokenInvalidatedEvent {
+			c.tokenInvalidated.Store(true)
+			c.failPending(errors.New(ctraderTokenInvalidatedError))
 			continue
 		}
 		if msg.ClientMsgID == "" {
@@ -1221,25 +1321,57 @@ func (c *CTrader) readLoop(ws *websocket.Conn) {
 			continue
 		}
 
-		if msg.PayloadType == ctraderPayloadErrorRes {
-			var payload cTraderErrorPayload
-			_ = json.Unmarshal(msg.Payload, &payload)
-
-			errMsg := "cTrader unknown error"
-			if payload.ErrorCode != "" {
-				errMsg = fmt.Sprintf("cTrader error %s: %s", payload.ErrorCode, payload.Description)
-			}
-
+		// ProtoOAErrorRes (2142) and the common-layer ProtoErrorRes (50) carry
+		// the same errorCode/description shape. Treating 50 as an ordinary
+		// payload turned a described failure into "unexpected cTrader payload
+		// type 50" and threw the reason away (E-B).
+		if msg.PayloadType == ctraderPayloadErrorRes || msg.PayloadType == ctraderPayloadCommonErrorRes {
 			// CONN-007: use a short timeout instead of an unconditional
 			// `default:` drop. The respCh is a 1-buffered channel per
 			// request, so this only backs off when a duplicate response
 			// or a slow consumer already has the slot.
-			deliverCTraderResponse(respCh, wsResponse{err: errors.New(errMsg)})
+			deliverCTraderResponse(respCh, wsResponse{err: ctraderErrorFromPayload(msg.Payload)})
 			continue
 		}
 
 		deliverCTraderResponse(respCh, wsResponse{payloadType: msg.PayloadType, payload: msg.Payload})
 	}
+}
+
+// ctraderErrorFromPayload turns an error payload into an error, keeping the
+// broker's retry hint when the failure is a rate limit or a maintenance
+// window so the paginated walks can honour it (V-E1).
+func ctraderErrorFromPayload(raw json.RawMessage) error {
+	var payload cTraderErrorPayload
+	_ = json.Unmarshal(raw, &payload)
+
+	msg := "cTrader unknown error"
+	if payload.ErrorCode != "" {
+		msg = fmt.Sprintf("cTrader error %s: %s", payload.ErrorCode, payload.Description)
+	}
+
+	hint := payload.RetryAfter
+	if hint == 0 {
+		hint = payload.MaintenanceEndTimestamp
+	}
+	if isCTraderRateLimitCode(payload.ErrorCode, payload.Description) || hint != 0 {
+		var until time.Time
+		if hint != 0 {
+			until = time.UnixMilli(int64(hint)).UTC()
+		}
+		return &ctraderRateLimitErr{msg: msg, retryAfter: until}
+	}
+	return errors.New(msg)
+}
+
+// isCTraderRateLimitCode reports whether the broker is asking us to slow down
+// rather than telling us something is wrong with the request.
+func isCTraderRateLimitCode(code, description string) bool {
+	s := strings.ToUpper(code + " " + description)
+	return strings.Contains(s, "BLOCKED_PAYLOAD_TYPE") ||
+		strings.Contains(s, "RATE LIMIT") ||
+		strings.Contains(s, "RATE-LIMIT") ||
+		strings.Contains(s, "TOO MANY REQUEST")
 }
 
 // deliverCTraderResponse pushes a response to respCh with a short timeout
@@ -1266,6 +1398,12 @@ func (c *CTrader) sendMessage(
 	payload map[string]any,
 	expectedPayloadType int,
 ) (json.RawMessage, error) {
+	// E-B: once cTrader has told us the token is dead, every further request
+	// is a wasted round trip whose failure reason would be whatever came
+	// next. Fail on the known cause instead.
+	if c.tokenInvalidated.Load() {
+		return nil, errors.New(ctraderTokenInvalidatedError)
+	}
 	if err := c.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -1300,14 +1438,20 @@ func (c *CTrader) sendMessage(
 		return nil, err
 	}
 
-	timer := time.NewTimer(30 * time.Second)
+	timer := time.NewTimer(c.requestTimeout)
 	defer timer.Stop()
 
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-timer.C:
-		return nil, fmt.Errorf("cTrader request timeout for payloadType %d", payloadType)
+		// E-H2: a request that never came back means the socket is not
+		// carrying traffic. Leaving it "connected" made every subsequent
+		// call on the cached instance pay the same 30 s for the rest of the
+		// cache TTL. Tear it down so the next call redials.
+		err := fmt.Errorf("cTrader request timeout for payloadType %d", payloadType)
+		c.markDisconnected(ws, err)
+		return nil, err
 	case resp := <-respCh:
 		if resp.err != nil {
 			return nil, resp.err
@@ -1340,6 +1484,7 @@ func (c *CTrader) markDisconnected(ws *websocket.Conn, cause error) {
 
 	c.ws = nil
 	c.appAuthenticated = false
+	c.authenticatedAccountID = 0
 	stop := c.heartbeatStop
 	c.heartbeatStop = nil
 	c.connMu.Unlock()
@@ -1351,6 +1496,13 @@ func (c *CTrader) markDisconnected(ws *websocket.Conn, cause error) {
 	c.failPending(cause)
 }
 
+// disconnect drops the socket and fails every request currently in flight on
+// it. V-E2: that is deliberate but blunt — a token refresh calls it, so a
+// concurrent GetTrades on the same instance dies with "cTrader connection
+// closed" and the caller retries at a higher level. Re-authenticating the app
+// on the existing socket would avoid it; the reconnect is kept because
+// cTrader ties the session to the token that opened it and ALREADY_LOGGED_IN
+// recovery already relies on a fresh socket.
 func (c *CTrader) disconnect(cause error) {
 	c.connMu.Lock()
 	ws := c.ws
@@ -1358,6 +1510,7 @@ func (c *CTrader) disconnect(cause error) {
 	c.ws = nil
 	c.heartbeatStop = nil
 	c.appAuthenticated = false
+	c.authenticatedAccountID = 0
 	c.connMu.Unlock()
 
 	if stop != nil {
