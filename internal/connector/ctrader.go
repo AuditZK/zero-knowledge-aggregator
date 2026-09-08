@@ -1007,18 +1007,32 @@ func (c *CTrader) getSymbolName(ctx context.Context, symbolID, accountID int64) 
 	if symbolID <= 0 {
 		return ""
 	}
+	c.ensureState()
 
 	c.symbolMu.RLock()
 	name, ok := c.symbolCache[symbolID]
+	missedAt, missed := c.symbolMisses[symbolID]
 	c.symbolMu.RUnlock()
 	if ok && name != "" {
 		return name
+	}
+	// E-M8: only successful lookups were remembered, so a symbol the broker
+	// will not resolve cost one request per deal — hundreds per sync, all of
+	// them feeding the per-payload-type rate limit that then blocks the
+	// history walk. Remember the miss too, briefly: short enough that a newly
+	// listed symbol resolves on the next sync.
+	if missed && time.Since(missedAt) < ctraderSymbolMissTTL {
+		return fmt.Sprintf("SYMBOL_%d", symbolID)
 	}
 
 	resolved, err := c.getSymbolByID(ctx, symbolID, accountID)
 	if err == nil && resolved != "" {
 		return resolved
 	}
+
+	c.symbolMu.Lock()
+	c.symbolMisses[symbolID] = time.Now()
+	c.symbolMu.Unlock()
 
 	return fmt.Sprintf("SYMBOL_%d", symbolID)
 }
@@ -1878,6 +1892,8 @@ const (
 	// ctraderProactiveRefreshWindow refreshes an access token about to
 	// expire rather than waiting for the request that it breaks.
 	ctraderProactiveRefreshWindow = 5 * time.Minute
+	// ctraderSymbolMissTTL bounds the negative symbol cache (E-M8).
+	ctraderSymbolMissTTL = 5 * time.Minute
 )
 
 // throttle sleeps between paginated historical requests to stay under
@@ -2206,10 +2222,21 @@ func ctraderCashflowsByDay(deals []cTraderDeal, cashflows []ctraderDepositWithdr
 		}
 
 		amount, ok := ctraderResetAwareAmount(cf, running)
+
+		// E-M5: EVERY ledger entry reports the balance AFTER it — swaps,
+		// commissions, rebates, dividends included — and `running` used to
+		// advance only on the deposits and withdrawals we recognise. Between
+		// two cash flows it therefore drifted away from the true balance, and
+		// the reset heuristic below compares the ledger's claimed prior
+		// balance against it: drift far enough and a genuine deposit is
+		// rewritten as a demo reset, erasing real capital from the curve.
+		if cf.Balance != 0 {
+			running = float64(cf.Balance) / ctraderMoneyDivisor(cf.MoneyDigits)
+		}
+
 		if !ok {
 			continue
 		}
-		running = float64(cf.Balance) / ctraderMoneyDivisor(cf.MoneyDigits)
 
 		key := t.Format("20060102")
 		e := byDay[key]
