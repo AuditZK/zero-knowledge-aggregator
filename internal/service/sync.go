@@ -1598,6 +1598,16 @@ func (s *SyncService) recordSyncStatus(ctx context.Context, conn *repository.Exc
 		// marker in errorMessage, mirroring the skipped_stale contract.
 		status = "pending"
 		errMsg = "deferred_rate_limit: " + result.Error
+	case syncStatusMarker(result.Error) != "":
+		// E-H5 / C4: a machine-readable marker in errorMessage, same shape as
+		// skipped_stale:/deferred_rate_limit:/warning: above. Without it, a
+		// dead OAuth token and a dropped TCP connection both landed in
+		// sync_statuses as "get balance: sync failed", so nothing downstream
+		// could tell "reconnect your account" (only the user can fix it) from
+		// "we will retry tonight" (nobody needs to do anything). Analytics
+		// maps reauth_required: onto exchange_status.status = needs_reauth.
+		// The status column stays "error": the sync did fail.
+		errMsg = syncStatusMarker(result.Error) + ": " + result.Error
 	case result.Success:
 		status = "completed"
 		// A successful sync can still carry key-scope warnings — recorded in
