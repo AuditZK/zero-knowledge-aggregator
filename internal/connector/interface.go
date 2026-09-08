@@ -226,6 +226,16 @@ type PerMarketTradeFetcher interface {
 	GetTradesByMarket(ctx context.Context, marketType string, since time.Time) ([]*Trade, error)
 }
 
+// Connectors that hold a long-lived resource — a WebSocket with its read loop
+// and heartbeat, a pooled session — implement io.Closer. The connector cache
+// calls it whenever an instance leaves the cache (LRU eviction, TTL cleanup,
+// or being replaced under the same key). Nothing else may call it: the
+// instance is shared, and closing one in use breaks the caller's requests.
+//
+// E-H6: without this, an OAuth token rotation (which changes the cache key,
+// so a fresh instance is built) left the previous cTrader instance heartbeating
+// at Spotware forever.
+
 // TokenPersister is called when OAuth tokens are refreshed, to persist them to DB.
 type TokenPersister func(ctx context.Context, accessToken, refreshToken string) error
 

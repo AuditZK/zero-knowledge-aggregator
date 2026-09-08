@@ -103,3 +103,69 @@ func TestCTraderReadDeadline_TearsDownSilentSocket(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// E-H6: Close must release the socket, the read loop and the heartbeat. The
+// server side observing its own read fail is the proof the connector really
+// hung up rather than just forgetting the pointer.
+func TestCTraderClose_ReleasesSocketAndLoops(t *testing.T) {
+	serverGone := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				close(serverGone)
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	c := &CTrader{
+		clientID:     "client-id",
+		clientSecret: "client-secret",
+		accessToken:  "token",
+		isLive:       true,
+		wsLiveURL:    toWSURL(server.URL),
+		httpClient:   &http.Client{Timeout: 5 * time.Second},
+	}
+	if err := c.ensureConnected(context.Background()); err != nil {
+		t.Fatalf("ensureConnected: %v", err)
+	}
+
+	c.connMu.Lock()
+	stop := c.heartbeatStop
+	c.connMu.Unlock()
+	if stop == nil {
+		t.Fatal("heartbeat never started")
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	// Second call is a no-op, not a panic on an already-closed channel.
+	if err := c.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	select {
+	case <-stop:
+	case <-time.After(2 * time.Second):
+		t.Fatal("heartbeat loop was never told to stop")
+	}
+	select {
+	case <-serverGone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the WebSocket was never closed — the read loop is still parked on it")
+	}
+
+	c.connMu.Lock()
+	ws := c.ws
+	c.connMu.Unlock()
+	if ws != nil {
+		t.Fatal("socket still installed after Close")
+	}
+}

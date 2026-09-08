@@ -398,6 +398,18 @@ func NewCTrader(creds *Credentials) *CTrader {
 
 func (c *CTrader) Exchange() string { return "ctrader" }
 
+// Close releases the WebSocket, its read loop and its heartbeat. Implements
+// io.Closer for the connector cache, which calls it when the instance is
+// evicted, expires, or is replaced (E-H6). Idempotent, and safe to call on an
+// instance that never connected.
+func (c *CTrader) Close() error {
+	if c.closed.Swap(true) {
+		return nil
+	}
+	c.disconnect(errors.New("cTrader connector closed"))
+	return nil
+}
+
 // SetTokenPersister sets a callback to persist refreshed OAuth tokens to DB.
 func (c *CTrader) SetTokenPersister(persister TokenPersister) {
 	c.tokenPersister = persister
