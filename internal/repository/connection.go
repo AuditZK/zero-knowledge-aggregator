@@ -859,6 +859,15 @@ func (r *ConnectionRepo) Deactivate(ctx context.Context, id string) error {
 // Both values must be TS-format ciphertexts (hex-packed iv16||tag16||ciphertext).
 // IV/AuthTag columns are cleared so the TS-format read path is used on the next
 // decrypt regardless of what format was originally stored.
+//
+// E-H3: the label predicate is TRIM-aligned with every read above, and the row
+// count is CHECKED. cTrader rotates single-use refresh tokens, so an UPDATE
+// that matches nothing is not a no-op: the connector has already consumed the
+// stored token, believes the new one is safe, and the row keeps the burned one
+// — the connection is dead at the next refresh. The mismatch was reachable
+// whenever the caller supplied the label (post-create hook, admin/gRPC) against
+// a legacy row whose label carries whitespace: the read TRIMmed, the write did
+// not.
 func (r *ConnectionRepo) UpdateOAuthTokens(ctx context.Context, userUID, exchange, label, encAccessToken, encRefreshToken string) error {
 	r.getCapabilityFlags(ctx)
 	r.capMu.Lock()
@@ -866,20 +875,32 @@ func (r *ConnectionRepo) UpdateOAuthTokens(ctx context.Context, userUID, exchang
 	r.capMu.Unlock()
 
 	now := time.Now().UTC()
-	var query string
+	tag, err := r.pool.Exec(ctx, updateOAuthTokensQuery(isTS), encAccessToken, encRefreshToken, now, userUID, exchange, label)
+	if err != nil {
+		return err
+	}
+	if n := tag.RowsAffected(); n != 1 {
+		return fmt.Errorf("update oauth tokens for %s/%s/%q matched %d active rows, want 1", userUID, exchange, label, n)
+	}
+	return nil
+}
+
+// updateOAuthTokensQuery builds the OAuth-token UPDATE for either schema.
+// Extracted so its shape is assertable without a database: the label
+// predicate MUST be TRIM-aligned with the reads (GetByUserExchangeLabel),
+// otherwise the read finds the row, the write matches nothing, and the
+// rotated single-use refresh token is lost (E-H3).
+func updateOAuthTokensQuery(isTS bool) string {
 	if isTS {
-		query = `UPDATE exchange_connections
+		return `UPDATE exchange_connections
 			SET "encryptedApiKey" = $1, "encryptedApiSecret" = $2, "updatedAt" = $3
-			WHERE "userUid" = $4 AND exchange = $5 AND label = $6 AND "isActive" = true`
-	} else {
-		query = `UPDATE exchange_connections
+			WHERE "userUid" = $4 AND exchange = $5 AND TRIM(label) = TRIM($6) AND "isActive" = true`
+	}
+	return `UPDATE exchange_connections
 			SET encrypted_api_key = $1, api_key_iv = '', api_key_auth_tag = '',
 			    encrypted_api_secret = $2, api_secret_iv = '', api_secret_auth_tag = '',
 			    updated_at = $3
-			WHERE user_uid = $4 AND exchange = $5 AND label = $6 AND is_active = true`
-	}
-	_, err := r.pool.Exec(ctx, query, encAccessToken, encRefreshToken, now, userUID, exchange, label)
-	return err
+			WHERE user_uid = $4 AND exchange = $5 AND TRIM(label) = TRIM($6) AND is_active = true`
 }
 
 func (r *ConnectionRepo) getCapabilityFlags(ctx context.Context) (hasCredentialsHash bool, hasSyncIntervalMinutes bool, hasExcludeFromReport bool, hasKYCLevel bool, hasIsPaper bool) {
@@ -1110,6 +1131,34 @@ func (r *ConnectionRepo) MarkRebuildRequested(ctx context.Context, connID string
 	tag, err := r.pool.Exec(ctx, query, at.UTC(), connID)
 	if err != nil {
 		return fmt.Errorf("mark rebuild requested: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateCredentialsHash rewrites the duplicate-detection hash of a connection.
+// Needed by the OAuth re-authorization path (C3): the new tokens change the
+// hash, and leaving the old one behind means the next connect of the SAME
+// account under a different label no longer looks like a duplicate. No-ops
+// when the column is absent (older schemas).
+func (r *ConnectionRepo) UpdateCredentialsHash(ctx context.Context, connID, credentialsHash string) error {
+	if strings.TrimSpace(connID) == "" {
+		return nil
+	}
+	hasCredentialsHash, _, _, _, _ := r.getCapabilityFlags(ctx)
+	if !hasCredentialsHash {
+		return nil
+	}
+	query := `UPDATE exchange_connections SET ` + r.qcol("credentials_hash") + ` = $1, ` + r.qcol("updated_at") + ` = $2 WHERE id = $3`
+	tag, err := r.pool.Exec(ctx, query, credentialsHash, time.Now().UTC(), connID)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42703" {
+			return nil
+		}
+		return fmt.Errorf("update credentials hash: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound

@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/trackrecord/enclave/internal/attestation"
+	"github.com/trackrecord/enclave/internal/config"
+	"go.uber.org/zap"
+)
 
 // CFG-004: in production a benchmark URL must be https AND carry an internal
 // token (the series feeds the signed report). An unset URL and development are
@@ -62,6 +68,71 @@ func TestCheckMTBridgeConfig(t *testing.T) {
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("checkMTBridgeConfig(%q, secretLen=%d, dev=%v) err=%v, wantErr=%v",
 					tc.url, len(tc.secret), tc.isDev, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// The re-attestation downgrade guard. enforceProductionAttestation used to
+// return nothing and refreshSignerAttestation called signer.SetAttestation
+// right after it regardless, so the "keeping previous binding" it logs was a
+// lie: the downgraded report overwrote the good binding with attested=false
+// and every report signed from then on carried it. The claim only became true
+// on the next restart — which is exactly where the startup Fatal lives.
+//
+// The boolean is what the caller now returns on. false = do not bind.
+func TestEnforceProductionAttestation_RefusesToBindADowngrade(t *testing.T) {
+	good := &attestation.AttestationReport{
+		Platform: attestation.PlatformSevSnp,
+		Attestation: &attestation.SevSnpReport{
+			Verified:                 true,
+			VcekVerified:             true,
+			ReportDataBoundToRequest: true,
+		},
+	}
+
+	downgrades := map[string]*attestation.AttestationReport{
+		"no attestation block": {Platform: attestation.PlatformSevSnp},
+		"unattested-dev platform": {
+			Platform:    "unattested-dev",
+			Attestation: &attestation.SevSnpReport{Verified: true, VcekVerified: true, ReportDataBoundToRequest: true},
+		},
+		"snpguest report unverified": {
+			Platform:    attestation.PlatformSevSnp,
+			Attestation: &attestation.SevSnpReport{Verified: false, VcekVerified: true, ReportDataBoundToRequest: true},
+		},
+		"vcek chain unverified": {
+			Platform:    attestation.PlatformSevSnp,
+			Attestation: &attestation.SevSnpReport{Verified: true, VcekVerified: false, ReportDataBoundToRequest: true},
+		},
+		"report data not bound to our keys": {
+			Platform:    attestation.PlatformSevSnp,
+			Attestation: &attestation.SevSnpReport{Verified: true, VcekVerified: true, ReportDataBoundToRequest: false},
+		},
+	}
+
+	prod := &config.Config{Env: "production"}
+	dev := &config.Config{Env: "development"}
+	logger := zap.NewNop()
+
+	if !enforceProductionAttestation(prod, good, logger, false) {
+		t.Fatal("a fully verified report must be bound")
+	}
+	if !enforceProductionAttestation(prod, good, logger, true) {
+		t.Fatal("a fully verified report must be bound at startup too")
+	}
+
+	for name, report := range downgrades {
+		t.Run(name, func(t *testing.T) {
+			// initial=false only: initial=true reaches logger.Fatal, which
+			// exits the process.
+			if enforceProductionAttestation(prod, report, logger, false) {
+				t.Fatalf("%s was accepted; it would overwrite the previous binding with attested=false", name)
+			}
+			// Outside production nothing is enforced — dev enclaves sign as
+			// unattested-dev on purpose.
+			if !enforceProductionAttestation(dev, report, logger, false) {
+				t.Fatalf("%s must not be refused outside production", name)
 			}
 		})
 	}

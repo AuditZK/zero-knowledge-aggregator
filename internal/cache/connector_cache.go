@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -78,6 +79,7 @@ func (c *ConnectorCache) Get(exchange, userUID string, credsHash []byte) connect
 		c.mu.Unlock()
 		c.misses.Add(1)
 		c.evictions.Add(1)
+		releaseConnector(entry.conn)
 		return nil
 	}
 
@@ -95,18 +97,20 @@ func (c *ConnectorCache) Put(exchange, userUID string, credsHash []byte, conn co
 	now := time.Now()
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	// Evict LRU if at capacity
-	if len(c.entries) >= c.maxSize {
-		c.evictLRU()
+	dropped := c.evictLRULocked()
+	if replaced, ok := c.entries[key]; ok && replaced.conn != conn {
+		dropped = append(dropped, replaced.conn)
 	}
-
 	c.entries[key] = &cacheEntry{
 		conn:      conn,
 		createdAt: now,
 		lastUsed:  now,
 	}
+	c.mu.Unlock()
+
+	// Outside the lock: Close talks to the network.
+	releaseConnectors(dropped)
 }
 
 // Stats returns current cache statistics.
@@ -141,10 +145,15 @@ func (c *ConnectorCache) buildKey(exchange, userUID string, credsHash []byte) st
 	return fmt.Sprintf("%s:%s:%s", exchange, userUID, hex.EncodeToString(credsHash[:8]))
 }
 
-func (c *ConnectorCache) evictLRU() {
+// evictLRULocked drops the least recently used entry when the cache is at
+// capacity and returns the connector to close. Caller holds c.mu.
+func (c *ConnectorCache) evictLRULocked() []connector.Connector {
+	if len(c.entries) < c.maxSize {
+		return nil
+	}
+
 	var oldestKey string
 	var oldestTime time.Time
-
 	for key, entry := range c.entries {
 		if oldestKey == "" || entry.lastUsed.Before(oldestTime) {
 			oldestKey = key
@@ -152,10 +161,13 @@ func (c *ConnectorCache) evictLRU() {
 		}
 	}
 
-	if oldestKey != "" {
-		delete(c.entries, oldestKey)
-		c.evictions.Add(1)
+	if oldestKey == "" {
+		return nil
 	}
+	evicted := c.entries[oldestKey]
+	delete(c.entries, oldestKey)
+	c.evictions.Add(1)
+	return []connector.Connector{evicted.conn}
 }
 
 func (c *ConnectorCache) cleanupLoop() {
@@ -174,13 +186,37 @@ func (c *ConnectorCache) cleanupLoop() {
 
 func (c *ConnectorCache) cleanup() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	var dropped []connector.Connector
 	now := time.Now()
 	for key, entry := range c.entries {
 		if now.Sub(entry.createdAt) > c.ttl {
 			delete(c.entries, key)
 			c.evictions.Add(1)
+			dropped = append(dropped, entry.conn)
 		}
+	}
+	c.mu.Unlock()
+
+	releaseConnectors(dropped)
+}
+
+// releaseConnector closes a connector that is leaving the cache, when it holds
+// something worth closing.
+//
+// E-H6: the cache key is a hash of the credentials, so every OAuth token
+// rotation produces a cache MISS and a brand new instance. Nothing ever
+// released the old one, and a cTrader instance owns a WebSocket, a read loop
+// and a 10-second heartbeat — all of which kept running against Spotware for
+// the life of the process, one leaked set per rotation, and a plausible source
+// of the ALREADY_LOGGED_IN the connector has to handle.
+func releaseConnector(conn connector.Connector) {
+	if closer, ok := conn.(io.Closer); ok && closer != nil {
+		_ = closer.Close()
+	}
+}
+
+func releaseConnectors(conns []connector.Connector) {
+	for _, conn := range conns {
+		releaseConnector(conn)
 	}
 }

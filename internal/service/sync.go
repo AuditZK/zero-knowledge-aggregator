@@ -17,6 +17,7 @@ import (
 	"github.com/trackrecord/enclave/internal/rebuilderclient"
 	"github.com/trackrecord/enclave/internal/repository"
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 )
 
 // QUAL-001: error format strings duplicated across the sync orchestrator.
@@ -267,12 +268,26 @@ type SyncService struct {
 	// credentials, ignores the response — lets analytics run a per-user sync
 	// without waiting for its daily cron. Empty = no ping.
 	historyNotifyURL string
+	// historyNotifyToken, when set, is sent as X-Internal-Token on that ping.
+	// The endpoint it targets is a per-user sync trigger nginx exposes; a
+	// shared secret is what stops anyone who can reach it from firing it.
+	// Empty = no header, which is the pre-existing behaviour and keeps the
+	// ping working against a receiver that does not check one yet (C6).
+	historyNotifyToken string
 
 	// deferredRetries dedups in-memory 6h rate-limit retries keyed by connection
 	// ID, so a connection that 1018s on every daily pass (IBKR CTO+PEA sharing one
 	// Flex token) doesn't stack overlapping timers. Guarded by deferMu.
 	deferMu         sync.Mutex
 	deferredRetries map[string]bool
+
+	// connectorGroup collapses concurrent builds of the SAME connector
+	// (E-M1, CONN-11 residue 2). getOrCreateConnector was check-then-create:
+	// two syncs racing on a cache miss each built an instance from the same
+	// stored credentials, and for cTrader that means two connectors holding
+	// the same single-use refresh token — whichever refreshes second is
+	// rejected, and the pair the loser then persists is already dead.
+	connectorGroup singleflight.Group
 }
 
 // NewSyncService creates a new sync service
@@ -327,11 +342,14 @@ func (s *SyncService) SetRebuilderClient(c *rebuilderclient.Client) {
 	s.rebuilder = c
 }
 
-// SetHistoryNotifyURL configures the best-effort "history rebuilt" ping URL.
-// Empty disables it (the enclave then stays fully blind — downstream services
-// pick up new history on their own schedule).
-func (s *SyncService) SetHistoryNotifyURL(rawURL string) {
+// SetHistoryNotify configures the best-effort "history rebuilt" ping: the base
+// URL, and the shared secret sent as X-Internal-Token. An empty URL disables
+// the ping (the enclave then stays fully blind — downstream services pick up
+// new history on their own schedule). An empty token sends no header, so the
+// ping keeps working against a receiver that does not check one yet.
+func (s *SyncService) SetHistoryNotify(rawURL, token string) {
 	s.historyNotifyURL = strings.TrimSpace(rawURL)
+	s.historyNotifyToken = strings.TrimSpace(token)
 }
 
 // notifyHistoryRebuilt sends a best-effort POST to <historyNotifyURL>/<userUID>
@@ -352,6 +370,9 @@ func (s *SyncService) notifyHistoryRebuilt(ctx context.Context, userUID string) 
 	if err != nil {
 		s.logger.Warn("history-rebuilt notify: build request failed", zap.Error(err))
 		return
+	}
+	if s.historyNotifyToken != "" {
+		req.Header.Set("X-Internal-Token", s.historyNotifyToken)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -689,7 +710,7 @@ func (s *SyncService) syncConnection(ctx context.Context, connMeta *repository.E
 		// boundary deposit double-count. Gated INSIDE the HistoricalSnapshotProvider
 		// type assertion, so live-only exchanges (HL/MEXC/Lighter) are unaffected.
 		if reconstructsEverySync(connMeta.Exchange) {
-			s.syncFromHistoricalProvider(ctx, connMeta, hsp, everySyncReconstructSince(connMeta.Exchange), reconstructOpts{})
+			noteReconstructionFailure(result, s.syncFromHistoricalProvider(ctx, connMeta, hsp, everySyncReconstructSince(connMeta.Exchange), reconstructOpts{}))
 		}
 	}
 
@@ -816,8 +837,10 @@ func (s *SyncService) syncConnection(ctx context.Context, connMeta *repository.E
 	// through the sync status so the frontend can ask the user to widen the
 	// key (see connector.CapabilityWarner).
 	if cw, ok := conn.(connector.CapabilityWarner); ok {
+		// APPEND: the reconstruction step above may already have recorded one
+		// (E-M4), and overwriting would drop it.
 		if warns := cw.CapabilityWarnings(); len(warns) > 0 {
-			result.CapabilityWarnings = warns
+			result.CapabilityWarnings = append(result.CapabilityWarnings, warns...)
 			s.logger.Warn("connector reported capability gaps",
 				zap.String("user_uid", connMeta.UserUID),
 				zap.String("exchange", connMeta.Exchange),
@@ -1310,7 +1333,7 @@ func (s *SyncService) buildConnectionSnapshot(ctx context.Context, connMeta *rep
 		// boundary deposit double-count. Gated INSIDE the HistoricalSnapshotProvider
 		// type assertion, so live-only exchanges (HL/MEXC/Lighter) are unaffected.
 		if reconstructsEverySync(connMeta.Exchange) {
-			s.syncFromHistoricalProvider(ctx, connMeta, hsp, everySyncReconstructSince(connMeta.Exchange), reconstructOpts{})
+			noteReconstructionFailure(result, s.syncFromHistoricalProvider(ctx, connMeta, hsp, everySyncReconstructSince(connMeta.Exchange), reconstructOpts{}))
 		}
 	}
 
@@ -1327,8 +1350,10 @@ func (s *SyncService) buildConnectionSnapshot(ctx context.Context, connMeta *rep
 	// where the midnight herd actually detects a key that cannot read part
 	// of the account; see connector.CapabilityWarner).
 	if cw, ok := conn.(connector.CapabilityWarner); ok {
+		// APPEND: the reconstruction step above may already have recorded one
+		// (E-M4), and overwriting would drop it.
 		if warns := cw.CapabilityWarnings(); len(warns) > 0 {
-			result.CapabilityWarnings = warns
+			result.CapabilityWarnings = append(result.CapabilityWarnings, warns...)
 			s.logger.Warn("connector reported capability gaps",
 				zap.String("user_uid", connMeta.UserUID),
 				zap.String("exchange", connMeta.Exchange),
@@ -1598,6 +1623,16 @@ func (s *SyncService) recordSyncStatus(ctx context.Context, conn *repository.Exc
 		// marker in errorMessage, mirroring the skipped_stale contract.
 		status = "pending"
 		errMsg = "deferred_rate_limit: " + result.Error
+	case syncStatusMarker(result.Error) != "":
+		// E-H5 / C4: a machine-readable marker in errorMessage, same shape as
+		// skipped_stale:/deferred_rate_limit:/warning: above. Without it, a
+		// dead OAuth token and a dropped TCP connection both landed in
+		// sync_statuses as "get balance: sync failed", so nothing downstream
+		// could tell "reconnect your account" (only the user can fix it) from
+		// "we will retry tonight" (nobody needs to do anything). Analytics
+		// maps reauth_required: onto exchange_status.status = needs_reauth.
+		// The status column stays "error": the sync did fail.
+		errMsg = syncStatusMarker(result.Error) + ": " + result.Error
 	case result.Success:
 		status = "completed"
 		// A successful sync can still carry key-scope warnings — recorded in
@@ -1777,7 +1812,10 @@ func (s *SyncService) reconstructHistory(ctx context.Context, connMeta *reposito
 		// signed by the report chain, stays inside the SEV-SNP perimeter.
 		// since=zero => full backfill (connect time + admin reconstruct); the
 		// every-sync path uses a bounded window.
-		s.syncFromHistoricalProvider(ctx, connMeta, hsp, time.Time{}, opts)
+		// Connect-time reconstruction: the failure is already logged at Error
+		// and there is no SyncResult to hang a warning on here — the caller is
+		// the post-create hook, not a sync.
+		_ = s.syncFromHistoricalProvider(ctx, connMeta, hsp, time.Time{}, opts)
 		s.notifyHistoryRebuilt(ctx, connMeta.UserUID)
 		return
 	}
@@ -2170,7 +2208,7 @@ func (s *SyncService) recalibrateOne(ctx context.Context, conn *repository.Excha
 // their Flex query (e.g. 30d → 365d) sees the new earlier days flow into
 // the DB on the next sync — we log "history reconstruction detected" the
 // first time we see Flex go further back than what we already have.
-func (s *SyncService) syncFromHistoricalProvider(ctx context.Context, connMeta *repository.ExchangeConnection, provider connector.HistoricalSnapshotProvider, since time.Time, opts reconstructOpts) {
+func (s *SyncService) syncFromHistoricalProvider(ctx context.Context, connMeta *repository.ExchangeConnection, provider connector.HistoricalSnapshotProvider, since time.Time, opts reconstructOpts) error {
 	firstSync := s.isFirstSync(ctx, connMeta)
 	if firstSync {
 		s.logger.Info("history backfill — first sync",
@@ -2197,17 +2235,35 @@ func (s *SyncService) syncFromHistoricalProvider(ctx context.Context, connMeta *
 				zap.String("exchange", connMeta.Exchange),
 				zap.Error(err),
 			)
-			return
+			return nil
 		}
 		s.logger.Error("historical snapshots fetch failed",
 			zap.String("user_uid", connMeta.UserUID),
 			zap.String("exchange", connMeta.Exchange),
 			zap.Error(err),
 		)
-		return
+		// E-M4: every caller used to discard this. The live snapshot still
+		// got written and the sync was recorded "completed", so a
+		// reconstruction failing every night — the boundary self-heal for
+		// cTrader, the whole Flex window for IBKR — left no trace anywhere a
+		// human looks.
+		return err
 	}
 
 	s.persistHistoricalSnapshots(ctx, connMeta, historicalSnapshots, firstSync, sourceInEnclave, opts)
+	return nil
+}
+
+// noteReconstructionFailure records a failed history reconstruction on the
+// live sync's result. The snapshot itself is fine, so this must not fail the
+// sync: it rides in CapabilityWarnings, which recordSyncStatus writes into
+// sync_statuses.errorMessage under the "warning:" prefix with the status left
+// "completed" — the one channel analytics already propagates (E-M4).
+func noteReconstructionFailure(result *SyncResult, err error) {
+	if result == nil || err == nil {
+		return
+	}
+	result.CapabilityWarnings = append(result.CapabilityWarnings, "history_reconstruction_failed")
 }
 
 // persistHistoricalSnapshots is the upsert loop shared between the
@@ -2921,31 +2977,52 @@ func (s *SyncService) getOrCreateConnector(exchange, userUID, label string, cred
 		}
 	}
 
-	// Create new connector
-	conn, err := s.factory.Create(&connector.Credentials{
-		Exchange:   exchange,
-		APIKey:     creds.APIKey,
-		APISecret:  creds.APISecret,
-		Passphrase: creds.Passphrase,
+	// E-M1: collapse concurrent misses on the same connection. The check
+	// above and the create below used to be a plain check-then-create, so two
+	// syncs racing on a cold cache each built a connector from the same
+	// stored credentials. For cTrader that hands the same single-use refresh
+	// token to two instances: the second refresh is rejected, and the token
+	// the loser persists is already dead.
+	key := fmt.Sprintf("%s:%s:%x", exchange, userUID, credsHash[:8])
+	built, err, _ := s.connectorGroup.Do(key, func() (any, error) {
+		// Re-check under the flight: a winner may have just populated it.
+		if s.connCache != nil {
+			if cached := s.connCache.Get(exchange, userUID, credsHash); cached != nil {
+				return cached, nil
+			}
+		}
+
+		conn, err := s.factory.Create(&connector.Credentials{
+			Exchange:   exchange,
+			APIKey:     creds.APIKey,
+			APISecret:  creds.APISecret,
+			Passphrase: creds.Passphrase,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		// Wire token persistence for OAuth connectors so refreshed tokens
+		// survive container restarts. Without this, every boot starts from the
+		// original (possibly expired) access_token stored in DB.
+		if tr, ok := conn.(connector.TokenRefreshable); ok && s.connSvc != nil {
+			tr.SetTokenPersister(func(ctx context.Context, accessToken, refreshToken string) error {
+				return s.connSvc.PersistOAuthTokens(ctx, userUID, exchange, label, accessToken, refreshToken)
+			})
+		}
+
+		if s.connCache != nil {
+			s.connCache.Put(exchange, userUID, credsHash, conn)
+		}
+		return conn, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-
-	// Wire token persistence for OAuth connectors so refreshed tokens survive
-	// container restarts. Without this, every boot starts from the original
-	// (possibly expired) access_token stored in DB.
-	if tr, ok := conn.(connector.TokenRefreshable); ok && s.connSvc != nil {
-		tr.SetTokenPersister(func(ctx context.Context, accessToken, refreshToken string) error {
-			return s.connSvc.PersistOAuthTokens(ctx, userUID, exchange, label, accessToken, refreshToken)
-		})
+	conn, ok := built.(connector.Connector)
+	if !ok || conn == nil {
+		return nil, fmt.Errorf("build connector for %s: empty result", exchange)
 	}
-
-	// Store in cache
-	if s.connCache != nil {
-		s.connCache.Put(exchange, userUID, credsHash, conn)
-	}
-
 	return conn, nil
 }
 

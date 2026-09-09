@@ -44,8 +44,43 @@ const (
 	ctraderPayloadSymbolByIDReq  = 2116
 	ctraderPayloadSymbolByIDRes  = 2117
 
+	// ProtoOAGetPositionUnrealizedPnLReq/Res — the ONLY place cTrader exposes
+	// unrealized PnL. ProtoOAPosition (from the reconcile, 2124/2125) carries
+	// no PnL field at all: the connector used to read a non-existent
+	// "unrealizedNetProfit" off it, so uPnL decoded as 0 and live equity was
+	// always the settled balance (audit E-C1, 2026-09-09).
+	ctraderPayloadUnrealizedPnLReq = 2187
+	ctraderPayloadUnrealizedPnLRes = 2188
+
+	// ProtoOAAssetListReq/Res — resolves the account's depositAssetId to a
+	// currency name (EUR, GBP, …). Without it every account was labelled USD.
+	ctraderPayloadAssetListReq = 2112
+	ctraderPayloadAssetListRes = 2113
+
 	ctraderPayloadHeartbeatEvent = 51
 	ctraderPayloadErrorRes       = 2142
+	// ProtoErrorRes — the COMMON-layer error (open api common messages), sent
+	// instead of ProtoOAErrorRes for protocol-level failures. It carries the
+	// same errorCode/description shape; treating it as an unknown payload type
+	// turned a described error into "unexpected cTrader payload type 50".
+	ctraderPayloadCommonErrorRes = 50
+	// ProtoOAAccountsTokenInvalidatedEvent — pushed WITHOUT a clientMsgId when
+	// the user revokes the application or the token dies server-side.
+	ctraderPayloadTokenInvalidatedEvent = 2147
+
+	// ctraderRequestTimeout bounds one request/response round trip.
+	ctraderRequestTimeout = 30 * time.Second
+	// ctraderHeartbeatInterval is cTrader's required client heartbeat period.
+	ctraderHeartbeatInterval = 10 * time.Second
+	// ctraderReadDeadline is how long the socket may produce nothing at all
+	// before the read loop tears it down. Every inbound frame and every
+	// WebSocket pong (the heartbeat pings each tick) pushes it back, so on a
+	// live socket it is never reached; on a half-open one — the TCP peer gone
+	// without a FIN — it is the ONLY thing that notices, and it must, because
+	// a "connected" socket that answers nothing poisoned the cached instance
+	// for the full hour TTL and burned the 5-minute sync budget 30 s at a
+	// time (audit E-H2).
+	ctraderReadDeadline = 90 * time.Second
 )
 
 // wsResponse is the result delivered to a request waiter when the cTrader
@@ -71,7 +106,29 @@ type wsOutboundMessage struct {
 type cTraderErrorPayload struct {
 	ErrorCode   string `json:"errorCode"`
 	Description string `json:"description"`
+	// RetryAfter (ProtoOAErrorRes.retryAfter) is the epoch millisecond after
+	// which the blocked payload type may be sent again. Never decoded before,
+	// so a BLOCKED_PAYLOAD_TYPE mid-walk aborted the whole reconstruction
+	// (V-E1).
+	RetryAfter uint64 `json:"retryAfter"`
+	// MaintenanceEndTimestamp is set when the broker is in maintenance.
+	MaintenanceEndTimestamp uint64 `json:"maintenanceEndTimestamp"`
 }
+
+// ctraderRateLimitErr carries the retry hint of a BLOCKED_PAYLOAD_TYPE /
+// maintenance error so the paginated walks can wait exactly as long as the
+// broker asked instead of giving up (V-E1).
+type ctraderRateLimitErr struct {
+	msg        string
+	retryAfter time.Time
+}
+
+func (e *ctraderRateLimitErr) Error() string { return e.msg }
+
+// ctraderTokenInvalidatedError is the message raised once cTrader has pushed
+// ProtoOAAccountsTokenInvalidatedEvent. It is worded so classifySyncError and
+// errsanitize both route it to the OAuth/re-authorization category.
+const ctraderTokenInvalidatedError = "cTrader error ACCESS_DENIED: the broker invalidated this access token (ProtoOAAccountsTokenInvalidatedEvent); the account must be re-authorized"
 
 type cTraderAccount struct {
 	CtidTraderAccountID int64  `json:"ctidTraderAccountId"`
@@ -83,6 +140,10 @@ type cTraderTrader struct {
 	CtidTraderAccountID int64 `json:"ctidTraderAccountId"`
 	Balance             int64 `json:"balance"`
 	MoneyDigits         int   `json:"moneyDigits"`
+	// DepositAssetID identifies the account's deposit currency. Resolved to a
+	// name through ProtoOAAssetListReq (2112); everything used to be stamped
+	// "USD" regardless (audit E-C2).
+	DepositAssetID int64 `json:"depositAssetId"`
 }
 
 // tradeSide accepts either the string name ("BUY"/"SELL") or the
@@ -150,9 +211,33 @@ type cTraderPosition struct {
 	} `json:"tradeData"`
 	// cTrader's ProtoOAPosition.price is a double (the actual entry price, e.g.
 	// 1.15229), NOT a scaled integer — decode it as float64 and use it directly.
-	Price               float64 `json:"price"`
-	UnrealizedNetProfit int64   `json:"unrealizedNetProfit"`
-	UsedMargin          int64   `json:"usedMargin"`
+	Price float64 `json:"price"`
+	// NOTE: ProtoOAPosition has NO unrealized-PnL field. The connector used to
+	// decode "unrealizedNetProfit" here; it never exists on the wire, so every
+	// position reported 0 and equity collapsed to the settled balance. uPnL
+	// comes from ProtoOAGetPositionUnrealizedPnLReq (2187) instead.
+	UsedMargin int64 `json:"usedMargin"`
+	// MoneyDigits scales THIS position's money fields (usedMargin). It is not
+	// the trader-level moneyDigits: using the account's scale on a position
+	// whose own scale differs mis-scales used margin by a power of ten (V-E3).
+	MoneyDigits int `json:"moneyDigits"`
+}
+
+// cTraderPositionPnL is one entry of ProtoOAGetPositionUnrealizedPnLRes.
+// Amounts are scaled by the RESPONSE's moneyDigits, which is independent of
+// the trader's own moneyDigits.
+type cTraderPositionPnL struct {
+	PositionID         int64 `json:"positionId"`
+	GrossUnrealizedPnL int64 `json:"grossUnrealizedPnL"`
+	NetUnrealizedPnL   int64 `json:"netUnrealizedPnL"`
+}
+
+// cTraderAsset is one entry of ProtoOAAssetListRes, used to turn the trader's
+// depositAssetId into the account currency.
+type cTraderAsset struct {
+	AssetID     int64  `json:"assetId"`
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName"`
 }
 
 type cTraderDeal struct {
@@ -172,8 +257,13 @@ type cTraderDeal struct {
 		Swap        int64 `json:"swap"`
 		// Balance is the authoritative account balance AFTER this closing deal
 		// (scaled by MoneyDigits). Used to reconstruct the historical equity curve.
-		Balance     int64 `json:"balance"`
-		MoneyDigits int   `json:"moneyDigits"`
+		// A POINTER so an absent field and a genuine zero stay
+		// distinguishable: the old `Balance == 0` filter dropped every
+		// deal that closed the account at exactly 0.00, and the
+		// carry-forward builder then drew a flat line at the last
+		// positive balance — a blown account rendered as a plateau (E-B).
+		Balance     *int64 `json:"balance"`
+		MoneyDigits int    `json:"moneyDigits"`
 	} `json:"closePositionDetail"`
 }
 
@@ -215,17 +305,66 @@ type CTrader struct {
 	heartbeatStop    chan struct{}
 	writeMu          sync.Mutex
 
+	// requestTimeout bounds one request/response round trip. Overridable so
+	// tests can exercise the timeout path without waiting 30 s.
+	requestTimeout time.Duration
+	// readDeadline is how long the socket may stay silent before the read
+	// loop declares it dead. Refreshed by every inbound frame and by the
+	// WebSocket pong the heartbeat's ping elicits.
+	readDeadline time.Duration
+	// rateLimitBackoff is the first wait after a BLOCKED_PAYLOAD_TYPE, then
+	// doubled per attempt. Overridable so tests don't sleep for seconds.
+	rateLimitBackoff time.Duration
+	// maxDealPages and histRequestDelay bound and pace the historical
+	// pagination. Fields rather than bare constants so a test can walk to
+	// the cap without sitting through 200 throttled round trips.
+	maxDealPages     int
+	histRequestDelay time.Duration
+
 	pendingMu sync.Mutex
 	pending   map[string]chan wsResponse
 	msgID     uint64
 
 	accountMu sync.Mutex
 	accountID int64
+	// authenticatedAccountID is the account the CURRENT socket has already
+	// run ProtoOAAccountAuthReq for. Re-sending it before every request was a
+	// free contributor to the per-payload-type rate limit (E-M7). Reset by
+	// disconnect/markDisconnected, which is what invalidates the session.
+	authenticatedAccountID int64
 
 	symbolMu    sync.RWMutex
 	symbolCache map[int64]string
+	// symbolMisses memoizes symbol ids the broker could not resolve, so an
+	// unknown id costs one request per TTL instead of one per deal (E-M8).
+	symbolMisses map[int64]time.Time
+
+	// currencyMu guards the resolved account currency (E-C2).
+	currencyMu sync.RWMutex
+	currency   string
+	// currencyResolveFailed stops us re-requesting the asset list on every
+	// balance fetch when the broker will not answer it.
+	currencyResolveFailed bool
+
+	// warnMu guards capabilityWarnings, the markers the LAST GetBalance
+	// discovered (connector.CapabilityWarner).
+	warnMu             sync.Mutex
+	capabilityWarnings []string
+
+	// tokenInvalidated is set by the unsolicited
+	// ProtoOAAccountsTokenInvalidatedEvent (2147). Once set, the next call
+	// fails with an OAuth-shaped error instead of waiting for the following
+	// request to be rejected (E-B).
+	tokenInvalidated atomic.Bool
+
+	// accessTokenExpiry is when the current access token stops working, from
+	// the refresh response's expires_in. Zero = unknown (the connect-time
+	// token carries no expiry here).
+	accessTokenExpiry time.Time
 
 	tokenPersister TokenPersister
+
+	closed atomic.Bool
 }
 
 // NewCTrader creates a new cTrader connector.
@@ -251,19 +390,41 @@ func NewCTrader(creds *Credentials) *CTrader {
 		wsDialer: &websocket.Dialer{
 			HandshakeTimeout: 10 * time.Second,
 		},
-		wsLiveURL:   ctraderWSLiveURL,
-		wsDemoURL:   ctraderWSDemoURL,
-		authURL:     ctraderAuthURL,
-		pending:     make(map[string]chan wsResponse),
-		symbolCache: make(map[int64]string),
+		wsLiveURL:    ctraderWSLiveURL,
+		wsDemoURL:    ctraderWSDemoURL,
+		authURL:      ctraderAuthURL,
+		pending:      make(map[string]chan wsResponse),
+		symbolCache:  make(map[int64]string),
+		symbolMisses: make(map[int64]time.Time),
 	}
 }
 
 func (c *CTrader) Exchange() string { return "ctrader" }
 
+// Close releases the WebSocket, its read loop and its heartbeat. Implements
+// io.Closer for the connector cache, which calls it when the instance is
+// evicted, expires, or is replaced (E-H6). Idempotent, and safe to call on an
+// instance that never connected.
+func (c *CTrader) Close() error {
+	if c.closed.Swap(true) {
+		return nil
+	}
+	c.disconnect(errors.New("cTrader connector closed"))
+	return nil
+}
+
 // SetTokenPersister sets a callback to persist refreshed OAuth tokens to DB.
 func (c *CTrader) SetTokenPersister(persister TokenPersister) {
 	c.tokenPersister = persister
+}
+
+// CurrentCredentials implements OAuthCredentialSource: the tokens this
+// instance is actually holding, which differ from the ones it was built with
+// as soon as a refresh has happened (E-H4).
+func (c *CTrader) CurrentCredentials() (string, string) {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	return c.accessToken, c.refreshToken
 }
 
 // DetectIsPaper reports whether the connection's account is a cTrader demo
@@ -334,6 +495,11 @@ func (c *CTrader) GetPositions(ctx context.Context) ([]*Position, error) {
 		return nil, err
 	}
 
+	// uPnL is a separate request (2187); the reconcile payload carries none.
+	// A failure here is not fatal for the position LIST — the sizes and entry
+	// prices are still correct — so it degrades to 0 with the warning recorded.
+	pnlByPosition, _, _ := c.positionUnrealizedPnL(ctx, accountID, rawPositions)
+
 	positions := make([]*Position, 0, len(rawPositions))
 	for _, p := range rawPositions {
 		symbol := c.getSymbolName(ctx, p.TradeData.SymbolID, accountID)
@@ -348,7 +514,7 @@ func (c *CTrader) GetPositions(ctx context.Context) ([]*Position, error) {
 			Size:          float64(p.TradeData.Volume) / 100.0,
 			EntryPrice:    p.Price,
 			MarkPrice:     0,
-			UnrealizedPnL: float64(p.UnrealizedNetProfit) / 100.0,
+			UnrealizedPnL: pnlByPosition[p.PositionID],
 			MarketType:    detectCTraderMarketType(symbol),
 		})
 	}
@@ -379,9 +545,16 @@ func (c *CTrader) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade
 			side = "sell"
 		}
 
+		// E-M6: money fields honour moneyDigits. Volumes (FilledVolume) do
+		// NOT — cTrader scales them by a fixed 1/100 — so only realizedPnL
+		// and the fee move to the money divisor.
 		realizedPnL := 0.0
 		if d.ClosePositionDetail != nil {
-			realizedPnL = float64(d.ClosePositionDetail.GrossProfit-d.ClosePositionDetail.Commission-d.ClosePositionDetail.Swap) / 100.0
+			md := d.ClosePositionDetail.MoneyDigits
+			if md == 0 {
+				md = d.MoneyDigits
+			}
+			realizedPnL = float64(d.ClosePositionDetail.GrossProfit-d.ClosePositionDetail.Commission-d.ClosePositionDetail.Swap) / ctraderMoneyDivisor(md)
 		}
 
 		trades = append(trades, &Trade{
@@ -390,8 +563,8 @@ func (c *CTrader) GetTrades(ctx context.Context, start, end time.Time) ([]*Trade
 			Side:        side,
 			Price:       d.ExecutionPrice,
 			Quantity:    float64(d.FilledVolume) / 100.0,
-			Fee:         float64(d.Commission) / 100.0,
-			FeeCurrency: "USD",
+			Fee:         float64(d.Commission) / ctraderMoneyDivisor(d.MoneyDigits),
+			FeeCurrency: c.accountCurrency(),
 			RealizedPnL: realizedPnL,
 			Timestamp:   time.UnixMilli(d.ExecutionTimestamp).UTC(),
 			MarketType:  detectCTraderMarketType(symbol),
@@ -423,12 +596,38 @@ func (c *CTrader) ensureState() {
 	if c.symbolCache == nil {
 		c.symbolCache = make(map[int64]string)
 	}
+	if c.symbolMisses == nil {
+		c.symbolMisses = make(map[int64]time.Time)
+	}
+	if c.requestTimeout <= 0 {
+		c.requestTimeout = ctraderRequestTimeout
+	}
+	if c.readDeadline <= 0 {
+		c.readDeadline = ctraderReadDeadline
+	}
+	if c.rateLimitBackoff <= 0 {
+		c.rateLimitBackoff = ctraderRateLimitBaseBackoff
+	}
+	if c.maxDealPages <= 0 {
+		c.maxDealPages = ctraderMaxDealPages
+	}
+	if c.histRequestDelay <= 0 {
+		c.histRequestDelay = ctraderHistRequestDelay
+	}
 }
 
 func (c *CTrader) currentAccessToken() string {
 	c.tokenMu.RLock()
 	defer c.tokenMu.RUnlock()
 	return c.accessToken
+}
+
+// currentRefreshToken reads the refresh token under the token lock. The
+// refresh path writes it, so every reader must take the lock (E-M2).
+func (c *CTrader) currentRefreshToken() string {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	return strings.TrimSpace(c.refreshToken)
 }
 
 func (c *CTrader) ensureAccountID(ctx context.Context) (int64, error) {
@@ -517,6 +716,8 @@ func (c *CTrader) getAccounts(ctx context.Context) ([]cTraderAccount, error) {
 }
 
 func (c *CTrader) getAccountBalance(ctx context.Context, accountID int64) (*cTraderBalanceInfo, error) {
+	c.resetCapabilityWarnings()
+
 	trader, err := c.getTraderInfo(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -533,22 +734,49 @@ func (c *CTrader) getAccountBalance(ctx context.Context, accountID int64) (*cTra
 		return nil, err
 	}
 
-	unrealizedPnL := 0.0
+	// E-C1: unrealized PnL is a request of its own (2187). Reading it off
+	// ProtoOAPosition returned 0 forever, so equity WAS the settled balance:
+	// a step curve for anyone holding overnight, and understated drawdowns.
+	_, unrealizedPnL, pnlErr := c.positionUnrealizedPnL(ctx, accountID, positions)
+	if pnlErr != nil {
+		// Deliberately not fatal: refusing the whole snapshot would leave a
+		// hole in the equity curve, which analytics reads as a gap. The
+		// warning rides to sync_statuses.errorMessage under the "warning:"
+		// prefix so a broker that cannot answer 2187 is visible instead of
+		// silently publishing balance-only equity.
+		c.addCapabilityWarning("unrealized_pnl_unavailable")
+	}
+
 	marginUsed := 0.0
 	for _, p := range positions {
-		unrealizedPnL += float64(p.UnrealizedNetProfit) / divisor
-
+		// V-E3: usedMargin is scaled by the POSITION's moneyDigits, not the
+		// trader's. Using the account scale mis-scaled margin by 10^Δ.
+		posDivisor := divisor
+		if p.MoneyDigits > 0 {
+			posDivisor = math.Pow10(p.MoneyDigits)
+		}
 		used := p.UsedMargin
 		if used <= 0 {
 			used = p.TradeData.UsedMargin
 		}
 		if used > 0 {
-			marginUsed += float64(used) / divisor
+			marginUsed += float64(used) / posDivisor
 		}
 	}
 
 	balance := float64(trader.Balance) / divisor
 	equity := balance + unrealizedPnL
+
+	currency := c.resolveAccountCurrency(ctx, accountID, trader.DepositAssetID)
+	if currency != "" && currency != "USD" {
+		// E-C2: no FX conversion is performed anywhere downstream, so a
+		// non-USD account is reported in its own units. Say so instead of
+		// stamping "USD" on EUR figures.
+		c.addCapabilityWarning("account_currency_" + strings.ToLower(currency))
+	}
+	if currency == "" {
+		currency = "USD"
+	}
 
 	return &cTraderBalanceInfo{
 		Balance:         balance,
@@ -556,8 +784,146 @@ func (c *CTrader) getAccountBalance(ctx context.Context, accountID int64) (*cTra
 		UnrealizedPnL:   unrealizedPnL,
 		MarginUsed:      marginUsed,
 		MarginAvailable: equity - marginUsed,
-		Currency:        "USD",
+		Currency:        currency,
 	}, nil
+}
+
+// positionUnrealizedPnL asks cTrader for the live unrealized PnL of the open
+// positions (ProtoOAGetPositionUnrealizedPnLReq, 2187) and returns it per
+// positionId plus the total, both already scaled by the RESPONSE's own
+// moneyDigits. No open positions = no request and a zero total.
+func (c *CTrader) positionUnrealizedPnL(ctx context.Context, accountID int64, positions []cTraderPosition) (map[int64]float64, float64, error) {
+	if len(positions) == 0 {
+		return map[int64]float64{}, 0, nil
+	}
+	if err := c.authenticateAccount(ctx, accountID); err != nil {
+		return map[int64]float64{}, 0, err
+	}
+
+	raw, err := c.sendMessage(
+		ctx,
+		ctraderPayloadUnrealizedPnLReq,
+		map[string]any{"ctidTraderAccountId": accountID},
+		ctraderPayloadUnrealizedPnLRes,
+	)
+	if err != nil {
+		return map[int64]float64{}, 0, err
+	}
+
+	var resp struct {
+		PositionUnrealizedPnL []cTraderPositionPnL `json:"positionUnrealizedPnL"`
+		MoneyDigits           int                  `json:"moneyDigits"`
+	}
+	if err := decodeRawPayload(raw, &resp); err != nil {
+		return map[int64]float64{}, 0, err
+	}
+
+	divisor := ctraderMoneyDivisor(resp.MoneyDigits)
+	byPosition := make(map[int64]float64, len(resp.PositionUnrealizedPnL))
+	total := 0.0
+	for _, p := range resp.PositionUnrealizedPnL {
+		v := float64(p.NetUnrealizedPnL) / divisor
+		byPosition[p.PositionID] = v
+		total += v
+	}
+	return byPosition, total, nil
+}
+
+// resolveAccountCurrency turns the trader's depositAssetId into a currency
+// name via ProtoOAAssetListReq (2112), cached for the connector's lifetime.
+// Returns "" when it cannot be resolved — callers then keep the legacy "USD"
+// label rather than inventing one.
+func (c *CTrader) resolveAccountCurrency(ctx context.Context, accountID, depositAssetID int64) string {
+	c.currencyMu.RLock()
+	cached, failed := c.currency, c.currencyResolveFailed
+	c.currencyMu.RUnlock()
+	if cached != "" {
+		return cached
+	}
+	if failed || depositAssetID <= 0 {
+		return ""
+	}
+
+	giveUp := func() string {
+		c.currencyMu.Lock()
+		c.currencyResolveFailed = true
+		c.currencyMu.Unlock()
+		return ""
+	}
+
+	if err := c.authenticateAccount(ctx, accountID); err != nil {
+		return giveUp()
+	}
+	raw, err := c.sendMessage(
+		ctx,
+		ctraderPayloadAssetListReq,
+		map[string]any{"ctidTraderAccountId": accountID},
+		ctraderPayloadAssetListRes,
+	)
+	if err != nil {
+		return giveUp()
+	}
+	var resp struct {
+		Asset []cTraderAsset `json:"asset"`
+	}
+	if err := decodeRawPayload(raw, &resp); err != nil {
+		return giveUp()
+	}
+	for _, a := range resp.Asset {
+		if a.AssetID != depositAssetID {
+			continue
+		}
+		name := strings.ToUpper(strings.TrimSpace(firstNonEmpty(a.Name, a.DisplayName)))
+		if name == "" {
+			return giveUp()
+		}
+		c.currencyMu.Lock()
+		c.currency = name
+		c.currencyMu.Unlock()
+		return name
+	}
+	return giveUp()
+}
+
+// accountCurrency returns the resolved account currency, or "USD" when the
+// asset list has not been read yet. Money-labelling only; no conversion.
+func (c *CTrader) accountCurrency() string {
+	c.currencyMu.RLock()
+	defer c.currencyMu.RUnlock()
+	if c.currency == "" {
+		return "USD"
+	}
+	return c.currency
+}
+
+// CapabilityWarnings implements connector.CapabilityWarner: markers the last
+// GetBalance discovered (uPnL unreadable, non-USD account).
+func (c *CTrader) CapabilityWarnings() []string {
+	c.warnMu.Lock()
+	defer c.warnMu.Unlock()
+	if len(c.capabilityWarnings) == 0 {
+		return nil
+	}
+	out := make([]string, len(c.capabilityWarnings))
+	copy(out, c.capabilityWarnings)
+	return out
+}
+
+func (c *CTrader) addCapabilityWarning(marker string) {
+	c.warnMu.Lock()
+	defer c.warnMu.Unlock()
+	for _, w := range c.capabilityWarnings {
+		if w == marker {
+			return
+		}
+	}
+	c.capabilityWarnings = append(c.capabilityWarnings, marker)
+}
+
+func (c *CTrader) resetCapabilityWarnings() {
+	c.warnMu.Lock()
+	c.capabilityWarnings = nil
+	c.warnMu.Unlock()
 }
 
 func (c *CTrader) getTraderInfo(ctx context.Context, accountID int64) (*cTraderTrader, error) {
@@ -651,18 +1017,32 @@ func (c *CTrader) getSymbolName(ctx context.Context, symbolID, accountID int64) 
 	if symbolID <= 0 {
 		return ""
 	}
+	c.ensureState()
 
 	c.symbolMu.RLock()
 	name, ok := c.symbolCache[symbolID]
+	missedAt, missed := c.symbolMisses[symbolID]
 	c.symbolMu.RUnlock()
 	if ok && name != "" {
 		return name
+	}
+	// E-M8: only successful lookups were remembered, so a symbol the broker
+	// will not resolve cost one request per deal — hundreds per sync, all of
+	// them feeding the per-payload-type rate limit that then blocks the
+	// history walk. Remember the miss too, briefly: short enough that a newly
+	// listed symbol resolves on the next sync.
+	if missed && time.Since(missedAt) < ctraderSymbolMissTTL {
+		return fmt.Sprintf("SYMBOL_%d", symbolID)
 	}
 
 	resolved, err := c.getSymbolByID(ctx, symbolID, accountID)
 	if err == nil && resolved != "" {
 		return resolved
 	}
+
+	c.symbolMu.Lock()
+	c.symbolMisses[symbolID] = time.Now()
+	c.symbolMu.Unlock()
 
 	return fmt.Sprintf("SYMBOL_%d", symbolID)
 }
@@ -745,6 +1125,17 @@ func (c *CTrader) authenticateAccount(ctx context.Context, accountID int64) erro
 		return err
 	}
 
+	// E-M7: the account session lives on the socket, so re-sending
+	// ProtoOAAccountAuthReq before every single request bought nothing and
+	// fed the per-payload-type rate limit. Any teardown (disconnect,
+	// markDisconnected, endpoint switch) clears the memo.
+	c.connMu.Lock()
+	alreadyAuthed := c.authenticatedAccountID == accountID
+	c.connMu.Unlock()
+	if alreadyAuthed {
+		return nil
+	}
+
 	_, err := c.sendWithTokenRefresh(ctx, func() (json.RawMessage, error) {
 		return c.sendMessage(
 			ctx,
@@ -756,10 +1147,27 @@ func (c *CTrader) authenticateAccount(ctx context.Context, accountID int64) erro
 			ctraderPayloadAccountAuthRes,
 		)
 	})
-	return err
+	if err != nil {
+		return err
+	}
+
+	c.connMu.Lock()
+	c.authenticatedAccountID = accountID
+	c.connMu.Unlock()
+	return nil
 }
 
 func (c *CTrader) sendWithTokenRefresh(ctx context.Context, call func() (json.RawMessage, error)) (json.RawMessage, error) {
+	// E-B: refresh a token we KNOW is about to expire instead of waiting for
+	// the request it breaks. Only armed once a previous refresh told us the
+	// lifetime — the connect-time token arrives without one.
+	if c.needsProactiveRefresh() {
+		if err := c.refreshAccessToken(ctx); err != nil {
+			return nil, err
+		}
+		c.disconnect(errors.New("cTrader reconnect after proactive token refresh"))
+	}
+
 	raw, err := call()
 	if err == nil {
 		return raw, nil
@@ -777,7 +1185,9 @@ func (c *CTrader) sendWithTokenRefresh(ctx context.Context, call func() (json.Ra
 		return call()
 	}
 
-	if !isAccessTokenInvalid(err) || strings.TrimSpace(c.refreshToken) == "" {
+	// E-M2: read the refresh token through the accessor. Reading the field
+	// bare raced with refreshAccessToken's write on any shared instance.
+	if !isAccessTokenInvalid(err) || c.currentRefreshToken() == "" {
 		return nil, err
 	}
 
@@ -861,10 +1271,23 @@ func (c *CTrader) refreshAccessToken(ctx context.Context) error {
 		return fmt.Errorf("token refresh response missing access_token")
 	}
 
-	c.accessToken = strings.TrimSpace(tokenResp.AccessToken)
-	if strings.TrimSpace(tokenResp.RefreshToken) != "" {
-		c.refreshToken = strings.TrimSpace(tokenResp.RefreshToken)
+	newAccess := strings.TrimSpace(tokenResp.AccessToken)
+	newRefresh := c.refreshToken
+	if rotated := strings.TrimSpace(tokenResp.RefreshToken); rotated != "" {
+		newRefresh = rotated
 	}
+
+	// The broker has already rotated: the refresh token we arrived with is
+	// dead from this instant, whatever happens next. So the new pair goes to
+	// RAM unconditionally — restoring the old one would guarantee failure —
+	// and the DB write is what decides whether the connection survives a
+	// restart.
+	c.accessToken = newAccess
+	c.refreshToken = newRefresh
+	if tokenResp.ExpiresIn > 0 {
+		c.accessTokenExpiry = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+	}
+	c.tokenInvalidated.Store(false)
 
 	// Persist refreshed tokens to DB SYNCHRONOUSLY, with the error checked.
 	// cTrader rotates single-use refresh tokens (each refresh invalidates the
@@ -873,15 +1296,42 @@ func (c *CTrader) refreshAccessToken(ctx context.Context) error {
 	// rotated token whenever the persist failed or the process moved on/restarted
 	// before it landed, leaving only the now-consumed token in the DB — every
 	// subsequent refresh then failed with ACCESS_DENIED, bricking the connection.
+	//
+	// E-H3: one attempt was not enough. A pool hiccup, a failover, an UPDATE
+	// that matched no row — any of them silently traded a working connection
+	// for a dead one. Retry a few times before declaring the loss, and make
+	// the failure loud: the returned error is what the sync layer logs under
+	// "sync: OAuth refresh failed" and stores as needs-reauth.
 	if c.tokenPersister != nil {
-		persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := c.tokenPersister(persistCtx, c.accessToken, c.refreshToken); err != nil {
-			return fmt.Errorf("persist rotated cTrader tokens: %w", err)
+		var persistErr error
+		for attempt := 0; attempt < ctraderPersistAttempts; attempt++ {
+			if attempt > 0 {
+				time.Sleep(time.Duration(attempt) * ctraderPersistBackoff)
+			}
+			persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			persistErr = c.tokenPersister(persistCtx, newAccess, newRefresh)
+			cancel()
+			if persistErr == nil {
+				return nil
+			}
 		}
+		return fmt.Errorf("persist rotated cTrader tokens after %d attempts (the stored refresh token is now dead; the connection must be re-authorized): %w",
+			ctraderPersistAttempts, persistErr)
 	}
 
 	return nil
+}
+
+// needsProactiveRefresh reports whether the access token is close enough to
+// its known expiry that refreshing now beats being rejected mid-sync. Zero
+// expiry (the connect-time token, whose lifetime we never learn) means no.
+func (c *CTrader) needsProactiveRefresh() bool {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	if c.accessTokenExpiry.IsZero() || c.refreshToken == "" {
+		return false
+	}
+	return time.Until(c.accessTokenExpiry) < ctraderProactiveRefreshWindow
 }
 
 func (c *CTrader) ensureConnected(ctx context.Context) error {
@@ -903,6 +1353,14 @@ func (c *CTrader) ensureConnected(ctx context.Context) error {
 		return err
 	}
 
+	// A silent socket must eventually fail a read; the pong the heartbeat's
+	// ping elicits is what keeps a healthy one alive (E-H2).
+	deadline := c.readDeadline
+	_ = ws.SetReadDeadline(time.Now().Add(deadline))
+	ws.SetPongHandler(func(string) error {
+		return ws.SetReadDeadline(time.Now().Add(deadline))
+	})
+
 	c.connMu.Lock()
 	if c.ws != nil {
 		c.connMu.Unlock()
@@ -911,6 +1369,7 @@ func (c *CTrader) ensureConnected(ctx context.Context) error {
 	}
 	c.ws = ws
 	c.appAuthenticated = false
+	c.authenticatedAccountID = 0
 	stop := make(chan struct{})
 	c.heartbeatStop = stop
 	c.connMu.Unlock()
@@ -921,7 +1380,7 @@ func (c *CTrader) ensureConnected(ctx context.Context) error {
 }
 
 func (c *CTrader) heartbeatLoop(ws *websocket.Conn, stop <-chan struct{}) {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(ctraderHeartbeatInterval)
 	defer ticker.Stop()
 
 	for {
@@ -936,6 +1395,17 @@ func (c *CTrader) heartbeatLoop(ws *websocket.Conn, stop <-chan struct{}) {
 				c.markDisconnected(ws, err)
 				return
 			}
+			// The application heartbeat proves nothing about the socket: a
+			// half-open TCP connection swallows writes into the send buffer
+			// for minutes. The WebSocket ping does — its pong is what pushes
+			// the read deadline back (E-H2).
+			c.writeMu.Lock()
+			pingErr := ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
+			c.writeMu.Unlock()
+			if pingErr != nil && !errors.Is(pingErr, websocket.ErrCloseSent) {
+				c.markDisconnected(ws, pingErr)
+				return
+			}
 		}
 	}
 }
@@ -947,12 +1417,24 @@ func (c *CTrader) readLoop(ws *websocket.Conn) {
 			c.markDisconnected(ws, err)
 			return
 		}
+		// Any inbound frame is proof of life.
+		_ = ws.SetReadDeadline(time.Now().Add(c.readDeadline))
 
 		var msg wsInboundMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
 			continue
 		}
 		if msg.PayloadType == ctraderPayloadHeartbeatEvent {
+			continue
+		}
+		// E-B: the token-invalidated event is PUSHED without a clientMsgId
+		// (user revoked the app, or the broker killed the token). Dropping it
+		// as "no waiter" meant the next request failed with whatever cTrader
+		// answered next; flagging it here makes the very next call surface an
+		// OAuth-shaped error the sync layer can classify as reauth_required.
+		if msg.PayloadType == ctraderPayloadTokenInvalidatedEvent {
+			c.tokenInvalidated.Store(true)
+			c.failPending(errors.New(ctraderTokenInvalidatedError))
 			continue
 		}
 		if msg.ClientMsgID == "" {
@@ -966,25 +1448,57 @@ func (c *CTrader) readLoop(ws *websocket.Conn) {
 			continue
 		}
 
-		if msg.PayloadType == ctraderPayloadErrorRes {
-			var payload cTraderErrorPayload
-			_ = json.Unmarshal(msg.Payload, &payload)
-
-			errMsg := "cTrader unknown error"
-			if payload.ErrorCode != "" {
-				errMsg = fmt.Sprintf("cTrader error %s: %s", payload.ErrorCode, payload.Description)
-			}
-
+		// ProtoOAErrorRes (2142) and the common-layer ProtoErrorRes (50) carry
+		// the same errorCode/description shape. Treating 50 as an ordinary
+		// payload turned a described failure into "unexpected cTrader payload
+		// type 50" and threw the reason away (E-B).
+		if msg.PayloadType == ctraderPayloadErrorRes || msg.PayloadType == ctraderPayloadCommonErrorRes {
 			// CONN-007: use a short timeout instead of an unconditional
 			// `default:` drop. The respCh is a 1-buffered channel per
 			// request, so this only backs off when a duplicate response
 			// or a slow consumer already has the slot.
-			deliverCTraderResponse(respCh, wsResponse{err: errors.New(errMsg)})
+			deliverCTraderResponse(respCh, wsResponse{err: ctraderErrorFromPayload(msg.Payload)})
 			continue
 		}
 
 		deliverCTraderResponse(respCh, wsResponse{payloadType: msg.PayloadType, payload: msg.Payload})
 	}
+}
+
+// ctraderErrorFromPayload turns an error payload into an error, keeping the
+// broker's retry hint when the failure is a rate limit or a maintenance
+// window so the paginated walks can honour it (V-E1).
+func ctraderErrorFromPayload(raw json.RawMessage) error {
+	var payload cTraderErrorPayload
+	_ = json.Unmarshal(raw, &payload)
+
+	msg := "cTrader unknown error"
+	if payload.ErrorCode != "" {
+		msg = fmt.Sprintf("cTrader error %s: %s", payload.ErrorCode, payload.Description)
+	}
+
+	hint := payload.RetryAfter
+	if hint == 0 {
+		hint = payload.MaintenanceEndTimestamp
+	}
+	if isCTraderRateLimitCode(payload.ErrorCode, payload.Description) || hint != 0 {
+		var until time.Time
+		if hint != 0 {
+			until = time.UnixMilli(int64(hint)).UTC()
+		}
+		return &ctraderRateLimitErr{msg: msg, retryAfter: until}
+	}
+	return errors.New(msg)
+}
+
+// isCTraderRateLimitCode reports whether the broker is asking us to slow down
+// rather than telling us something is wrong with the request.
+func isCTraderRateLimitCode(code, description string) bool {
+	s := strings.ToUpper(code + " " + description)
+	return strings.Contains(s, "BLOCKED_PAYLOAD_TYPE") ||
+		strings.Contains(s, "RATE LIMIT") ||
+		strings.Contains(s, "RATE-LIMIT") ||
+		strings.Contains(s, "TOO MANY REQUEST")
 }
 
 // deliverCTraderResponse pushes a response to respCh with a short timeout
@@ -1011,6 +1525,12 @@ func (c *CTrader) sendMessage(
 	payload map[string]any,
 	expectedPayloadType int,
 ) (json.RawMessage, error) {
+	// E-B: once cTrader has told us the token is dead, every further request
+	// is a wasted round trip whose failure reason would be whatever came
+	// next. Fail on the known cause instead.
+	if c.tokenInvalidated.Load() {
+		return nil, errors.New(ctraderTokenInvalidatedError)
+	}
 	if err := c.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -1045,14 +1565,20 @@ func (c *CTrader) sendMessage(
 		return nil, err
 	}
 
-	timer := time.NewTimer(30 * time.Second)
+	timer := time.NewTimer(c.requestTimeout)
 	defer timer.Stop()
 
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-timer.C:
-		return nil, fmt.Errorf("cTrader request timeout for payloadType %d", payloadType)
+		// E-H2: a request that never came back means the socket is not
+		// carrying traffic. Leaving it "connected" made every subsequent
+		// call on the cached instance pay the same 30 s for the rest of the
+		// cache TTL. Tear it down so the next call redials.
+		err := fmt.Errorf("cTrader request timeout for payloadType %d", payloadType)
+		c.markDisconnected(ws, err)
+		return nil, err
 	case resp := <-respCh:
 		if resp.err != nil {
 			return nil, resp.err
@@ -1085,6 +1611,7 @@ func (c *CTrader) markDisconnected(ws *websocket.Conn, cause error) {
 
 	c.ws = nil
 	c.appAuthenticated = false
+	c.authenticatedAccountID = 0
 	stop := c.heartbeatStop
 	c.heartbeatStop = nil
 	c.connMu.Unlock()
@@ -1096,6 +1623,13 @@ func (c *CTrader) markDisconnected(ws *websocket.Conn, cause error) {
 	c.failPending(cause)
 }
 
+// disconnect drops the socket and fails every request currently in flight on
+// it. V-E2: that is deliberate but blunt — a token refresh calls it, so a
+// concurrent GetTrades on the same instance dies with "cTrader connection
+// closed" and the caller retries at a higher level. Re-authenticating the app
+// on the existing socket would avoid it; the reconnect is kept because
+// cTrader ties the session to the token that opened it and ALREADY_LOGGED_IN
+// recovery already relies on a fresh socket.
 func (c *CTrader) disconnect(cause error) {
 	c.connMu.Lock()
 	ws := c.ws
@@ -1103,6 +1637,7 @@ func (c *CTrader) disconnect(cause error) {
 	c.ws = nil
 	c.heartbeatStop = nil
 	c.appAuthenticated = false
+	c.authenticatedAccountID = 0
 	c.connMu.Unlock()
 
 	if stop != nil {
@@ -1201,7 +1736,14 @@ func (c *CTrader) GetCashflows(ctx context.Context, since time.Time) ([]*Cashflo
 	if err != nil {
 		return nil, err
 	}
-	return ctraderCashflowsFromEntries(entries), nil
+	flows := ctraderCashflowsFromEntries(entries)
+	// The ledger carries no currency of its own: it is the account's deposit
+	// currency, resolved from depositAssetId (E-C2). No conversion.
+	currency := c.accountCurrency()
+	for _, f := range flows {
+		f.Currency = currency
+	}
+	return flows, nil
 }
 
 // getRawCashflows fetches every balance-operation entry in [since, now],
@@ -1338,17 +1880,90 @@ const (
 	// per-payload-type rate limit — rapid DealList / CashFlowHistory requests
 	// trigger "BLOCKED_PAYLOAD_TYPE: You are being rate limited".
 	ctraderHistRequestDelay = 600 * time.Millisecond
+
+	// V-E1: the throttle above is a guess, not a guarantee. When cTrader does
+	// block a payload type it says so, and ProtoOAErrorRes.retryAfter says
+	// until when. Before this, one BLOCKED_PAYLOAD_TYPE mid-walk aborted the
+	// whole reconstruction, which then restarted from scratch on the next
+	// sync with the exact same request profile — the most likely way a real
+	// rebuild dies.
+	ctraderRateLimitAttempts    = 5
+	ctraderRateLimitBaseBackoff = 2 * time.Second
+	ctraderRateLimitMaxBackoff  = 30 * time.Second
+	// ctraderRateLimitMaxWait caps how long a single broker-supplied
+	// retryAfter may park the walk — a bogus far-future timestamp must not
+	// hang the sync for hours.
+	ctraderRateLimitMaxWait = 60 * time.Second
+
+	// ctraderPersistAttempts bounds the retries around the rotated-token
+	// write. Losing that write costs the connection (E-H3).
+	ctraderPersistAttempts = 3
+	ctraderPersistBackoff  = 250 * time.Millisecond
+	// ctraderProactiveRefreshWindow refreshes an access token about to
+	// expire rather than waiting for the request that it breaks.
+	ctraderProactiveRefreshWindow = 5 * time.Minute
+	// ctraderSymbolMissTTL bounds the negative symbol cache (E-M8).
+	ctraderSymbolMissTTL = 5 * time.Minute
 )
 
-// ctraderThrottle sleeps between paginated historical requests to stay under
+// throttle sleeps between paginated historical requests to stay under
 // cTrader's rate limit, returning early if the context is cancelled.
-func ctraderThrottle(ctx context.Context) error {
+func (c *CTrader) throttle(ctx context.Context) error {
+	c.ensureState()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(ctraderHistRequestDelay):
+	case <-time.After(c.histRequestDelay):
 		return nil
 	}
+}
+
+// sendPaged issues one page of a paginated historical request and, when
+// cTrader answers BLOCKED_PAYLOAD_TYPE (or a maintenance window), waits and
+// retries the SAME page instead of failing the walk (V-E1). It waits until
+// the broker's retryAfter when it gave one, otherwise on an exponential
+// backoff, and gives up after ctraderRateLimitAttempts so a permanently
+// blocked account still surfaces an error.
+func (c *CTrader) sendPaged(ctx context.Context, payloadType int, payload map[string]any, expected int) (json.RawMessage, error) {
+	c.ensureState()
+	backoff := c.rateLimitBackoff
+	var lastErr error
+
+	for attempt := 0; attempt < ctraderRateLimitAttempts; attempt++ {
+		raw, err := c.sendWithTokenRefresh(ctx, func() (json.RawMessage, error) {
+			return c.sendMessage(ctx, payloadType, payload, expected)
+		})
+		if err == nil {
+			return raw, nil
+		}
+		var rateLimited *ctraderRateLimitErr
+		if !errors.As(err, &rateLimited) {
+			return nil, err
+		}
+		lastErr = err
+
+		wait := backoff
+		if !rateLimited.retryAfter.IsZero() {
+			if until := time.Until(rateLimited.retryAfter); until > 0 {
+				wait = until
+			}
+		}
+		if wait > ctraderRateLimitMaxWait {
+			wait = ctraderRateLimitMaxWait
+		}
+		if wait <= 0 {
+			wait = backoff
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+		if backoff *= 2; backoff > ctraderRateLimitMaxBackoff {
+			backoff = ctraderRateLimitMaxBackoff
+		}
+	}
+	return nil, fmt.Errorf("cTrader rate limited on payloadType %d after %d attempts: %w", payloadType, ctraderRateLimitAttempts, lastErr)
 }
 
 // GetHistoricalSnapshots reconstructs the account's daily equity timeline
@@ -1414,21 +2029,20 @@ func (c *CTrader) getAllDeals(ctx context.Context, accountID int64, start, end t
 	to := end.UnixMilli()
 	var all []cTraderDeal
 	seen := make(map[int64]struct{})
-	for page := 0; page < ctraderMaxDealPages; page++ {
+	complete := false
+	c.ensureState()
+	for page := 0; page < c.maxDealPages; page++ {
 		if page > 0 {
-			if err := ctraderThrottle(ctx); err != nil {
+			if err := c.throttle(ctx); err != nil {
 				return nil, err
 			}
 		}
-		fromTS := from
-		raw, err := c.sendWithTokenRefresh(ctx, func() (json.RawMessage, error) {
-			return c.sendMessage(ctx, ctraderPayloadDealListReq, map[string]any{
-				"ctidTraderAccountId": accountID,
-				"fromTimestamp":       fromTS,
-				"toTimestamp":         to,
-				"maxRows":             1000,
-			}, ctraderPayloadDealListRes)
-		})
+		raw, err := c.sendPaged(ctx, ctraderPayloadDealListReq, map[string]any{
+			"ctidTraderAccountId": accountID,
+			"fromTimestamp":       from,
+			"toTimestamp":         to,
+			"maxRows":             1000,
+		}, ctraderPayloadDealListRes)
 		if err != nil {
 			return nil, err
 		}
@@ -1442,6 +2056,7 @@ func (c *CTrader) getAllDeals(ctx context.Context, accountID int64, start, end t
 		var added int
 		all, added = appendUnseenDeals(all, seen, resp.Deal)
 		if !resp.HasMore || len(resp.Deal) == 0 {
+			complete = true
 			break
 		}
 		last := resp.Deal[len(resp.Deal)-1].ExecutionTimestamp
@@ -1451,9 +2066,21 @@ func (c *CTrader) getAllDeals(ctx context.Context, accountID int64, start, end t
 		// advanced nor yielded anything new, stop — a full page packed into a
 		// single millisecond, where we can't progress without skipping.
 		if last <= from && added == 0 {
+			complete = true
 			break
 		}
 		from = last
+	}
+
+	// E-H1: running out of pages is not the end of the ledger. cTrader pages
+	// FORWARD in time, so the deals beyond the cap are the most RECENT ones —
+	// the carry-forward builder then draws a flat line from the truncation
+	// point to today and calls it a track record. Same stance as ig.go: refuse
+	// a history we know is incomplete rather than hand back a plausible one.
+	if !complete {
+		return nil, fmt.Errorf("ctrader deal history exceeds %d pages of 1000 for %s..%s: refusing a truncated history",
+			c.maxDealPages,
+			start.UTC().Format(time.DateOnly), end.UTC().Format(time.DateOnly))
 	}
 	return all, nil
 }
@@ -1483,21 +2110,18 @@ func (c *CTrader) getAllCashflows(ctx context.Context, accountID int64, start, e
 	}
 	var all []ctraderDepositWithdraw
 	for chunkStart := start; chunkStart.Before(end); chunkStart = chunkStart.Add(ctraderCashflowWindow) {
-		if err := ctraderThrottle(ctx); err != nil {
+		if err := c.throttle(ctx); err != nil {
 			return nil, err
 		}
 		chunkEnd := chunkStart.Add(ctraderCashflowWindow)
 		if chunkEnd.After(end) {
 			chunkEnd = end
 		}
-		fromTS, toTS := chunkStart.UnixMilli(), chunkEnd.UnixMilli()
-		raw, err := c.sendWithTokenRefresh(ctx, func() (json.RawMessage, error) {
-			return c.sendMessage(ctx, ctraderPayloadCashFlowHistoryReq, map[string]any{
-				"ctidTraderAccountId": accountID,
-				"fromTimestamp":       fromTS,
-				"toTimestamp":         toTS,
-			}, ctraderPayloadCashFlowHistoryRes)
-		})
+		raw, err := c.sendPaged(ctx, ctraderPayloadCashFlowHistoryReq, map[string]any{
+			"ctidTraderAccountId": accountID,
+			"fromTimestamp":       chunkStart.UnixMilli(),
+			"toTimestamp":         chunkEnd.UnixMilli(),
+		}, ctraderPayloadCashFlowHistoryRes)
 		if err != nil {
 			return nil, err
 		}
@@ -1538,7 +2162,7 @@ func truncUTCDay(t time.Time) time.Time {
 func ctraderBalancePoints(deals []cTraderDeal, cashflows []ctraderDepositWithdraw) []ctraderBalPoint {
 	var points []ctraderBalPoint
 	for _, d := range deals {
-		if d.ClosePositionDetail == nil || d.ClosePositionDetail.Balance == 0 {
+		if d.ClosePositionDetail == nil || d.ClosePositionDetail.Balance == nil {
 			continue
 		}
 		md := d.ClosePositionDetail.MoneyDigits
@@ -1547,7 +2171,7 @@ func ctraderBalancePoints(deals []cTraderDeal, cashflows []ctraderDepositWithdra
 		}
 		points = append(points, ctraderBalPoint{
 			t:   time.UnixMilli(d.ExecutionTimestamp).UTC(),
-			bal: float64(d.ClosePositionDetail.Balance) / ctraderMoneyDivisor(md),
+			bal: float64(*d.ClosePositionDetail.Balance) / ctraderMoneyDivisor(md),
 		})
 	}
 	for _, cf := range cashflows {
@@ -1608,10 +2232,21 @@ func ctraderCashflowsByDay(deals []cTraderDeal, cashflows []ctraderDepositWithdr
 		}
 
 		amount, ok := ctraderResetAwareAmount(cf, running)
+
+		// E-M5: EVERY ledger entry reports the balance AFTER it — swaps,
+		// commissions, rebates, dividends included — and `running` used to
+		// advance only on the deposits and withdrawals we recognise. Between
+		// two cash flows it therefore drifted away from the true balance, and
+		// the reset heuristic below compares the ledger's claimed prior
+		// balance against it: drift far enough and a genuine deposit is
+		// rewritten as a demo reset, erasing real capital from the curve.
+		if cf.Balance != 0 {
+			running = float64(cf.Balance) / ctraderMoneyDivisor(cf.MoneyDigits)
+		}
+
 		if !ok {
 			continue
 		}
-		running = float64(cf.Balance) / ctraderMoneyDivisor(cf.MoneyDigits)
 
 		key := t.Format("20060102")
 		e := byDay[key]
@@ -1655,7 +2290,7 @@ func ctraderResetAwareAmount(cf ctraderDepositWithdraw, running float64) (float6
 func ctraderDealBalancePoints(deals []cTraderDeal) []ctraderBalPoint {
 	var points []ctraderBalPoint
 	for _, d := range deals {
-		if d.ClosePositionDetail == nil || d.ClosePositionDetail.Balance == 0 {
+		if d.ClosePositionDetail == nil || d.ClosePositionDetail.Balance == nil {
 			continue
 		}
 		md := d.ClosePositionDetail.MoneyDigits
@@ -1664,7 +2299,7 @@ func ctraderDealBalancePoints(deals []cTraderDeal) []ctraderBalPoint {
 		}
 		points = append(points, ctraderBalPoint{
 			t:   time.UnixMilli(d.ExecutionTimestamp).UTC(),
-			bal: float64(d.ClosePositionDetail.Balance) / ctraderMoneyDivisor(md),
+			bal: float64(*d.ClosePositionDetail.Balance) / ctraderMoneyDivisor(md),
 		})
 	}
 	sort.Slice(points, func(i, j int) bool { return points[i].t.Before(points[j].t) })

@@ -302,8 +302,11 @@ func main() {
 		connSvc.SetLogger(logger)
 		syncSvc = service.NewSyncService(connSvc, snapshotRepo, connectorCache, logger)
 		if cfg.HistorySyncNotifyURL != "" {
-			syncSvc.SetHistoryNotifyURL(cfg.HistorySyncNotifyURL)
-			logger.Info("history-rebuilt notify wired", zap.String("url", cfg.HistorySyncNotifyURL))
+			syncSvc.SetHistoryNotify(cfg.HistorySyncNotifyURL, cfg.HistorySyncNotifyToken)
+			logger.Info("history-rebuilt notify wired",
+				zap.String("url", cfg.HistorySyncNotifyURL),
+				zap.Bool("authenticated", cfg.HistorySyncNotifyToken != ""),
+			)
 		}
 		if syncStatusRepo != nil {
 			syncSvc.SetSyncStatusRepo(syncStatusRepo)
@@ -344,28 +347,23 @@ func main() {
 			syncSvc.SetRebuilderClient(rebuilderClient)
 			logger.Info("rebuilder client wired", zap.String("url", cfg.RebuilderServiceURL))
 		}
-		// Trigger historical snapshot backfill on connection creation. For IBKR
-		// the rebuild runs in-enclave (ZK-native); for other exchanges the
-		// hook delegates to the external rebuilder when configured.
-		//
-		// Then take the FIRST live snapshot right away instead of leaving the
+		// Take the FIRST live snapshot right away instead of leaving the
 		// account without a today-row and without a sync_statuses entry until
 		// the next 00:00 pass — a user who signed up at 08:33 stayed frozen on
 		// yesterday's rebuilt history all day, with empty status columns in
 		// the admin (cold-start incident, 2026-08-04). The sync pipeline also
 		// writes the sync_statuses row the dashboards display. Failures only
 		// warn: the daily scheduler picks the connection up at midnight
-		// regardless. Connections created with rebuild_history=false skip the
-		// whole hook and keep waiting for the daily pass (frontend only sends
-		// false for mt5).
-		connSvc.SetPostCreateHook(func(ctx context.Context, userUID, exchange, label string) {
-			// Live sync FIRST: the row it writes is the equity anchor the
-			// rebuild dispatch reads (EndEquityOverride) — without it the
-			// walk-family rebuilders calibrate on their own wallet valuation
-			// and the anchor gate has no witness (2026-08-04: a mispriced
-			// walk published a 93k account at 3k because connect-time
-			// rebuilds carried no anchor). Sync failure degrades to the old
-			// anchorless behavior, never blocks the backfill.
+		// regardless.
+		//
+		// G-H7: this used to live inside the rebuild opt-in, under a comment
+		// claiming "frontend only sends false for mt5". The cTrader OAuth
+		// callback sends no rebuild_history field at all, so the gateway
+		// defaulted it to false and a new cTrader connection got neither a
+		// snapshot nor a status row before midnight — the same cold-start
+		// failure, re-entered by a door nobody had looked at. A snapshot
+		// crosses no perimeter, so it is not gated on anything.
+		connSvc.SetPostCreateSyncHook(func(ctx context.Context, userUID, exchange, label string) {
 			if r := syncSvc.SyncConnectionScheduledByLabel(ctx, userUID, exchange, label); r != nil && r.Error != "" {
 				logger.Warn("first live sync after connect failed; daily pass will retry",
 					zap.String("user_uid", userUID),
@@ -374,6 +372,21 @@ func main() {
 					zap.String("error", r.Error),
 				)
 			}
+		})
+
+		// Historical backfill on connection creation, behind the explicit
+		// opt-in (SEC-ZK-001/SEC-08). For IBKR the rebuild runs in-enclave
+		// (ZK-native); for other exchanges the hook delegates to the external
+		// rebuilder when configured, which is why it needs consent.
+		//
+		// It runs AFTER the sync hook returns — both share one goroutine — so
+		// the ordering the anchor depends on is unchanged: the row the sync
+		// writes is the equity anchor the rebuild dispatch reads
+		// (EndEquityOverride). Without it the walk-family rebuilders calibrate
+		// on their own wallet valuation and the anchor gate has no witness
+		// (2026-08-04: a mispriced walk published a 93k account at 3k because
+		// connect-time rebuilds carried no anchor).
+		connSvc.SetPostCreateRebuildHook(func(ctx context.Context, userUID, exchange, label string) {
 			syncSvc.ReconstructHistoryOnConnect(ctx, userUID, exchange, label)
 		})
 		metricsSvc = service.NewMetricsService(snapshotRepo)
@@ -388,6 +401,23 @@ func main() {
 		logger.Fatal("mt-bridge configuration rejected (CFG-005)",
 			zap.Error(err),
 			zap.String("hint", "MT4/MT5 credentials leave the enclave over this link; set MT_BRIDGE_URL to an https:// endpoint with a ≥24-char MT_BRIDGE_HMAC_SECRET, or unset MT_BRIDGE_URL to disable MetaTrader"),
+		)
+	}
+
+	// G-M7: cTrader cannot work without the Spotware application credentials
+	// — every WebSocket session authenticates with them and the OAuth refresh
+	// signs with them. There is deliberately no Fatal here: an enclave that
+	// serves twenty other brokers must not refuse to boot over one that may
+	// not be in use. But it must SAY so, because the alternative is what
+	// production did: answer every cTrader connect with "invalid credentials"
+	// and send the user off to fix a secret they do not hold. The connect path
+	// now returns a "not configured on the enclave" category for the same
+	// reason (G-H4).
+	if cfg.CTraderClientID == "" || cfg.CTraderClientSecret == "" {
+		logger.Error("cTrader is not configured; every cTrader connect and sync will be refused",
+			zap.Bool("client_id_set", cfg.CTraderClientID != ""),
+			zap.Bool("client_secret_set", cfg.CTraderClientSecret != ""),
+			zap.String("hint", "set CTRADER_CLIENT_ID and CTRADER_CLIENT_SECRET in the enclave environment, or ignore this if cTrader is not offered"),
 		)
 	}
 
@@ -827,7 +857,11 @@ func refreshSignerAttestation(
 	// hardware attestation, refuse to sign reports as "unattested-dev". On
 	// re-attestation, log Error but preserve the previous binding to avoid
 	// outage on transient downgrades.
-	enforceProductionAttestation(cfg, attestReport, logger, initial)
+	// A refused report must not reach the signer. Returning here is what
+	// makes the "keeping previous binding" message above true.
+	if !enforceProductionAttestation(cfg, attestReport, logger, initial) {
+		return
+	}
 
 	if attestReport.Attestation == nil {
 		return
@@ -926,12 +960,20 @@ func checkBenchmarkConfig(url, token string, isDev bool) error {
 //
 // initial=true (startup) → Fatal so the container restarts under the
 // orchestrator's eye.
-// initial=false (periodic refresh) → Error but preserve the previous
-// binding; outages on transient downgrades would be worse than alerting
-// and continuing on the last-known-good attestation.
-func enforceProductionAttestation(cfg *config.Config, report *attestation.AttestationReport, logger *zap.Logger, initial bool) {
+// initial=false (periodic refresh) → Error and return FALSE, so the caller
+// keeps the previous binding; outages on transient downgrades would be worse
+// than alerting and continuing on the last-known-good attestation.
+//
+// It returns whether the caller may bind this report to the signer. It used
+// to return nothing, and the caller called signer.SetAttestation
+// unconditionally right after — so the log line saying "keeping previous
+// binding" was false: the downgraded report overwrote the good one with
+// attested=false, and every report signed afterwards carried it. The claim
+// only became true when the process restarted, which is exactly when the
+// startup Fatal would have caught it.
+func enforceProductionAttestation(cfg *config.Config, report *attestation.AttestationReport, logger *zap.Logger, initial bool) bool {
 	if cfg.Env != "production" {
-		return
+		return true
 	}
 
 	var reason string
@@ -953,18 +995,19 @@ func enforceProductionAttestation(cfg *config.Config, report *attestation.Attest
 	case !report.Attestation.ReportDataBoundToRequest:
 		reason = "snpguest --random fallback used: REPORT_DATA not bound to enclave keys"
 	default:
-		return
+		return true
 	}
 
 	if initial {
 		logger.Fatal("production refuses to start without verified SEV-SNP attestation",
 			zap.String("reason", reason),
 		)
-		return
+		return false
 	}
 	logger.Error("re-attestation downgrade detected in production (keeping previous binding)",
 		zap.String("reason", reason),
 	)
+	return false
 }
 
 // enforceMeasurementAllowlist verifies that the SEV-SNP launch measurement

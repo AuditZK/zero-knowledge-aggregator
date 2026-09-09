@@ -226,12 +226,36 @@ type PerMarketTradeFetcher interface {
 	GetTradesByMarket(ctx context.Context, marketType string, since time.Time) ([]*Trade, error)
 }
 
+// Connectors that hold a long-lived resource — a WebSocket with its read loop
+// and heartbeat, a pooled session — implement io.Closer. The connector cache
+// calls it whenever an instance leaves the cache (LRU eviction, TTL cleanup,
+// or being replaced under the same key). Nothing else may call it: the
+// instance is shared, and closing one in use breaks the caller's requests.
+//
+// E-H6: without this, an OAuth token rotation (which changes the cache key,
+// so a fresh instance is built) left the previous cTrader instance heartbeating
+// at Spotware forever.
+
 // TokenPersister is called when OAuth tokens are refreshed, to persist them to DB.
 type TokenPersister func(ctx context.Context, accessToken, refreshToken string) error
 
 // TokenRefreshable optionally allows setting a callback for token persistence.
 type TokenRefreshable interface {
 	SetTokenPersister(persister TokenPersister)
+}
+
+// OAuthCredentialSource exposes the tokens a connector is ACTUALLY holding,
+// which are not necessarily the ones it was built with: validating a
+// connection can itself trigger a refresh, and cTrader rotates the refresh
+// token on every one.
+//
+// E-H4: the connect path stored req.APIKey/req.APISecret, so when
+// TestConnection or DetectIsPaper refreshed, the row was written with the
+// pair whose refresh token the broker had just invalidated — the connection
+// was born dead and failed on its first nightly sync with ACCESS_DENIED.
+type OAuthCredentialSource interface {
+	// CurrentCredentials returns the live access and refresh tokens.
+	CurrentCredentials() (accessToken, refreshToken string)
 }
 
 // HistoricalSnapshotProvider optionally provides historical daily snapshots.

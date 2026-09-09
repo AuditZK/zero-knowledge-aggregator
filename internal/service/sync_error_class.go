@@ -93,3 +93,29 @@ func egressSyncError(op string, err error) string {
 	}
 	return op + ": " + msg
 }
+
+// syncStatusMarker returns the machine-readable prefix for a SANITIZED sync
+// error, or "" when the failure belongs to no actionable class.
+//
+// It keys off the sanitized text rather than the raw one on purpose: the
+// prefix and the message the user eventually reads then come from a single
+// classification (errsanitize.Category), and cannot drift apart. The raw text
+// still drives classifySyncError, which owns the LOG fingerprint.
+//
+//   - reauth_required — the broker no longer honours the stored authorization
+//     (ACCESS_DENIED, invalid_grant, a rejected refresh, a 400/401 at the
+//     token endpoint, a rotated token we failed to persist). No credential the
+//     user can retype fixes this; only re-running the OAuth flow does.
+//   - rate_limited — the broker is throttling us (BLOCKED_PAYLOAD_TYPE, 429).
+//     Nobody needs to do anything; the next pass succeeds.
+func syncStatusMarker(sanitized string) string {
+	switch {
+	case sanitized == "":
+		return ""
+	case strings.Contains(sanitized, errsanitize.MsgBrokerReauthRequired):
+		return "reauth_required"
+	case strings.Contains(sanitized, errsanitize.MsgRateLimited):
+		return "rate_limited"
+	}
+	return ""
+}
